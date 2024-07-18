@@ -188,31 +188,6 @@ def get_joystick_direction():
 
 rtc = machine.RTC()
 
-# Game Selector
-def game_selector():
-    display.start()
-    draw_text(10, 15, "SIMON", 222, 222, 222)
-    draw_text(10, 35, "SNAKE", 222, 222, 222)
-    selected = 0
-
-    while True:
-        joystick_dir = get_joystick_direction()
-        if joystick_dir == JOYSTICK_UP:
-            draw_text(10, 15, "SIMON", 255, 255, 255)
-            draw_text(10, 35, "SNAKE", 111, 111, 111)
-            selected = 1
-        elif joystick_dir == JOYSTICK_DOWN:
-            draw_text(10, 15, "SIMON", 111, 111, 111)
-            draw_text(10, 35, "SNAKE", 255, 255, 255)
-            selected = 2
-
-        button = adc2.read_u16()
-        if button < 10:
-            if selected == 1:
-                simon_game()
-            elif selected == 2:
-                snake_game()
-
 # Simon Game
 def simon_game():
     def draw_quad_screen():
@@ -281,18 +256,6 @@ def simon_game():
         user_sequence = []
         draw_quad_screen()
         
-    def joystick_test():
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            joystick_dir = get_joystick_direction()
-            if joystick_dir:
-                print(f"Joystick moved: {joystick_dir}")
-                color_index = translate_joystick_to_color(joystick_dir)
-                if color_index is not None:
-                    flash_color(color_index, 0.5)
-            time.sleep(0.1)
-        print("Joystick test completed")
-        
     def display_score_and_time(score):
         global text
         year, month, day, wd, hour, minute, second, _ = rtc.datetime()
@@ -312,7 +275,6 @@ def simon_game():
         global simon_sequence, user_sequence
         
         start_game()
-        #joystick_test()
         while True:
             simon_sequence.append(random.randint(0, 3))
             display_score_and_time(len(simon_sequence) - 1)
@@ -560,7 +522,157 @@ def snake_game():
     restart_game()
     main_snake_game_loop()
 
+# Pong Game
+def pong_game():
+    # Pong game variables
+    paddle_height = 8
+    paddle_speed = 2
+    ball_speed = [1, 1]
+    ball_position = [WIDTH // 2, HEIGHT // 2]
+    left_paddle = HEIGHT // 2 - paddle_height // 2
+    right_paddle = HEIGHT // 2 - paddle_height // 2
+    prev_left_score = 0
+    prev_right_score = 0
+    left_score = 0
+    right_score = 0
+
+    def draw_paddles():
+        # Clear paddles
+        for y in range(HEIGHT):
+            display.set_pixel(0, y, 0, 0, 0)
+            display.set_pixel(WIDTH - 1, y, 0, 0, 0)
+
+        # Draw new paddles
+        for y in range(left_paddle, left_paddle + paddle_height):
+            display.set_pixel(0, y, 255, 255, 255)
+        for y in range(right_paddle, right_paddle + paddle_height):
+            display.set_pixel(WIDTH - 1, y, 255, 255, 255)
+
+    def draw_ball():
+        display.set_pixel(ball_position[0], ball_position[1], 255, 255, 255)
+
+    def clear_ball():
+        display.set_pixel(ball_position[0], ball_position[1], 0, 0, 0)
+
+    def update_ball():
+        nonlocal ball_position, ball_speed, left_score, right_score
+        clear_ball()
+
+        ball_position[0] += ball_speed[0]
+        ball_position[1] += ball_speed[1]
+
+        # Ball collision with top and bottom walls
+        if ball_position[1] <= 0 or ball_position[1] >= HEIGHT - 1:
+            ball_speed[1] = -ball_speed[1]
+
+        # Ball collision with paddles
+        if ball_position[0] == 1 and left_paddle <= ball_position[1] < left_paddle + paddle_height:
+            ball_speed[0] = -ball_speed[0]
+        elif ball_position[0] == WIDTH - 2 and right_paddle <= ball_position[1] < right_paddle + paddle_height:
+            ball_speed[0] = -ball_speed[0]
+
+        # Ball out of bounds
+        if ball_position[0] <= 0:
+            right_score += 1
+            reset_ball()
+        elif ball_position[0] >= WIDTH - 1:
+            left_score += 1
+            reset_ball()
+
+        draw_ball()
+
+    def reset_ball():
+        nonlocal ball_position, ball_speed
+        ball_position = [WIDTH // 2, HEIGHT // 2]
+        ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
+
+    def update_paddles():
+        nonlocal left_paddle, right_paddle
+
+        joystick_dir = get_joystick_direction()
+        if joystick_dir == JOYSTICK_UP:
+            left_paddle = max(left_paddle - paddle_speed, 0)
+        elif joystick_dir == JOYSTICK_DOWN:
+            left_paddle = min(left_paddle + paddle_speed, HEIGHT - paddle_height)
+
+        # Simple AI for right paddle
+        if ball_position[1] < right_paddle + paddle_height // 2:
+            right_paddle = max(right_paddle - paddle_speed, 0)
+        elif ball_position[1] > right_paddle + paddle_height // 2:
+            right_paddle = min(right_paddle + paddle_speed, HEIGHT - paddle_height)
+
+    def display_score():
+        # Clear score
+        rect(0, HEIGHT - 6, WIDTH, HEIGHT - 1, 0, 0, 0)
+
+        # Draw new score
+        draw_text_small(3, HEIGHT - 6, str(left_score), 255, 255, 255)
+        draw_text_small(WIDTH - 9, HEIGHT - 6, str(right_score), 255, 255, 255)
+
+    def main_pong_game_loop():
+        nonlocal prev_left_score, prev_right_score, left_score, right_score
+        rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
+        while True:
+            update_paddles()
+            update_ball()
+            draw_paddles()
+            if left_score != prev_left_score or right_score != prev_right_score:
+                display_score()
+                prev_left_score = left_score
+                prev_right_score = right_score
+            time.sleep(0.05)
+
+    reset_ball()
+    main_pong_game_loop()
+
+
+def game_selector():
+    display.start()
+    draw_text(10,  5, "SIMON", 222, 222, 222)
+    draw_text(10, 20, "SNAKE", 222, 222, 222)
+    draw_text(10, 35, "PONG", 222, 222, 222)
+    selected = 0
+    current_time = time.time()
+    last_selection_time = current_time
+
+    while True:
+
+        joystick_dir = get_joystick_direction()
+        current_time = time.time()
+
+        # Add a debounce delay of 0.2 seconds
+        if current_time - last_selection_time > 0.2:
+            if joystick_dir == JOYSTICK_UP:
+                if selected > 0:
+                    selected -= 1
+                    last_selection_time = current_time
+            elif joystick_dir == JOYSTICK_DOWN:
+                if selected < 2:
+                    selected += 1
+                    last_selection_time = current_time
+        
+        if selected == 0:
+            draw_text(10,  5, "SIMON", 255, 255, 255)
+            draw_text(10, 20, "SNAKE", 111, 111, 111)
+            draw_text(10, 35, "PONG", 111, 111, 111)
+        elif selected == 1:
+            draw_text(10,  5, "SIMON", 111, 111, 111)
+            draw_text(10, 20, "SNAKE", 255, 255, 255)
+            draw_text(10, 35, "PONG", 111, 111, 111)
+        elif selected == 2:
+            draw_text(10,  5, "SIMON", 111, 111, 111)
+            draw_text(10, 20, "SNAKE", 111, 111, 111)
+            draw_text(10, 35, "PONG", 255, 255, 255)
+
+        button = adc2.read_u16()
+        if button < 10:
+            if selected == 0:
+                simon_game()
+            elif selected == 1:
+                snake_game()
+            elif selected == 2:
+                pong_game()
+
 # Main
 if __name__ == '__main__':
     game_selector()
-    
