@@ -239,17 +239,15 @@ def simon_game():
         
         valueX = read0 - 32768  # Adjusted to be centered at 0
         valueY = read1 - 32768  # Adjusted to be centered at 0
-        
-        if abs(valueX) > abs(valueY):
-            if valueX > 10000:
-                return 'RIGHT'
-            elif valueX < -10000:
-                return 'LEFT'
-        else:
-            if valueY > 10000:
-                return 'DOWN'
-            elif valueY < -10000:
-                return 'UP'
+
+        if valueY < -10000 and valueX < -10000:
+                return 'UP-LEFT'
+        elif valueY < -10000 and valueX > 10000:
+            return 'UP-RIGHT'
+        elif valueY > 10000 and valueX < -10000:
+            return 'DOWN-LEFT'
+        elif valueY > 10000 and valueX > 10000:
+            return 'DOWN-RIGHT'
             
         return None
     
@@ -261,13 +259,13 @@ def simon_game():
             time.sleep(0.1)
             
     def translate_joystick_to_color(joystick_dir):
-        if joystick_dir == 'UP':
+        if joystick_dir == 'UP-LEFT':
             return 0
-        elif joystick_dir == 'RIGHT':
+        elif joystick_dir == 'UP-RIGHT':
             return 1
-        elif joystick_dir == 'LEFT':
+        elif joystick_dir == 'DOWN-LEFT':
             return 2
-        elif joystick_dir == 'DOWN':
+        elif joystick_dir == 'DOWN-RIGHT':
             return 3
         return None
     
