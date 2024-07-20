@@ -44,6 +44,10 @@ JOYSTICK_UP = 'UP'
 JOYSTICK_DOWN = 'DOWN'
 JOYSTICK_LEFT = 'LEFT'
 JOYSTICK_RIGHT = 'RIGHT'
+JOYSTICK_UP_LEFT = 'UP-LEFT'
+JOYSTICK_UP_RIGHT = 'UP-RIGHT'
+JOYSTICK_DOWN_LEFT = 'DOWN-LEFT'
+JOYSTICK_DOWN_RIGHT = 'DOWN-RIGHT'
 
 char_dict = {'A': '3078ccccfccccc00', 'B': 'fc66667c6666fc00', 'C': '3c66c0c0c0663c00', 'D': 'f86c6666666cf800', 'E': 'fe6268786862fe00', 'F': 'fe6268786860f000', 'G': '3c66c0c0ce663e00', 'H': 'ccccccfccccccc00', 'I': '7830303030307800', 'J': '1e0c0c0ccccc7800', 'K': 'f6666c786c66f600', 'L': 'f06060606266fe00', 'M': 'c6eefefed6c6c600', 'N': 'c6e6f6decec6c600', 'O': '386cc6c6c66c3800', 'P': 'fc66667c6060f000', 'Q': '78ccccccdc781c00', 'R': 'fc66667c6c66f600', 'S': '78cce0380ccc7800', 'T': 'fcb4303030307800', 'U': 'ccccccccccccfc00', 'V': 'cccccccccc783000', 'W': 'c6c6c6d6feeec600', 'X': 'c6c66c38386cc600', 'Y': 'cccccc7830307800', 'Z': 'fec68c183266fe00', 'a': '0000780c7ccc7600', 'b': 'e060607c6666dc00', 'c': '000078ccc0cc7800', 'd': '1c0c0c7ccccc7600', 'e': '000078ccfcc07800', 'f': '386c60f06060f000', 'g': '000076cccc7c0cf8', 'h': 'e0606c766666e600', 'i': '3000703030307800', 'j': '0c000c0c0ccccc78', 'k': 'e060666c786ce600', 'l': '7030303030307800', 'm': '0000ccfefed6c600', 'n': '0000f8cccccccc00', 'o': '000078cccccc7800', 'p': '0000dc667c60f0', 'q': '000076cccc7c0c1e', 'r': '00009c766660f000', 's': '00007cc0780cf800', 't': '10307c3030341800', 'u': '0000cccccccc7600', 'v': '0000cccccc783000', 'w': '0000c6c6d6fe6c00', 'x': '0000c66c386cc600', 'y': '0000cccccc7c0cf8', 'z': '0000fc983064fc00', '0': '78ccdcfceccc7c00', '1': '307030303030fc00', '2': '78cc0c3860ccfc00', '3': '78cc0c380ccc7800', '4': '1c3c6cccfe0c1e00', '5': 'fcc0f80c0ccc7800', '6': '3860c0f8cccc7800', '7': 'fccc0c1830303000', '8': '78cccc78cccc7800', '9': '78cccc7c0c187000', '!': '3078783030003000', '#': '6c6cfe6cfe6c6c00', '$': '307cc0780cf83000', '%': '00c6cc183066c600', '&': '386c3876dccc7600', '?': '78cc0c1830003000', ' ': '0000000000000000', '.': '0000000000003000', ':': '0030000000300000'}
 
@@ -98,23 +102,52 @@ def rect(x1, y1, x2, y2, r, g, b):
         for y in range(min(y1, y2), max(y1, y2) + 1):
             display.set_pixel(x, y, r, g, b)
 
-def get_joystick_direction():
+# Initialize last_called for debounce
+get_joystick_direction_last_called = time.time()
+last_direction = JOYSTICK_UP
+
+def get_joystick_direction(possible_directions, debounce=False):
+    global get_joystick_direction_last_called, last_direction
     read0 = adc0.read_u16()
     read1 = adc1.read_u16()
     valueX = read0 - 32768  # Adjusted to be centered at 0
     valueY = read1 - 32768  # Adjusted to be centered at 0
 
-    if abs(valueX) > abs(valueY):
+    direction = None
+    if valueY < -10000 and valueX < -10000:
+        direction = JOYSTICK_UP_LEFT
+    elif valueY < -10000 and valueX > 10000:
+        direction = JOYSTICK_UP_RIGHT
+    elif valueY > 10000 and valueX < -10000:
+        direction = JOYSTICK_DOWN_LEFT
+    elif valueY > 10000 and valueX > 10000:
+        direction = JOYSTICK_DOWN_RIGHT
+    elif abs(valueX) > abs(valueY):
         if valueX > 10000:
-            return JOYSTICK_RIGHT
+            direction = JOYSTICK_RIGHT
         elif valueX < -10000:
-            return JOYSTICK_LEFT
+            direction = JOYSTICK_LEFT
     else:
         if valueY > 10000:
-            return JOYSTICK_DOWN
+            direction = JOYSTICK_DOWN
         elif valueY < -10000:
-            return JOYSTICK_UP
-    return None
+            direction = JOYSTICK_UP
+
+    if direction not in possible_directions:
+        direction = None
+
+    if debounce:
+        current_time = time.time()
+        if direction and direction != last_direction:
+            last_direction = direction
+            get_joystick_direction_last_called = current_time
+            return direction
+        elif direction == last_direction and current_time - get_joystick_direction_last_called > 0.25:
+            get_joystick_direction_last_called = current_time
+            return direction
+        return None
+
+    return direction
 
 def display_score_and_time(score):
     global text
@@ -152,28 +185,10 @@ def simon_game():
             flash_color(color)
             time.sleep(0.5)
             
-    def get_joystick_direction():
-        read0 = adc0.read_u16()
-        read1 = adc1.read_u16()
-        read2 = adc2.read_u16()
-        
-        valueX = read0 - 32768  # Adjusted to be centered at 0
-        valueY = read1 - 32768  # Adjusted to be centered at 0
-
-        if valueY < -10000 and valueX < -10000:
-                return 'UP-LEFT'
-        elif valueY < -10000 and valueX > 10000:
-            return 'UP-RIGHT'
-        elif valueY > 10000 and valueX < -10000:
-            return 'DOWN-LEFT'
-        elif valueY > 10000 and valueX > 10000:
-            return 'DOWN-RIGHT'
-            
-        return None
     
     def get_user_input():
         while True:
-            joystick_dir = get_joystick_direction()
+            joystick_dir = get_joystick_direction([JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT], debounce=False)
             if joystick_dir:
                 return joystick_dir
             time.sleep(0.1)
@@ -254,7 +269,7 @@ def snake_game():
         return int(red * 255), int(green * 255), int(blue * 255)
 
     def restart_game():
-        global snake, snake_length, snake_direction, score, green_targets
+        global snake, snake_length, snake_direction, score, green_targets, target
         score = 0
         snake = [(32, 32)]
         snake_length = 3
@@ -286,64 +301,6 @@ def snake_game():
             else:
                 display.set_pixel(x, y, 0, 0, 0)  # Clear green target from display
         green_targets = new_green_targets
-
-    def find_nearest_target(head_x, head_y, green_targets, red_target):
-        def manhattan_distance(x1, y1, x2, y2):
-            return abs(x1 - x2) + abs(y1 - y2)
-
-        min_distance_green = float('inf')
-        nearest_green_target = None
-
-        for x, y, _ in green_targets:
-            distance = manhattan_distance(head_x, head_y, x, y)
-            if distance < min_distance_green:
-                min_distance_green = distance
-                nearest_green_target = (x, y)
-
-        distance_red = manhattan_distance(head_x, head_y, red_target[0], red_target[1])
-
-        if nearest_green_target and min_distance_green <= distance_red * 1.5:
-            return nearest_green_target
-        else:
-            return red_target
-
-    def update_direction(snake, snake_direction, green_targets, target, joystick_dir):
-        head_x, head_y = snake[0]
-        target_x, target_y = find_nearest_target(head_x, head_y, green_targets, target)
-
-        opposite_directions = {'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
-
-        new_direction = snake_direction  # Default to current direction
-
-        if joystick_dir:
-            new_direction = joystick_dir
-        else:
-            if head_x == target_x:
-                if head_y < target_y and snake_direction != 'UP':
-                    new_direction = 'DOWN'
-                elif head_y > target_y and snake_direction != 'DOWN':
-                    new_direction = 'UP'
-            elif head_y == target_y:
-                if head_x < target_x and snake_direction != 'LEFT':
-                    new_direction = 'RIGHT'
-                elif head_x > target_x and snake_direction != 'RIGHT':
-                    new_direction = 'LEFT'
-            else:
-                if abs(head_x - target_x) < abs(head_y - target_y):
-                    if head_x < target_x and snake_direction != 'LEFT':
-                        new_direction = 'RIGHT'
-                    elif head_x > target_x and snake_direction != 'RIGHT':
-                        new_direction = 'LEFT'
-                else:
-                    if head_y < target_y and snake_direction != 'UP':
-                        new_direction = 'DOWN'
-                    elif head_y > target_y and snake_direction != 'DOWN':
-                        new_direction = 'UP'
-
-        if new_direction == opposite_directions[snake_direction]:
-            new_direction = snake_direction
-
-        return new_direction
 
     def check_self_collision():
         global snake, snake_direction
@@ -420,7 +377,7 @@ def snake_game():
                 place_green_target()
             update_green_targets()
 
-            joystick_dir = get_joystick_direction()
+            joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
 
             if joystick_dir is not None:
                 snake_direction = joystick_dir
@@ -504,7 +461,7 @@ def pong_game():
     def update_paddles():
         nonlocal left_paddle, right_paddle
 
-        joystick_dir = get_joystick_direction()
+        joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
         if joystick_dir == JOYSTICK_UP:
             left_paddle = max(left_paddle - paddle_speed, 0)
         elif joystick_dir == JOYSTICK_DOWN:
@@ -531,53 +488,60 @@ def pong_game():
     reset_ball()
     main_pong_game_loop()
 
-
 def game_selector():
+    games = ["SIMON", "SNAKE", "PONG"]
     display.start()
-    draw_text(10,  5, "SIMON", 222, 222, 222)
-    draw_text(10, 20, "SNAKE", 222, 222, 222)
-    draw_text(10, 35, "PONG", 222, 222, 222)
+    
     selected = 0
-    current_time = time.time()
-    last_selection_time = current_time
-
+    previous_selected = None
+    top_index = 0
+    display_size = 4
+    
     while True:
-
-        joystick_dir = get_joystick_direction()
-        current_time = time.time()
-
-        # Add a debounce delay of 0.2 seconds
-        if current_time - last_selection_time > 0.2:
-            if joystick_dir == JOYSTICK_UP:
-                if selected > 0:
-                    selected -= 1
-                    last_selection_time = current_time
-            elif joystick_dir == JOYSTICK_DOWN:
-                if selected < 2:
-                    selected += 1
-                    last_selection_time = current_time
+        # Draw the list of games, scrollable
+        if selected != previous_selected:
+            display.clear()
+            previous_selected = selected
+            for i in range(display_size):
+                game_index = top_index + i
+                if game_index < len(games):
+                    if game_index == selected:
+                        draw_text(10, 5 + i * 15, games[game_index], 255, 255, 255)
+                    else:
+                        draw_text(10, 5 + i * 15, games[game_index], 111, 111, 111)
         
-        if selected == 0:
-            draw_text(10,  5, "SIMON", 255, 255, 255)
-            draw_text(10, 20, "SNAKE", 111, 111, 111)
-            draw_text(10, 35, "PONG", 111, 111, 111)
-        elif selected == 1:
-            draw_text(10,  5, "SIMON", 111, 111, 111)
-            draw_text(10, 20, "SNAKE", 255, 255, 255)
-            draw_text(10, 35, "PONG", 111, 111, 111)
-        elif selected == 2:
-            draw_text(10,  5, "SIMON", 111, 111, 111)
-            draw_text(10, 20, "SNAKE", 111, 111, 111)
-            draw_text(10, 35, "PONG", 255, 255, 255)
+        joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
 
-        button = adc2.read_u16()
-        if button < 10:
-            if selected == 0:
-                simon_game()
-            elif selected == 1:
-                snake_game()
-            elif selected == 2:
-                pong_game()
+        if joystick_dir is None:
+            button = adc2.read_u16()
+            if button < 10:
+                button = adc2.read_u16()
+
+            if button < 5:
+                if selected == 0:
+                    simon_game()
+                elif selected == 1:
+                    snake_game()
+                elif selected == 2:
+                    pong_game()
+            continue
+        else:
+            display.clear()
+            previous_selected = None
+
+
+        if joystick_dir == JOYSTICK_UP:
+            if selected > 0:
+                selected -= 1
+            if selected < top_index:
+                top_index -= 1
+        elif joystick_dir == JOYSTICK_DOWN:
+            if selected < len(games) - 1:
+                selected += 1
+            if selected > top_index + display_size - 1:
+                top_index += 1
+
+        
 
 # Main
 if __name__ == '__main__':
