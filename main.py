@@ -488,15 +488,253 @@ def pong_game():
     reset_ball()
     main_pong_game_loop()
 
+def qix_game():
+    # Qix game variables
+    player_position = [0, 0]  # Start at the edge of the playfield
+    prev_player_position = player_position.copy()
+    captured_area = [[False for _ in range(WIDTH)] for _ in range(HEIGHT)]
+    player_trail = []
+    player_direction = None
+    qix_speed = 1
+    qix_count = 1
+    qix_positions = [(random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8)) for _ in range(qix_count)]
+    qix_direction = [(random.choice([-1, 1]), random.choice([-1, 1])) for _ in range(qix_count)]
+    type_of_pixel = 0
+    prev_type_of_pixel = 0
+
+    # capture border
+    for x in range(WIDTH):
+        captured_area[0][x] = True
+        captured_area[HEIGHT - 1][x] = True
+        display.set_pixel(0, x, 0, 0, 255)
+        display.set_pixel(HEIGHT - 1, x, 0, 0, 255)
+    for y in range(HEIGHT):
+        captured_area[y][0] = True
+        captured_area[y][WIDTH - 1] = True
+        display.set_pixel(y, 0, 0, 0, 255)
+        display.set_pixel(y, WIDTH - 1, 0, 0, 255)
+
+    def draw_qix():
+        for x, y in qix_positions:
+            display.set_pixel(x, y, 255, 0, 0)
+
+    def clear_qix():
+        for x, y in qix_positions:
+            display.set_pixel(x, y, 0, 0, 0)
+
+    def update_qix():
+        nonlocal qix_positions, qix_direction
+        clear_qix()
+        for i in range(len(qix_positions)):
+            qix_positions[i] = ((qix_positions[i][0] + qix_direction[i][0] * qix_speed) % WIDTH,
+                                (qix_positions[i][1] + qix_direction[i][1] * qix_speed) % HEIGHT)
+
+            # Bounce on walls or captured areas
+            if qix_positions[i][0] <= 0 or qix_positions[i][0] >= WIDTH - 1 or captured_area[qix_positions[i][1]][qix_positions[i][0]]:
+                qix_direction[i] = (-qix_direction[i][0], qix_direction[i][1])
+            if qix_positions[i][1] <= 0 or qix_positions[i][1] >= HEIGHT - 1 or captured_area[qix_positions[i][1]][qix_positions[i][0]]:
+                qix_direction[i] = (qix_direction[i][0], -qix_direction[i][1])
+        draw_qix()
+
+    def draw_player():
+        display.set_pixel(player_position[0], player_position[1], 0, 255, 0)
+
+    def clear_player():
+        display.set_pixel(player_position[0], player_position[1], 0, 150, 0)
+
+    def move_player():
+        nonlocal player_position, player_direction, player_trail, prev_type_of_pixel, type_of_pixel, prev_player_position
+        clear_player()
+
+        prev_player_position = player_position.copy()
+
+
+
+        if player_direction == JOYSTICK_UP and player_position[1] > 0:
+            player_position[1] -= 1
+        elif player_direction == JOYSTICK_DOWN and player_position[1] < HEIGHT - 1:
+            player_position[1] += 1
+        elif player_direction == JOYSTICK_LEFT and player_position[0] > 0:
+            player_position[0] -= 1
+        elif player_direction == JOYSTICK_RIGHT and player_position[0] < WIDTH - 1:
+            player_position[0] += 1
+
+        prev_type_of_pixel = type_of_pixel
+        
+        # check type of pixel on new position (border, qix, captured area, player trail, empty)
+        type_of_pixel = 0
+        if player_position[0] == 0 or player_position[0] == WIDTH - 1 or player_position[1] == 0 or player_position[1] == HEIGHT - 1:
+            type_of_pixel = 1 # border
+        elif player_position in qix_positions:
+            type_of_pixel = 2 # qix
+        elif captured_area[player_position[1]][player_position[0]]:
+            type_of_pixel = 3 # captured area
+        elif player_position in player_trail:
+            type_of_pixel = 4 # player trail
+        else:
+            type_of_pixel = 5 # empty
+
+        #print(type_of_pixel)
+
+        if type_of_pixel == 3 and prev_type_of_pixel != 3:
+            if len(player_trail) > 2:
+                capture_area()
+                #player_trail = []
+                # set player trail to captured area
+                #player_trail = [(x, y) for x in range(WIDTH) for y in range(HEIGHT) if captured_area[y][x]]
+                player_trail = []
+
+        # Update player trail
+        if player_position not in player_trail:
+            player_trail.append(player_position.copy())
+            #print(player_trail)
+
+        draw_player()
+
+    def coords_to_matrix(coords, size=64):
+        matrix = [[0] * size for _ in range(size)]
+        for x, y in coords:
+            matrix[x][y] = 1
+        return matrix
+
+    def add_border_coords(size=64):
+        border_coords = []
+        for i in range(size):
+            border_coords.append((0, i))  # Top row
+            border_coords.append((size - 1, i))  # Bottom row
+            border_coords.append((i, 0))  # Left column
+            border_coords.append((i, size - 1))  # Right column
+        return border_coords
+
+    def flood_fill(matrix, start, fill_char):
+        rows, cols = len(matrix), len(matrix[0])
+        queue = [start]
+        filled = set()
+        while queue:
+            r, c = queue.pop(0)
+            if (r < 0 or r >= rows or c < 0 or c >= cols or
+                matrix[r][c] != ' ' or (r, c) in filled):
+                continue
+            matrix[r][c] = fill_char
+            filled.add((r, c))
+            queue.extend([(r-1, c), (r+1, c), (r, c-1), (r, c+1)])
+        return filled
+
+
+    def find_enclosed_areas(matrix):
+        size = len(matrix)
+
+        # Mark border-connected areas with -1
+        for i in range(size):
+            for j in range(size):
+                if matrix[i][j] == 0 and (i == 0 or i == size - 1 or j == 0 or j == size - 1):
+                    flood_fill(matrix, i, j, 0, -1)
+
+        # Identify and collect enclosed areas
+        enclosed_areas = []
+        for i in range(size):
+            for j in range(size):
+                if matrix[i][j] == 0:
+                    enclosed_areas.append(flood_fill(matrix, i, j, 0, 2))
+
+        # Determine which areas to fill
+        if enclosed_areas:
+            smallest_area = min(enclosed_areas, key=len)
+            for area in enclosed_areas:
+                for x, y in area:
+                    matrix[x][y] = 0  # Reset to empty
+            for x, y in smallest_area:
+                matrix[x][y] = 2  # Fill with blue
+
+        # Restore original green coordinates
+        for i in range(size):
+            for j in range(size):
+                if matrix[i][j] == 1:
+                    matrix[i][j] = 'G'
+
+        return matrix
+
+
+
+
+    # Check if the player has enclosed an area
+    def check_enclosure():
+        nonlocal player_trail
+        if player_trail:
+            start_x, start_y = player_trail[0]
+            end_x, end_y = player_trail[-1]
+            if start_x == end_x or start_y == end_y:
+                for x, y in player_trail:
+                    captured_area[y][x] = True
+                flood_fill2(start_x, start_y)
+
+    # Capture the enclosed area
+    def capture_area():
+        matrix = coords_to_matrix(player_trail)
+        enclosed_areas, filled_matrix = find_enclosed_areas(matrix)
+
+        for area in enclosed_areas:
+            for x, y in area:
+                if filled_matrix[y][x] == 2:  # Fixed to reflect y,x
+                    captured_area[y][x] = True
+                    display.set_pixel(x, y, 0, 110, 255)
+                if filled_matrix[y][x] == 1:  # Fixed to reflect y,x
+                    display.set_pixel(x, y, 255, 255, 155)
+
+    def flood_fill2(x, y):
+        stack = [(x, y)]
+        while stack:
+            cx, cy = stack.pop()
+            if 0 <= cx < WIDTH and 0 <= cy < HEIGHT and not captured_area[cy][cx]:
+                captured_area[cy][cx] = True
+                display.set_pixel(cx, cy, 0, 0, 255)
+                stack.extend([(cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)])
+
+    def main_qix_game_loop():
+        nonlocal player_direction, player_trail
+        while True:
+            joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
+            if joystick_dir is not None:
+                player_direction = joystick_dir
+
+            move_player()
+            if not captured_area[player_position[1]][player_position[0]]:
+                player_trail.append((player_position[0], player_position[1]))
+                display.set_pixel(player_position[0], player_position[1], 255, 255, 255)
+
+            check_enclosure()
+            update_qix()
+
+            # Count the number of pixels in captured areas
+            captured_pixels = sum(sum(row) for row in captured_area)
+
+            display_score_and_time(captured_pixels)
+
+            # Check for collision with Qix or Player Trail
+            for x, y in qix_positions:
+                if (player_position[0], player_position[1]) == (x, y):
+                    rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
+                    display_score_and_time(0)
+                    qix_game()
+                if (x, y) in player_trail and not captured_area[y][x]:
+                    rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
+                    display_score_and_time(0)
+                    qix_game()
+
+            time.sleep(0.1)
+
+    main_qix_game_loop()
+
+
 def game_selector():
-    games = ["SIMON", "SNAKE", "PONG"]
+    games = ["SIMON", "SNAKE", "PONG", "QIX"]
     display.start()
     
     selected = 0
     previous_selected = None
     top_index = 0
     display_size = 4
-    
+
     while True:
         # Draw the list of games, scrollable
         if selected != previous_selected:
@@ -517,13 +755,17 @@ def game_selector():
             if button < 10:
                 button = adc2.read_u16()
 
-            if button < 5:
+            if button < 5 and selected < len(games):
+                display.clear()
+
                 if selected == 0:
                     simon_game()
                 elif selected == 1:
                     snake_game()
                 elif selected == 2:
                     pong_game()
+                elif selected == 3:
+                    qix_game()
             continue
         else:
             display.clear()
