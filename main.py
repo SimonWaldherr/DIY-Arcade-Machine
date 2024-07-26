@@ -49,23 +49,8 @@ JOYSTICK_UP_RIGHT = 'UP-RIGHT'
 JOYSTICK_DOWN_LEFT = 'DOWN-LEFT'
 JOYSTICK_DOWN_RIGHT = 'DOWN-RIGHT'
 
+# Character dictionary
 char_dict = {'A': '3078ccccfccccc00', 'B': 'fc66667c6666fc00', 'C': '3c66c0c0c0663c00', 'D': 'f86c6666666cf800', 'E': 'fe6268786862fe00', 'F': 'fe6268786860f000', 'G': '3c66c0c0ce663e00', 'H': 'ccccccfccccccc00', 'I': '7830303030307800', 'J': '1e0c0c0ccccc7800', 'K': 'f6666c786c66f600', 'L': 'f06060606266fe00', 'M': 'c6eefefed6c6c600', 'N': 'c6e6f6decec6c600', 'O': '386cc6c6c66c3800', 'P': 'fc66667c6060f000', 'Q': '78ccccccdc781c00', 'R': 'fc66667c6c66f600', 'S': '78cce0380ccc7800', 'T': 'fcb4303030307800', 'U': 'ccccccccccccfc00', 'V': 'cccccccccc783000', 'W': 'c6c6c6d6feeec600', 'X': 'c6c66c38386cc600', 'Y': 'cccccc7830307800', 'Z': 'fec68c183266fe00', 'a': '0000780c7ccc7600', 'b': 'e060607c6666dc00', 'c': '000078ccc0cc7800', 'd': '1c0c0c7ccccc7600', 'e': '000078ccfcc07800', 'f': '386c60f06060f000', 'g': '000076cccc7c0cf8', 'h': 'e0606c766666e600', 'i': '3000703030307800', 'j': '0c000c0c0ccccc78', 'k': 'e060666c786ce600', 'l': '7030303030307800', 'm': '0000ccfefed6c600', 'n': '0000f8cccccccc00', 'o': '000078cccccc7800', 'p': '0000dc667c60f0', 'q': '000076cccc7c0c1e', 'r': '00009c766660f000', 's': '00007cc0780cf800', 't': '10307c3030341800', 'u': '0000cccccccc7600', 'v': '0000cccccc783000', 'w': '0000c6c6d6fe6c00', 'x': '0000c66c386cc600', 'y': '0000cccccc7c0cf8', 'z': '0000fc983064fc00', '0': '78ccdcfceccc7c00', '1': '307030303030fc00', '2': '78cc0c3860ccfc00', '3': '78cc0c380ccc7800', '4': '1c3c6cccfe0c1e00', '5': 'fcc0f80c0ccc7800', '6': '3860c0f8cccc7800', '7': 'fccc0c1830303000', '8': '78cccc78cccc7800', '9': '78cccc7c0c187000', '!': '3078783030003000', '#': '6c6cfe6cfe6c6c00', '$': '307cc0780cf83000', '%': '00c6cc183066c600', '&': '386c3876dccc7600', '?': '78cc0c1830003000', ' ': '0000000000000000', '.': '0000000000003000', ':': '0030000000300000','(': '0c18303030180c00', ')': '6030180c18306000', '[': '78c0c0c0c0c07800', ']': 'c06060606060c000', '{': '0c18306030180c00', '}': '6030180c18306000', '<': '0c18306030180c00', '>': '6030180c18306000', '=': '0000fc0000fc0000', '+': '0000187e18180000', '-': '0000007e00000000', '*': 'c66c3810386cc600', '/': '0000060c18306000', '\\': '00006030180c0c00', '_': '00000000000000fe', '|': '1818181818181800', ';': '0000003018003000', ',': '0000000000303000', "'": '3030300000000000', '"': 'cccc000000000000', '`': '0c18300000000000', '@': '3c66dececec07e00', '^': '183c666600000000', '█': 'ffffffffffffffff'}
-
-def draw_char(x, y, char, r, g, b):
-    if char in char_dict:
-        hex_string = char_dict[char]
-        for row in range(8):
-            hex_value = hex_string[row * 2:row * 2 + 2]
-            bin_value = f"{int(hex_value, 16):08b}"
-            for col in range(8):
-                if bin_value[col] == '1':
-                    display.set_pixel(x + col, y + row, r, g, b)
-                    
-def draw_text(x, y, text, r, g, b):
-    offset_x = x
-    for char in text:
-        draw_char(offset_x, y, char, r, g, b)
-        offset_x += 9
 
 nums = {
     '0': ["01110", "10001", "10001", "10001", "01110"],
@@ -83,6 +68,23 @@ nums = {
     ':': ["00000", "00100", "00000", "00100", "00000"]
 }
 
+# Helper functions
+def draw_char(x, y, char, r, g, b):
+    if char in char_dict:
+        hex_string = char_dict[char]
+        for row in range(8):
+            hex_value = hex_string[row * 2:row * 2 + 2]
+            bin_value = f"{int(hex_value, 16):08b}"
+            for col in range(8):
+                if bin_value[col] == '1':
+                    display.set_pixel(x + col, y + row, r, g, b)
+
+def draw_text(x, y, text, r, g, b):
+    offset_x = x
+    for char in text:
+        draw_char(offset_x, y, char, r, g, b)
+        offset_x += 9
+
 def draw_char_small(x, y, char, r, g, b):
     if char in nums:
         matrix = nums[char]
@@ -90,64 +92,17 @@ def draw_char_small(x, y, char, r, g, b):
             for col in range(5):
                 if matrix[row][col] == '1':
                     display.set_pixel(x + col, y + row, r, g, b)
-                    
+
 def draw_text_small(x, y, text, r, g, b):
     offset_x = x
     for char in text:
         draw_char_small(offset_x, y, char, r, g, b)
         offset_x += 6
 
-def rect(x1, y1, x2, y2, r, g, b):
+def draw_rect(x1, y1, x2, y2, r, g, b):
     for x in range(min(x1, x2), max(x1, x2) + 1):
         for y in range(min(y1, y2), max(y1, y2) + 1):
             display.set_pixel(x, y, r, g, b)
-
-# Initialize last_called for debounce
-get_joystick_direction_last_called = time.time()
-last_direction = JOYSTICK_UP
-
-def get_joystick_direction(possible_directions, debounce=False):
-    global get_joystick_direction_last_called, last_direction
-    read0 = adc0.read_u16()
-    read1 = adc1.read_u16()
-    valueX = read0 - 32768  # Adjusted to be centered at 0
-    valueY = read1 - 32768  # Adjusted to be centered at 0
-
-    direction = None
-    if valueY < -10000 and valueX < -10000:
-        direction = JOYSTICK_UP_LEFT
-    elif valueY < -10000 and valueX > 10000:
-        direction = JOYSTICK_UP_RIGHT
-    elif valueY > 10000 and valueX < -10000:
-        direction = JOYSTICK_DOWN_LEFT
-    elif valueY > 10000 and valueX > 10000:
-        direction = JOYSTICK_DOWN_RIGHT
-    elif abs(valueX) > abs(valueY):
-        if valueX > 10000:
-            direction = JOYSTICK_RIGHT
-        elif valueX < -10000:
-            direction = JOYSTICK_LEFT
-    else:
-        if valueY > 10000:
-            direction = JOYSTICK_DOWN
-        elif valueY < -10000:
-            direction = JOYSTICK_UP
-
-    if direction not in possible_directions:
-        direction = None
-
-    if debounce:
-        current_time = time.time()
-        if direction and direction != last_direction:
-            last_direction = direction
-            get_joystick_direction_last_called = current_time
-            return direction
-        elif direction == last_direction and current_time - get_joystick_direction_last_called > 0.25:
-            get_joystick_direction_last_called = current_time
-            return direction
-        return None
-
-    return direction
 
 def display_score_and_time(score):
     global text
@@ -160,95 +115,148 @@ def display_score_and_time(score):
     score_y = HEIGHT - 6
     if text != score_str + " " + time_str:
         text = score_str + " " + time_str
-        rect(score_x, score_y, WIDTH, score_y + 5, 0, 0, 0)
+        draw_rect(score_x, score_y, WIDTH, score_y + 5, 0, 0, 0)
     draw_text_small(score_x, score_y, score_str, 255, 255, 255)
     draw_text_small(time_x, time_y, time_str, 255, 255, 255)
 
 rtc = machine.RTC()
 
-# Simon Game
-def simon_game():
-    def draw_quad_screen():
-        rect(0, 0, WIDTH // 2 - 1, (HEIGHT-6) // 2 - 1, *inactive_colors[0])
-        rect(WIDTH // 2, 0, WIDTH - 1, (HEIGHT-6) // 2 - 1, *inactive_colors[1])
-        rect(0, (HEIGHT-6) // 2, WIDTH // 2 - 1, (HEIGHT-6) - 1, *inactive_colors[2])
-        rect(WIDTH // 2, (HEIGHT-6) // 2, WIDTH - 1, (HEIGHT-6) - 1, *inactive_colors[3])
-        
-    def flash_color(index, duration=0.5):
+# Joystick class
+class Joystick:
+    def __init__(self, adc_x, adc_y, adc_button):
+        self.adc_x = adc_x
+        self.adc_y = adc_y
+        self.adc_button = adc_button
+        self.last_direction = None
+        self.last_read_time = 0
+
+    def read_direction(self, possible_directions, debounce=False):
+        current_time = time.ticks_ms()
+        if debounce and current_time - self.last_read_time < 250:
+            return self.last_direction
+
+        value_x = self.adc_x.read_u16() - 32768
+        value_y = self.adc_y.read_u16() - 32768
+
+        direction = None
+        if value_y < -10000 and value_x < -10000:
+            direction = JOYSTICK_UP_LEFT
+        elif value_y < -10000 and value_x > 10000:
+            direction = JOYSTICK_UP_RIGHT
+        elif value_y > 10000 and value_x < -10000:
+            direction = JOYSTICK_DOWN_LEFT
+        elif value_y > 10000 and value_x > 10000:
+            direction = JOYSTICK_DOWN_RIGHT
+        elif abs(value_x) > abs(value_y):
+            if value_x > 10000:
+                direction = JOYSTICK_RIGHT
+            elif value_x < -10000:
+                direction = JOYSTICK_LEFT
+        else:
+            if value_y > 10000:
+                direction = JOYSTICK_DOWN
+            elif value_y < -10000:
+                direction = JOYSTICK_UP
+
+        if direction not in possible_directions:
+            direction = None
+
+        if debounce:
+            self.last_read_time = current_time
+            self.last_direction = direction
+
+        return direction
+
+    def is_pressed(self):
+        return self.adc_button.read_u16() < 5
+
+# Game classes
+class SimonGame:
+    def __init__(self):
+        self.sequence = []
+        self.user_input = []
+
+    def draw_quad_screen(self):
+        draw_rect(0, 0, WIDTH // 2 - 1, (HEIGHT-6) // 2 - 1, *inactive_colors[0])
+        draw_rect(WIDTH // 2, 0, WIDTH - 1, (HEIGHT-6) // 2 - 1, *inactive_colors[1])
+        draw_rect(0, (HEIGHT-6) // 2, WIDTH // 2 - 1, (HEIGHT-6) - 1, *inactive_colors[2])
+        draw_rect(WIDTH // 2, (HEIGHT-6) // 2, WIDTH - 1, (HEIGHT-6) - 1, *inactive_colors[3])
+
+    def flash_color(self, index, duration=0.5):
         x, y = index % 2, index // 2
-        rect(x * WIDTH // 2, y * (HEIGHT-6) // 2, (x + 1) * WIDTH // 2 - 1, (y + 1) * (HEIGHT-6) // 2 - 1, *colors[index])
+        draw_rect(x * WIDTH // 2, y * (HEIGHT-6) // 2, (x + 1) * WIDTH // 2 - 1, (y + 1) * (HEIGHT-6) // 2 - 1, *colors[index])
         time.sleep(duration)
-        rect(x * WIDTH // 2, y * (HEIGHT-6) // 2, (x + 1) * WIDTH // 2 - 1, (y + 1) * (HEIGHT-6) // 2 - 1, *inactive_colors[index])
-        
-    def play_sequence():
-        for color in simon_sequence:
-            flash_color(color)
+        draw_rect(x * WIDTH // 2, y * (HEIGHT-6) // 2, (x + 1) * WIDTH // 2 - 1, (y + 1) * (HEIGHT-6) // 2 - 1, *inactive_colors[index])
+
+    def play_sequence(self):
+        for color in self.sequence:
+            self.flash_color(color)
             time.sleep(0.5)
-            
-    
-    def get_user_input():
+
+    def get_user_input(self, joystick):
         while True:
-            joystick_dir = get_joystick_direction([JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT], debounce=False)
-            if joystick_dir:
-                return joystick_dir
+            direction = joystick.read_direction([JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT])
+            if direction:
+                return direction
             time.sleep(0.1)
-            
-    def translate_joystick_to_color(joystick_dir):
-        if joystick_dir == 'UP-LEFT':
+
+    def translate_joystick_to_color(self, direction):
+        if direction == JOYSTICK_UP_LEFT:
             return 0
-        elif joystick_dir == 'UP-RIGHT':
+        elif direction == JOYSTICK_UP_RIGHT:
             return 1
-        elif joystick_dir == 'DOWN-LEFT':
+        elif direction == JOYSTICK_DOWN_LEFT:
             return 2
-        elif joystick_dir == 'DOWN-RIGHT':
+        elif direction == JOYSTICK_DOWN_RIGHT:
             return 3
         return None
-    
-    def check_user_sequence():
-        for i in range(len(user_sequence)):
-            if user_sequence[i] != simon_sequence[i]:
-                return False
-        return True
-    
-    def start_game():
-        global simon_sequence, user_sequence
-        simon_sequence = []
-        user_sequence = []
-        draw_quad_screen()
-        
-    def main_simon_game_loop():
-        global simon_sequence, user_sequence
-        
-        start_game()
-        while True:
-            simon_sequence.append(random.randint(0, 3))
-            display_score_and_time(len(simon_sequence) - 1)
-            play_sequence()
-            user_sequence = []
-            
-            for _ in range(len(simon_sequence)):
-                joystick_dir = get_user_input()
-                selected_color = translate_joystick_to_color(joystick_dir)
-                if selected_color is not None:
-                    flash_color(selected_color, 0.2)
-                    user_sequence.append(selected_color)
-                    if not check_user_sequence():
-                        # Game over - red flash and restart
-                        rect(0, 0, WIDTH - 1, (HEIGHT-6) - 1, *inactive_colors[0])
-                        display_score_and_time(0)
-                        start_game()
 
+    def check_user_sequence(self):
+        return self.user_input == self.sequence[:len(self.user_input)]
+
+    def start_game(self):
+        self.sequence = []
+        self.user_input = []
+        self.draw_quad_screen()
+
+    def main_loop(self, joystick):
+        self.start_game()
+        while True:
+            self.sequence.append(random.randint(0, 3))
+            display_score_and_time(len(self.sequence) - 1)
+            self.play_sequence()
+            self.user_input = []
+
+            for _ in range(len(self.sequence)):
+                direction = self.get_user_input(joystick)
+                selected_color = self.translate_joystick_to_color(direction)
+                if selected_color is not None:
+                    self.flash_color(selected_color, 0.2)
+                    self.user_input.append(selected_color)
+                    if not self.check_user_sequence():
+                        draw_rect(0, 0, WIDTH - 1, (HEIGHT-6) - 1, *inactive_colors[0])
+                        draw_text(WIDTH // 2 - 20, (HEIGHT-6) // 2 - 10, "GAME", 255, 255, 255)
+                        draw_text(WIDTH // 2 - 20, (HEIGHT-6) // 2 + 10, "OVER", 255, 255, 255)
+                        time.sleep(2)
+
+                        self.start_game()
+                        break
                 else:
                     print("Invalid input")
                     break
-                
+
             time.sleep(1)
 
-    main_simon_game_loop()
+class SnakeGame:
+    def __init__(self):
+        self.snake = [(32, 32)]
+        self.snake_length = 3
+        self.snake_direction = 'UP'
+        self.score = 0
+        self.green_targets = []
+        self.target = self.random_target()
 
-# Snake Game
-def snake_game():
-    def hsb_to_rgb(hue, saturation, brightness):
+    def hsb_to_rgb(self, hue, saturation, brightness):
         hue_normalized = (hue % 360) / 60
         hue_index = int(hue_normalized)
         hue_fraction = hue_normalized - hue_index
@@ -268,44 +276,39 @@ def snake_game():
 
         return int(red * 255), int(green * 255), int(blue * 255)
 
-    def restart_game():
-        global snake, snake_length, snake_direction, score, green_targets, target
-        score = 0
-        snake = [(32, 32)]
-        snake_length = 3
-        snake_direction = 'UP'
-        target = random_target()
-        green_targets = []
+    def restart_game(self):
+        self.snake = [(32, 32)]
+        self.snake_length = 3
+        self.snake_direction = 'UP'
+        self.score = 0
+        self.green_targets = []
         display.clear()
-        place_target()
+        self.place_target()
 
-    def random_target():
+    def random_target(self):
         return (random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8))
 
-    def place_target():
-        global target
-        target = random_target()
-        display.set_pixel(target[0], target[1], 255, 0, 0)  # Red target
+    def place_target(self):
+        self.target = self.random_target()
+        display.set_pixel(self.target[0], self.target[1], 255, 0, 0)
 
-    def place_green_target():
+    def place_green_target(self):
         x, y = random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8)
-        green_targets.append((x, y, 256))
-        display.set_pixel(x, y, 0, 255, 0)  # Green target
+        self.green_targets.append((x, y, 256))
+        display.set_pixel(x, y, 0, 255, 0)
 
-    def update_green_targets():
-        global green_targets
+    def update_green_targets(self):
         new_green_targets = []
-        for x, y, lifespan in green_targets:
+        for x, y, lifespan in self.green_targets:
             if lifespan > 1:
                 new_green_targets.append((x, y, lifespan - 1))
             else:
-                display.set_pixel(x, y, 0, 0, 0)  # Clear green target from display
-        green_targets = new_green_targets
+                display.set_pixel(x, y, 0, 0, 0)
+        self.green_targets = new_green_targets
 
-    def check_self_collision():
-        global snake, snake_direction
-        head_x, head_y = snake[0]
-        body = snake[1:]
+    def check_self_collision(self):
+        head_x, head_y = self.snake[0]
+        body = self.snake[1:]
         potential_moves = {
             'UP': (head_x, head_y - 1),
             'DOWN': (head_x, head_y + 1),
@@ -313,233 +316,219 @@ def snake_game():
             'RIGHT': (head_x + 1, head_y)
         }
         safe_moves = {dir: pos for dir, pos in potential_moves.items() if pos not in body}
-        if potential_moves[snake_direction] not in safe_moves.values():
+        if potential_moves[self.snake_direction] not in safe_moves.values():
             if safe_moves:
-                snake_direction = random.choice(list(safe_moves.keys()))
+                self.snake_direction = random.choice(list(safe_moves.keys()))
             else:
-                restart_game()
+                self.restart_game()
 
-    def update_snake_position():
-        global snake, snake_length, snake_direction
-        head_x, head_y = snake[0]
-        if snake_direction == 'UP':
+    def update_snake_position(self):
+        head_x, head_y = self.snake[0]
+        if self.snake_direction == 'UP':
             head_y -= 1
-        elif snake_direction == 'DOWN':
+        elif self.snake_direction == 'DOWN':
             head_y += 1
-        elif snake_direction == 'LEFT':
+        elif self.snake_direction == 'LEFT':
             head_x -= 1
-        elif snake_direction == 'RIGHT':
+        elif self.snake_direction == 'RIGHT':
             head_x += 1
 
         head_x %= WIDTH
         head_y %= HEIGHT
 
-        snake.insert(0, (head_x, head_y))
-        if len(snake) > snake_length:
-            tail = snake.pop()
+        self.snake.insert(0, (head_x, head_y))
+        if len(self.snake) > self.snake_length:
+            tail = self.snake.pop()
             display.set_pixel(tail[0], tail[1], 0, 0, 0)
 
-    def check_target_collision():
-        global snake, snake_length, target, score
-        head_x, head_y = snake[0]
-        if (head_x, head_y) == target:
-            snake_length += 2
-            place_target()
-            score += 1
+    def check_target_collision(self):
+        head_x, head_y = self.snake[0]
+        if (head_x, head_y) == self.target:
+            self.snake_length += 2
+            self.place_target()
+            self.score += 1
 
-    def check_green_target_collision():
-        global snake, snake_length, green_targets
-        head_x, head_y = snake[0]
-        for x, y, lifespan in green_targets:
+    def check_green_target_collision(self):
+        head_x, head_y = self.snake[0]
+        for x, y, lifespan in self.green_targets:
             if (head_x, head_y) == (x, y):
-                snake_length = max(snake_length // 2, 2)
-                green_targets.remove((x, y, lifespan))
+                self.snake_length = max(self.snake_length // 2, 2)
+                self.green_targets.remove((x, y, lifespan))
                 display.set_pixel(x, y, 0, 0, 0)
 
-    def draw_snake():
+    def draw_snake(self):
         hue = 0
-        for idx, (x, y) in enumerate(snake[:snake_length]):
+        for idx, (x, y) in enumerate(self.snake[:self.snake_length]):
             hue = (hue + 5) % 360
-            r, g, b = hsb_to_rgb(hue, 1, 1)
+            r, g, b = self.hsb_to_rgb(hue, 1, 1)
             display.set_pixel(x, y, r, g, b)
-        for idx in range(snake_length, len(snake)):
-            x, y = snake[idx]
+        for idx in range(self.snake_length, len(self.snake)):
+            x, y = self.snake[idx]
             display.set_pixel(x, y, 0, 0, 0)
 
-    def main_snake_game_loop():
-        global snake_direction
+    def main_loop(self, joystick):
+        self.restart_game()
         step_counter = 0
 
         while True:
             step_counter += 1
 
             if step_counter % 1024 == 0:
-                place_green_target()
-            update_green_targets()
+                self.place_green_target()
+            self.update_green_targets()
 
-            joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
+            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if direction:
+                self.snake_direction = direction
 
-            if joystick_dir is not None:
-                snake_direction = joystick_dir
+            self.check_self_collision()
+            self.update_snake_position()
+            self.check_target_collision()
+            self.check_green_target_collision()
+            self.draw_snake()
+            display_score_and_time(self.score)
 
-            check_self_collision()
-            update_snake_position()
-            check_target_collision()
-            check_green_target_collision()
-            draw_snake()
-            display_score_and_time(score)
+            time.sleep(max(0.03, (0.09 - max(0.01, self.snake_length / 300))))
 
-            time.sleep(max(0.03, (0.09 - max(0.01, snake_length / 300))))
+class PongGame:
+    def __init__(self):
+        self.paddle_height = 8
+        self.paddle_speed = 2
+        self.ball_speed = [1, 1]
+        self.ball_position = [WIDTH // 2, HEIGHT // 2]
+        self.left_paddle = HEIGHT // 2 - self.paddle_height // 2
+        self.right_paddle = HEIGHT // 2 - self.paddle_height // 2
+        self.prev_left_score = 0
+        self.left_score = 0
 
-    restart_game()
-    main_snake_game_loop()
-
-# Pong Game
-def pong_game():
-    # Pong game variables
-    paddle_height = 8
-    paddle_speed = 2
-    ball_speed = [1, 1]
-    ball_position = [WIDTH // 2, HEIGHT // 2]
-    left_paddle = HEIGHT // 2 - paddle_height // 2
-    right_paddle = HEIGHT // 2 - paddle_height // 2
-    prev_left_score = 0
-    prev_right_score = 0
-    left_score = 0
-
-    def draw_paddles():
-        # Clear paddles
+    def draw_paddles(self):
         for y in range(HEIGHT):
             display.set_pixel(0, y, 0, 0, 0)
             display.set_pixel(WIDTH - 1, y, 0, 0, 0)
 
-        # Draw new paddles
-        for y in range(left_paddle, left_paddle + paddle_height):
+        for y in range(self.left_paddle, self.left_paddle + self.paddle_height):
             display.set_pixel(0, y, 255, 255, 255)
-        for y in range(right_paddle, right_paddle + paddle_height):
+        for y in range(self.right_paddle, self.right_paddle + self.paddle_height):
             display.set_pixel(WIDTH - 1, y, 255, 255, 255)
 
-    def draw_ball():
-        display.set_pixel(ball_position[0], ball_position[1], 255, 255, 255)
+    def draw_ball(self):
+        display.set_pixel(self.ball_position[0], self.ball_position[1], 255, 255, 255)
 
-    def clear_ball():
-        display.set_pixel(ball_position[0], ball_position[1], 0, 0, 0)
+    def clear_ball(self):
+        display.set_pixel(self.ball_position[0], self.ball_position[1], 0, 0, 0)
 
-    def update_ball():
-        nonlocal ball_position, ball_speed, left_score
-        clear_ball()
+    def update_ball(self):
+        self.clear_ball()
+        self.ball_position[0] += self.ball_speed[0]
+        self.ball_position[1] += self.ball_speed[1]
 
-        ball_position[0] += ball_speed[0]
-        ball_position[1] += ball_speed[1]
+        if self.ball_position[1] <= 0 or self.ball_position[1] >= HEIGHT - 1:
+            self.ball_speed[1] = -self.ball_speed[1]
 
-        # Ball collision with top and bottom walls
-        if ball_position[1] <= 0 or ball_position[1] >= HEIGHT - 1:
-            ball_speed[1] = -ball_speed[1]
+        if self.ball_position[0] == 1 and self.left_paddle <= self.ball_position[1] < self.left_paddle + self.paddle_height:
+            self.ball_speed[0] = -self.ball_speed[0]
+            self.left_score += 1
+        elif self.ball_position[0] == WIDTH - 2 and self.right_paddle <= self.ball_position[1] < self.right_paddle + self.paddle_height:
+            self.ball_speed[0] = -self.ball_speed[0]
 
-        # Ball collision with paddles
-        if ball_position[0] == 1 and left_paddle <= ball_position[1] < left_paddle + paddle_height:
-            ball_speed[0] = -ball_speed[0]
-            left_score += 1
-        elif ball_position[0] == WIDTH - 2 and right_paddle <= ball_position[1] < right_paddle + paddle_height:
-            ball_speed[0] = -ball_speed[0]
+        if self.ball_position[0] <= 0:
+            self.left_score = 0
+            self.reset_ball()
+        elif self.ball_position[0] >= WIDTH - 1:
+            self.left_score += 10
+            self.reset_ball()
 
-        # Ball out of bounds
-        if ball_position[0] <= 0:
-            left_score = 0
-            reset_ball()
-        elif ball_position[0] >= WIDTH - 1:
-            left_score += 10
-            reset_ball()
+        self.draw_ball()
 
-        draw_ball()
+    def reset_ball(self):
+        self.ball_position = [WIDTH // 2, HEIGHT // 2]
+        self.ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
 
-    def reset_ball():
-        nonlocal ball_position, ball_speed
-        ball_position = [WIDTH // 2, HEIGHT // 2]
-        ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
+    def update_paddles(self, joystick):
+        direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
+        if direction == JOYSTICK_UP:
+            self.left_paddle = max(self.left_paddle - self.paddle_speed, 0)
+        elif direction == JOYSTICK_DOWN:
+            self.left_paddle = min(self.left_paddle + self.paddle_speed, HEIGHT - self.paddle_height)
 
-    def update_paddles():
-        nonlocal left_paddle, right_paddle
+        if self.ball_position[1] < self.right_paddle + self.paddle_height // 2:
+            self.right_paddle = max(self.right_paddle - self.paddle_speed, 0)
+        elif self.ball_position[1] > self.right_paddle + self.paddle_height // 2:
+            self.right_paddle = min(self.right_paddle + self.paddle_speed, HEIGHT - self.paddle_height)
 
-        joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
-        if joystick_dir == JOYSTICK_UP:
-            left_paddle = max(left_paddle - paddle_speed, 0)
-        elif joystick_dir == JOYSTICK_DOWN:
-            left_paddle = min(left_paddle + paddle_speed, HEIGHT - paddle_height)
-
-        # Simple logic for automatic right paddle
-        if ball_position[1] < right_paddle + paddle_height // 2:
-            right_paddle = max(right_paddle - paddle_speed, 0)
-        elif ball_position[1] > right_paddle + paddle_height // 2:
-            right_paddle = min(right_paddle + paddle_speed, HEIGHT - paddle_height)
-
-    def main_pong_game_loop():
-        nonlocal prev_left_score, prev_right_score, left_score
-        rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
+    def main_loop(self, joystick):
+        self.reset_ball()
+        draw_rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
         while True:
-            update_paddles()
-            update_ball()
-            draw_paddles()
-            if left_score != prev_left_score:
-                display_score_and_time(left_score)
-                prev_left_score = left_score
+            self.update_paddles(joystick)
+            self.update_ball()
+            self.draw_paddles()
+            if self.left_score != self.prev_left_score:
+                display_score_and_time(self.left_score)
+                self.prev_left_score = self.left_score
             time.sleep(0.05)
 
-    reset_ball()
-    main_pong_game_loop()
+# Game State Management
+class GameState:
+    def __init__(self):
+        self.joystick = Joystick(adc0, adc1, adc2)
+        self.games = {
+            "SIMON": SimonGame(),
+            "SNAKE": SnakeGame(),
+            "PONG": PongGame(),
+            "QIX": None,
+            "TETRIS": None,
+            "PACMAN": None
+        }
+        self.selected_game = None
 
-def game_selector():
-    games = ["SIMON", "SNAKE", "PONG"]
-    display.start()
-    
-    selected = 0
-    previous_selected = None
-    top_index = 0
-    display_size = 4
-    
-    while True:
-        # Draw the list of games, scrollable
-        if selected != previous_selected:
-            display.clear()
-            previous_selected = selected
-            for i in range(display_size):
-                game_index = top_index + i
-                if game_index < len(games):
-                    if game_index == selected:
-                        draw_text(10, 5 + i * 15, games[game_index], 255, 255, 255)
-                    else:
-                        draw_text(10, 5 + i * 15, games[game_index], 111, 111, 111)
-        
-        joystick_dir = get_joystick_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
+    def run_game_selector(self):
+        games = list(self.games.keys())
+        selected = 0
+        previous_selected = None
+        top_index = 0
+        display_size = 4
 
-        if joystick_dir is None:
-            button = adc2.read_u16()
-            if button < 10:
-                button = adc2.read_u16()
+        while True:
+            if selected != previous_selected:
+                display.clear()
+                previous_selected = selected
+                for i in range(display_size):
+                    game_index = top_index + i
+                    if game_index < len(games):
+                        color = (255, 255, 255) if game_index == selected else (111, 111, 111)
+                        draw_text(10, 5 + i * 15, games[game_index], *color)
 
-            if button < 5:
-                if selected == 0:
-                    simon_game()
-                elif selected == 1:
-                    snake_game()
-                elif selected == 2:
-                    pong_game()
-            continue
-        else:
-            display.clear()
-            previous_selected = None
-
-
-        if joystick_dir == JOYSTICK_UP:
-            if selected > 0:
+            direction = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
+            if direction == JOYSTICK_UP and selected > 0:
                 selected -= 1
-            if selected < top_index:
-                top_index -= 1
-        elif joystick_dir == JOYSTICK_DOWN:
-            if selected < len(games) - 1:
+                if selected < top_index:
+                    top_index -= 1
+            elif direction == JOYSTICK_DOWN and selected < len(games) - 1:
                 selected += 1
-            if selected > top_index + display_size - 1:
-                top_index += 1
+                if selected > top_index + display_size - 1:
+                    top_index += 1
 
+            if self.joystick.is_pressed():
+                self.selected_game = games[selected]
+                break
+
+            time.sleep(0.2)
+
+    def run(self):
+        while True:
+            if self.selected_game is None:
+                self.run_game_selector()
+            else:
+                try:
+                    self.games[self.selected_game].main_loop(self.joystick)
+                except Exception as e:
+                    print(f"Error: {e}")
+                    self.selected_game = None
+
+# Main program
 if __name__ == '__main__':
-    game_selector()
+    game_state = GameState()
+    display.start()
+    game_state.run()
+
