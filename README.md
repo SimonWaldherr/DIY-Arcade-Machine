@@ -14,6 +14,7 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
   - [Simon](#simon)
   - [Snake](#snake)
   - [Pong](#pong)
+  - [Breakout](#breakout)
 - [Fun](#fun)
 
 ## Hardware Requirements
@@ -76,6 +77,14 @@ Pong is a classic table tennis game where the player controls a paddle to hit a 
 - **Controls**:
   - Use the joystick to move the paddle up and down.
   - Keep the ball in play to score points.
+
+### Breakout
+
+Breakout is the game where you break the wall bricks with a ball
+
+- **Controls**:
+  - Use the joystick to move the paddle left and right.
+  - Keep the ball in play and break bricks to score points.
 
 ## Fun
 
