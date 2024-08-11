@@ -145,46 +145,49 @@ class Joystick:
         self.adc_button = adc_button
         self.last_direction = None
         self.last_read_time = 0
+        self.debounce_interval = 150  # Debounce interval in milliseconds
 
-    def read_direction(self, possible_directions, debounce=False):
+    def read_direction(self, possible_directions, debounce=True):
         current_time = time.ticks_ms()
-        if debounce and current_time - self.last_read_time < 250:
+
+        if debounce and current_time - self.last_read_time < self.debounce_interval:
             return self.last_direction
 
         value_x = self.adc_x.read_u16() - 32768
         value_y = self.adc_y.read_u16() - 32768
 
+        threshold = 10000  # Threshold for detecting direction
+
         direction = None
-        if value_y < -10000 and value_x < -10000:
+        if value_y < -threshold and value_x < -threshold:
             direction = JOYSTICK_UP_LEFT
-        elif value_y < -10000 and value_x > 10000:
+        elif value_y < -threshold and value_x > threshold:
             direction = JOYSTICK_UP_RIGHT
-        elif value_y > 10000 and value_x < -10000:
+        elif value_y > threshold and value_x < -threshold:
             direction = JOYSTICK_DOWN_LEFT
-        elif value_y > 10000 and value_x > 10000:
+        elif value_y > threshold and value_x > threshold:
             direction = JOYSTICK_DOWN_RIGHT
         elif abs(value_x) > abs(value_y):
-            if value_x > 10000:
+            if value_x > threshold:
                 direction = JOYSTICK_RIGHT
-            elif value_x < -10000:
+            elif value_x < -threshold:
                 direction = JOYSTICK_LEFT
         else:
-            if value_y > 10000:
+            if value_y > threshold:
                 direction = JOYSTICK_DOWN
-            elif value_y < -10000:
+            elif value_y < -threshold:
                 direction = JOYSTICK_UP
 
-        if direction not in possible_directions:
-            direction = None
-
-        if debounce:
-            self.last_read_time = current_time
+        if direction in possible_directions:
+            if debounce:
+                self.last_read_time = current_time
             self.last_direction = direction
 
-        return direction
+            return direction
 
     def is_pressed(self):
-        return self.adc_button.read_u16() < 5
+        return self.adc_button.read_u16() < 100
+
 
 # Color conversion function
 def hsb_to_rgb(hue, saturation, brightness):
@@ -581,7 +584,6 @@ class BreakoutGame:
         
         time.sleep(3)
         self.game_over = True
-        break
 
 
 # Game State Management
