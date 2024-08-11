@@ -492,99 +492,141 @@ class PongGame:
 # Breakout game class
 class BreakoutGame:
     def __init__(self):
+        # Paddle and ball positions
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = HEIGHT - PADDLE_HEIGHT
         self.ball_x = WIDTH // 2
         self.ball_y = HEIGHT // 2
+
+        # Ball direction
         self.ball_dx = 1
         self.ball_dy = -1
+
+        # Bricks
         self.bricks = self.create_bricks()
+
+        # Game variables
         self.score = 0
-        self.game_over = False
+        self.paddle_speed = 2
+
+        display.clear()
 
     def create_bricks(self):
         bricks = []
         for row in range(BRICK_ROWS):
             for col in range(BRICK_COLS):
-                bricks.append((col * BRICK_WIDTH, row * BRICK_HEIGHT))
+                bricks.append((col * (BRICK_WIDTH + 1) + 1, row * (BRICK_HEIGHT + 1)))
         return bricks
-    
-    def set_rect(self, x, y, width, height, r, g, b):
-        for i in range(width):
-            for j in range(height):
-                display.set_pixel(x + i, y + j, r, g, b)
 
     def draw_paddle(self):
-        self.set_rect(self.paddle_x, self.paddle_y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 255, 255)
+        for x in range(self.paddle_x, self.paddle_x + PADDLE_WIDTH):
+            for y in range(self.paddle_y, self.paddle_y + PADDLE_HEIGHT):
+                display.set_pixel(x, y, 255, 255, 255)
+
+    def clear_paddle(self):
+        for x in range(self.paddle_x, self.paddle_x + PADDLE_WIDTH):
+            for y in range(self.paddle_y, self.paddle_y + PADDLE_HEIGHT):
+                display.set_pixel(x, y, 0, 0, 0)
 
     def draw_ball(self):
-        self.set_rect(self.ball_x, self.ball_y, BALL_SIZE, BALL_SIZE, 255, 255, 255)
+        #display.set_pixel(self.ball_x, self.ball_y, 255, 255, 255)
+        # 2x2 ball
+        display.set_pixel(self.ball_x, self.ball_y, 255, 255, 255)
+        display.set_pixel(self.ball_x + 1, self.ball_y, 255, 255, 255)
+        display.set_pixel(self.ball_x, self.ball_y + 1, 255, 255, 255)
+        display.set_pixel(self.ball_x + 1, self.ball_y + 1, 255, 255, 255)
+
+    def clear_ball(self):
+        #display.set_pixel(self.ball_x, self.ball_y, 0, 0, 0)
+        # 2x2 ball
+        display.set_pixel(self.ball_x, self.ball_y, 0, 0, 0)
+        display.set_pixel(self.ball_x + 1, self.ball_y, 0, 0, 0)
+        display.set_pixel(self.ball_x, self.ball_y + 1, 0, 0, 0)
+        display.set_pixel(self.ball_x + 1, self.ball_y + 1, 0, 0, 0)
 
     def draw_bricks(self):
-        for (x, y) in self.bricks:
+        for x, y in self.bricks:
             hue = (y) * 360 // (BRICK_ROWS * BRICK_COLS)
             r, g, b = hsb_to_rgb(hue, 1, 1)
-            self.set_rect(x+1, y+1, BRICK_WIDTH-1, BRICK_HEIGHT-1, r, g, b)
 
-    def move_paddle(self, direction):
-        if direction == JOYSTICK_LEFT:
-            self.paddle_x = max(self.paddle_x - 2, 0)
-        elif direction == JOYSTICK_RIGHT:
-            self.paddle_x = min(self.paddle_x + 2, WIDTH - PADDLE_WIDTH)
+            for dx in range(BRICK_WIDTH):
+                for dy in range(BRICK_HEIGHT):
+                    display.set_pixel(x + dx, y + dy, r, g, b)
+
+    def clear_bricks(self):
+        display.clear()
 
     def update_ball(self):
+        self.clear_ball()
         self.ball_x += self.ball_dx
         self.ball_y += self.ball_dy
 
-        # Ball collision with walls
-        if self.ball_x <= 0 or self.ball_x >= WIDTH - BALL_SIZE:
+        # Check collision with walls
+        if self.ball_x <= 0 or self.ball_x >= WIDTH - 1:
             self.ball_dx = -self.ball_dx
-        if self.ball_y <= 0:
-            self.ball_dy = -self.ball_dy
-        if self.ball_y >= HEIGHT:
-            self.game_over = True
 
-        # Ball collision with paddle
-        if (self.paddle_y <= self.ball_y + BALL_SIZE <= self.paddle_y + PADDLE_HEIGHT and
-            self.paddle_x <= self.ball_x + BALL_SIZE // 2 <= self.paddle_x + PADDLE_WIDTH):
+        # Check collision with paddle
+        if self.ball_y <= 1:
             self.ball_dy = -self.ball_dy
 
-        # Ball collision with bricks
-        new_bricks = []
-        for (x, y) in self.bricks:
-            if (x <= self.ball_x + BALL_SIZE and x + BRICK_WIDTH >= self.ball_x and
-                y <= self.ball_y + BALL_SIZE and y + BRICK_HEIGHT >= self.ball_y):
+        # Check collision with paddle
+        if self.ball_y >= HEIGHT - PADDLE_HEIGHT -2:
+            if self.paddle_x <= self.ball_x <= self.paddle_x + PADDLE_WIDTH:
                 self.ball_dy = -self.ball_dy
+
+        if self.ball_y >= HEIGHT:
+            display.clear()
+            draw_text(10, 5, "GAME", 255, 255, 255)
+            draw_text(10, 20, "OVER", 255, 255, 255)
+            draw_text(10, 35, "Score:", 255, 255, 255)
+            draw_text(10, 50, str(self.score), 255, 255, 255)
+            time.sleep(3)
+
+
+        self.draw_ball()
+
+    def check_collision_with_bricks(self):
+        for brick in self.bricks:
+            bx, by = brick
+            if bx <= self.ball_x < bx + BRICK_WIDTH and by <= self.ball_y < by + BRICK_HEIGHT:
+                self.clear_ball()
+                self.ball_dy = -self.ball_dy
+                self.bricks.remove(brick)
                 self.score += 10
+                self.clear_bricks()
                 self.draw_bricks()
-            else:
-                new_bricks.append((x, y))
-        self.bricks = new_bricks
+                break
+
+    def update_paddle(self, joystick):
+        direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if direction == JOYSTICK_LEFT:
+            self.clear_paddle()
+            self.paddle_x = max(self.paddle_x - self.paddle_speed, 0)
+        elif direction == JOYSTICK_RIGHT:
+            self.clear_paddle()
+            self.paddle_x = min(self.paddle_x + self.paddle_speed, WIDTH - PADDLE_WIDTH)
+        self.draw_paddle()
 
     def main_loop(self, joystick):
-        while not self.game_over:
-            direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            if direction:
-                self.move_paddle(direction)
-            
-            self.update_ball()
-            display.clear()
-            self.draw_paddle()
-            self.draw_ball()
-            self.draw_bricks()
-            display_score_and_time(self.score)
-        
-        # Game Over screen
         display.clear()
-
-        draw_text(10, 5, "GAME", 255, 255, 255)
-        draw_text(10, 20, "OVER", 255, 255, 255)
-        draw_text(10, 35, "Score:", 255, 255, 255)
-        draw_text(10, 50, str(self.score), 255, 255, 255)
-        
-        time.sleep(3)
-        self.game_over = True
-
+        self.draw_bricks()
+        while True:
+            self.update_ball()
+            self.check_collision_with_bricks()
+            self.update_paddle(joystick)
+            display_score_and_time(self.score)
+            if self.score == BRICK_ROWS * BRICK_COLS * 10:
+                display.clear()
+                draw_text(10, 5, "YOU", 255, 255, 255)
+                draw_text(10, 20, "WON", 255, 255, 255)
+                time.sleep(3)
+                break
+            elif self.score < 60:
+                time.sleep(0.05)
+            elif self.score < 120:
+                time.sleep(0.03)
+            else:
+                time.sleep(0.01)
 
 # Game State Management
 class GameState:
