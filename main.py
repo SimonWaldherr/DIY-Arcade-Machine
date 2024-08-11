@@ -39,6 +39,15 @@ snake_direction = 'UP'
 green_targets = []
 text = ""
 
+# Breakout variables
+PADDLE_WIDTH = 10
+PADDLE_HEIGHT = 2
+BALL_SIZE = 2
+BRICK_WIDTH = 8
+BRICK_HEIGHT = 4
+BRICK_ROWS = 5
+BRICK_COLS = 8
+
 # Joystick directions
 JOYSTICK_UP = 'UP'
 JOYSTICK_DOWN = 'DOWN'
@@ -65,7 +74,14 @@ nums = {
     '9': ["01110", "10001", "01111", "00001", "01110"],
     ' ': ["00000", "00000", "00000", "00000", "00000"],
     '.': ["00000", "00000", "00000", "00000", "00001"],
-    ':': ["00000", "00100", "00000", "00100", "00000"]
+    ':': ["00000", "00100", "00000", "00100", "00000"],
+    '/': ["00001", "00010", "00100", "01000", "10000"],
+    '-': ["00000", "00000", "11111", "00000", "00000"],
+    '=': ["00000", "11111", "00000", "11111", "00000"],
+    '+': ["00000", "00100", "01110", "00100", "00000"],
+    '*': ["00000", "10101", "01110", "10101", "00000"],
+    '(': ["00010", "00100", "00100", "00100", "00010"],
+    ')': ["00100", "00010", "00010", "00010", "00100"]
 }
 
 # Helper functions
@@ -170,6 +186,27 @@ class Joystick:
     def is_pressed(self):
         return self.adc_button.read_u16() < 5
 
+# Color conversion function
+def hsb_to_rgb(hue, saturation, brightness):
+    hue_normalized = (hue % 360) / 60
+    hue_index = int(hue_normalized)
+    hue_fraction = hue_normalized - hue_index
+
+    value1 = brightness * (1 - saturation)
+    value2 = brightness * (1 - saturation * hue_fraction)
+    value3 = brightness * (1 - saturation * (1 - hue_fraction))
+
+    red, green, blue = [
+        (brightness, value3, value1),
+        (value2, brightness, value1),
+        (value1, brightness, value3),
+        (value1, value2, brightness),
+        (value3, value1, brightness),
+        (brightness, value1, value2)
+    ][hue_index]
+
+    return int(red * 255), int(green * 255), int(blue * 255)
+
 # Game classes
 class SimonGame:
     def __init__(self):
@@ -256,26 +293,6 @@ class SnakeGame:
         self.green_targets = []
         self.target = self.random_target()
 
-    def hsb_to_rgb(self, hue, saturation, brightness):
-        hue_normalized = (hue % 360) / 60
-        hue_index = int(hue_normalized)
-        hue_fraction = hue_normalized - hue_index
-
-        value1 = brightness * (1 - saturation)
-        value2 = brightness * (1 - saturation * hue_fraction)
-        value3 = brightness * (1 - saturation * (1 - hue_fraction))
-
-        red, green, blue = [
-            (brightness, value3, value1),
-            (value2, brightness, value1),
-            (value1, brightness, value3),
-            (value1, value2, brightness),
-            (value3, value1, brightness),
-            (brightness, value1, value2)
-        ][hue_index]
-
-        return int(red * 255), int(green * 255), int(blue * 255)
-
     def restart_game(self):
         self.snake = [(32, 32)]
         self.snake_length = 3
@@ -360,7 +377,7 @@ class SnakeGame:
         hue = 0
         for idx, (x, y) in enumerate(self.snake[:self.snake_length]):
             hue = (hue + 5) % 360
-            r, g, b = self.hsb_to_rgb(hue, 1, 1)
+            r, g, b = hsb_to_rgb(hue, 1, 1)
             display.set_pixel(x, y, r, g, b)
         for idx in range(self.snake_length, len(self.snake)):
             x, y = self.snake[idx]
@@ -468,6 +485,105 @@ class PongGame:
                 self.prev_left_score = self.left_score
             time.sleep(0.05)
 
+
+# Breakout game class
+class BreakoutGame:
+    def __init__(self):
+        self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
+        self.paddle_y = HEIGHT - PADDLE_HEIGHT
+        self.ball_x = WIDTH // 2
+        self.ball_y = HEIGHT // 2
+        self.ball_dx = 1
+        self.ball_dy = -1
+        self.bricks = self.create_bricks()
+        self.score = 0
+        self.game_over = False
+
+    def create_bricks(self):
+        bricks = []
+        for row in range(BRICK_ROWS):
+            for col in range(BRICK_COLS):
+                bricks.append((col * BRICK_WIDTH, row * BRICK_HEIGHT))
+        return bricks
+    
+    def set_rect(self, x, y, width, height, r, g, b):
+        for i in range(width):
+            for j in range(height):
+                display.set_pixel(x + i, y + j, r, g, b)
+
+    def draw_paddle(self):
+        self.set_rect(self.paddle_x, self.paddle_y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 255, 255)
+
+    def draw_ball(self):
+        self.set_rect(self.ball_x, self.ball_y, BALL_SIZE, BALL_SIZE, 255, 255, 255)
+
+    def draw_bricks(self):
+        for (x, y) in self.bricks:
+            hue = (y) * 360 // (BRICK_ROWS * BRICK_COLS)
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            self.set_rect(x+1, y+1, BRICK_WIDTH-1, BRICK_HEIGHT-1, r, g, b)
+
+    def move_paddle(self, direction):
+        if direction == JOYSTICK_LEFT:
+            self.paddle_x = max(self.paddle_x - 2, 0)
+        elif direction == JOYSTICK_RIGHT:
+            self.paddle_x = min(self.paddle_x + 2, WIDTH - PADDLE_WIDTH)
+
+    def update_ball(self):
+        self.ball_x += self.ball_dx
+        self.ball_y += self.ball_dy
+
+        # Ball collision with walls
+        if self.ball_x <= 0 or self.ball_x >= WIDTH - BALL_SIZE:
+            self.ball_dx = -self.ball_dx
+        if self.ball_y <= 0:
+            self.ball_dy = -self.ball_dy
+        if self.ball_y >= HEIGHT:
+            self.game_over = True
+
+        # Ball collision with paddle
+        if (self.paddle_y <= self.ball_y + BALL_SIZE <= self.paddle_y + PADDLE_HEIGHT and
+            self.paddle_x <= self.ball_x + BALL_SIZE // 2 <= self.paddle_x + PADDLE_WIDTH):
+            self.ball_dy = -self.ball_dy
+
+        # Ball collision with bricks
+        new_bricks = []
+        for (x, y) in self.bricks:
+            if (x <= self.ball_x + BALL_SIZE and x + BRICK_WIDTH >= self.ball_x and
+                y <= self.ball_y + BALL_SIZE and y + BRICK_HEIGHT >= self.ball_y):
+                self.ball_dy = -self.ball_dy
+                self.score += 10
+                self.draw_bricks()
+            else:
+                new_bricks.append((x, y))
+        self.bricks = new_bricks
+
+    def main_loop(self, joystick):
+        while not self.game_over:
+            direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if direction:
+                self.move_paddle(direction)
+            
+            self.update_ball()
+            display.clear()
+            self.draw_paddle()
+            self.draw_ball()
+            self.draw_bricks()
+            display_score_and_time(self.score)
+        
+        # Game Over screen
+        display.clear()
+
+        draw_text(10, 5, "GAME", 255, 255, 255)
+        draw_text(10, 20, "OVER", 255, 255, 255)
+        draw_text(10, 35, "Score:", 255, 255, 255)
+        draw_text(10, 50, str(self.score), 255, 255, 255)
+        
+        time.sleep(3)
+        self.game_over = True
+        break
+
+
 # Game State Management
 class GameState:
     def __init__(self):
@@ -476,9 +592,10 @@ class GameState:
             "SIMON": SimonGame(),
             "SNAKE": SnakeGame(),
             "PONG": PongGame(),
-            "QIX": None,
-            "TETRIS": None,
-            "PACMAN": None
+            "BRKOUT": BreakoutGame()
+            #"QIX": None,
+            #"TETRIS": None,
+            #"PACMAN": None
         }
         self.selected_game = None
 
