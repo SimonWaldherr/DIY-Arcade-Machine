@@ -677,9 +677,9 @@ class TicTacToeGame:
                     self.draw_line(0, (y + 1) * (HEIGHT // 3), WIDTH, (y + 1) * (HEIGHT // 3), 255, 255, 255)
 
                 if cell == "X":
-                    draw_text(x * (WIDTH // 3) + WIDTH // 6 - 10, y * (HEIGHT // 3) + HEIGHT // 6 - 10, "X", 255, 0, 0)
+                    draw_text(x * (WIDTH // 3) + WIDTH // 6 - 2, y * (HEIGHT // 3) + HEIGHT // 6 - 2, "X", 255, 0, 0)
                 elif cell == "O":
-                    draw_text(x * (WIDTH // 3) + WIDTH // 6 - 10, y * (HEIGHT // 3) + HEIGHT // 6 - 10, "O", 0, 0, 255)
+                    draw_text(x * (WIDTH // 3) + WIDTH // 6 - 2, y * (HEIGHT // 3) + HEIGHT // 6 - 2, "O", 0, 0, 255)
 
     def make_move(self, x, y):
         if self.board[y][x] == " ":
@@ -773,11 +773,11 @@ class GameState:
     def __init__(self):
         self.joystick = Joystick(adc0, adc1, adc2)
         self.games = {
-            "SIMON": SimonGame(),
             "SNAKE": SnakeGame(),
+            "SIMON": SimonGame(),
+            "BRKOUT": BreakoutGame(),
             "PONG": PongGame(),
-            "TITATO": TicTacToeGame(),
-            "BRKOUT": BreakoutGame()
+            "XXO": TicTacToeGame()
         }
         self.selected_game = None
 
@@ -801,7 +801,7 @@ class GameState:
                     game_index = top_index + i
                     if game_index < len(games):
                         color = (255, 255, 255) if game_index == selected else (111, 111, 111)
-                        draw_text(10, 5 + i * 15, games[game_index], *color)
+                        draw_text(8, 5 + i * 15, games[game_index], *color)
 
             # Check joystick direction with debounce logic
             if current_time - last_move_time > debounce_delay:
