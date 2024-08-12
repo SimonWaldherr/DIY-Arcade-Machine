@@ -628,6 +628,146 @@ class BreakoutGame:
             else:
                 time.sleep(0.01)
 
+class TicTacToeGame:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.board = [[" " for _ in range(3)] for _ in range(3)]
+        self.current_player = "X"
+        self.winner = None
+        self.turns = 0
+        self.selected_cell = (1, 1)  # Start selection in the middle cell
+        self.joystick = Joystick(adc0, adc1, adc2)
+        self.last_update_time = time.time()
+        self.debounce_time = 0.1  # Debounce time in seconds
+
+    def draw_line(self, x1, y1, x2, y2, r, g, b):
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+
+        while True:
+            display.set_pixel(x1, y1, r, g, b)
+            if x1 == x2 and y1 == y2:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x1 += sx
+            if e2 < dx:
+                err += dx
+                y1 += sy
+
+    def draw_board(self):
+        for y in range(3):
+            for x in range(3):
+                cell = self.board[y][x]
+
+                if (x, y) == self.selected_cell:
+                    draw_rect(x * (WIDTH // 3), y * (HEIGHT // 3), (x + 1) * (WIDTH // 3) - 1, (y + 1) * (HEIGHT // 3) - 1, 64, 64, 64)
+                else:
+                    draw_rect(x * (WIDTH // 3), y * (HEIGHT // 3), (x + 1) * (WIDTH // 3) - 1, (y + 1) * (HEIGHT // 3) - 1, 5, 5, 5)
+
+                if x < 2:  # Draw vertical lines
+                    self.draw_line((x + 1) * (WIDTH // 3), 0, (x + 1) * (WIDTH // 3), HEIGHT, 255, 255, 255)
+                if y < 2:  # Draw horizontal lines
+                    self.draw_line(0, (y + 1) * (HEIGHT // 3), WIDTH, (y + 1) * (HEIGHT // 3), 255, 255, 255)
+
+                if cell == "X":
+                    draw_text(x * (WIDTH // 3) + WIDTH // 6 - 10, y * (HEIGHT // 3) + HEIGHT // 6 - 10, "X", 255, 0, 0)
+                elif cell == "O":
+                    draw_text(x * (WIDTH // 3) + WIDTH // 6 - 10, y * (HEIGHT // 3) + HEIGHT // 6 - 10, "O", 0, 0, 255)
+
+    def make_move(self, x, y):
+        if self.board[y][x] == " ":
+            self.board[y][x] = self.current_player
+            self.turns += 1
+            if self.check_winner():
+                self.winner = self.current_player
+            elif self.turns == 9:
+                self.winner = "Draw"
+            else:
+                self.current_player = "O" if self.current_player == "X" else "X"
+
+    def check_winner(self):
+        winning_lines = [
+            [(0, 0), (0, 1), (0, 2)],
+            [(1, 0), (1, 1), (1, 2)],
+            [(2, 0), (2, 1), (2, 2)],
+            [(0, 0), (1, 0), (2, 0)],
+            [(0, 1), (1, 1), (2, 1)],
+            [(0, 2), (1, 2), (2, 2)],
+            [(0, 0), (1, 1), (2, 2)],
+            [(0, 2), (1, 1), (2, 0)]
+        ]
+
+        for line in winning_lines:
+            if self.board[line[0][1]][line[0][0]] == self.board[line[1][1]][line[1][0]] == self.board[line[2][1]][line[2][0]] != " ":
+                self.highlight_winning_line(line)
+                return True
+        return False
+
+    def get_selected_cell(self):
+        x, y = self.selected_cell
+        direction = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
+
+        if direction == JOYSTICK_UP and y > 0:
+            y -= 1
+        elif direction == JOYSTICK_DOWN and y < 2:
+            y += 1
+        elif direction == JOYSTICK_LEFT and x > 0:
+            x -= 1
+        elif direction == JOYSTICK_RIGHT and x < 2:
+            x += 1
+
+        self.selected_cell = (x, y)
+
+        return self.selected_cell
+
+    def highlight_winning_line(self, line):
+        x1, y1 = line[0]
+        x2, y2 = line[2]
+
+        self.draw_line(x1 * (WIDTH // 3) + WIDTH // 6, y1 * (HEIGHT // 3) + HEIGHT // 6, 
+                       x2 * (WIDTH // 3) + WIDTH // 6, y2 * (HEIGHT // 3) + HEIGHT // 6, 
+                       255, 255, 0)  # Draw winning line in yellow
+
+        for (x, y) in line:
+            draw_text(x * (WIDTH // 3) + WIDTH // 6 - 10, y * (HEIGHT // 3) + HEIGHT // 6 - 10, self.board[y][x], 255, 255, 0)  # Highlight winning marks
+
+    def display_winner(self):
+        draw_rect(0, 0, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        if self.winner == "Draw":
+            draw_text(WIDTH // 2 - 20, HEIGHT // 2 - 10, "DRAW", 255, 255, 255)
+        else:
+            draw_text(WIDTH // 2 - 30, HEIGHT // 2 - 10, f"{self.winner} WINS!", 255, 255, 0)
+        time.sleep(3)
+
+    def main_loop(self, joystick):
+        while not self.winner:
+            display.clear()
+            self.draw_board()
+            
+            move_made = False
+            while not move_made:
+                x, y = self.get_selected_cell()
+                self.draw_board()  # Redraw the board with updated selection
+                if self.joystick.is_pressed():
+                    if self.board[y][x] == " ":
+                        self.make_move(x, y)
+                        move_made = True
+                        #time.sleep(0.2)  # Brief delay after move to avoid double input
+
+            if self.winner:
+                self.display_winner()
+                time.sleep(2)
+                self.reset()  # Restart the game
+
+
+
 # Game State Management
 class GameState:
     def __init__(self):
@@ -636,10 +776,8 @@ class GameState:
             "SIMON": SimonGame(),
             "SNAKE": SnakeGame(),
             "PONG": PongGame(),
+            "TITATO": TicTacToeGame(),
             "BRKOUT": BreakoutGame()
-            #"QIX": None,
-            #"TETRIS": None,
-            #"PACMAN": None
         }
         self.selected_game = None
 
@@ -649,32 +787,43 @@ class GameState:
         previous_selected = None
         top_index = 0
         display_size = 4
+        last_move_time = time.time()
+        debounce_delay = 0.1
 
         while True:
+            current_time = time.time()
+            
+            # Update display only when selection changes
             if selected != previous_selected:
-                display.clear()
                 previous_selected = selected
+                display.clear()
                 for i in range(display_size):
                     game_index = top_index + i
                     if game_index < len(games):
                         color = (255, 255, 255) if game_index == selected else (111, 111, 111)
                         draw_text(10, 5 + i * 15, games[game_index], *color)
 
-            direction = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
-            if direction == JOYSTICK_UP and selected > 0:
-                selected -= 1
-                if selected < top_index:
-                    top_index -= 1
-            elif direction == JOYSTICK_DOWN and selected < len(games) - 1:
-                selected += 1
-                if selected > top_index + display_size - 1:
-                    top_index += 1
+            # Check joystick direction with debounce logic
+            if current_time - last_move_time > debounce_delay:
+                direction = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
+                if direction == JOYSTICK_UP and selected > 0:
+                    selected -= 1
+                    if selected < top_index:
+                        top_index -= 1
+                    last_move_time = current_time
+                elif direction == JOYSTICK_DOWN and selected < len(games) - 1:
+                    selected += 1
+                    if selected > top_index + display_size - 1:
+                        top_index += 1
+                    last_move_time = current_time
 
+            # Check if joystick button is pressed
             if self.joystick.is_pressed():
                 self.selected_game = games[selected]
                 break
 
-            time.sleep(0.2)
+            # Maintain a consistent frame rate
+            time.sleep(0.05)
 
     def run(self):
         while True:
@@ -692,4 +841,5 @@ if __name__ == '__main__':
     game_state = GameState()
     display.start()
     game_state.run()
+
 
