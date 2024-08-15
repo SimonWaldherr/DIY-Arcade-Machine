@@ -135,6 +135,83 @@ def display_score_and_time(score):
     draw_text_small(score_x, score_y, score_str, 255, 255, 255)
     draw_text_small(time_x, time_y, time_str, 255, 255, 255)
 
+# Global variable for the grid
+grid = bytearray(WIDTH * HEIGHT)
+
+def initialize_grid():
+    global grid
+    grid = bytearray(WIDTH * HEIGHT)
+
+def get_grid_value(x, y):
+    return grid[y * WIDTH + x]
+
+def set_grid_value(x, y, value):
+    grid[y * WIDTH + x] = value
+
+def draw_line_on_grid():
+    startpoint_x = random.randint(BORDER+1, WIDTH - BORDER - 1)
+    startpoint_y = 0
+
+    down_for = random.randint(1, HEIGHT - 15)
+    for i in range(down_for):
+        set_grid_value(startpoint_x, startpoint_y + i, 1)
+        display.set_pixel(startpoint_x, startpoint_y + i, 255, 255, 255)
+
+    left_for = random.randint(1, startpoint_x - BORDER)
+    for i in range(left_for):
+        set_grid_value(startpoint_x - i, startpoint_y + down_for, 1)
+        display.set_pixel(startpoint_x - i, startpoint_y + down_for, 255, 255, 255)
+
+    # Draw line down to bottom
+    down_for_2 = HEIGHT - (startpoint_y + down_for)
+    for i in range(down_for_2):
+        set_grid_value(startpoint_x - left_for, startpoint_y + down_for + i, 1)
+        display.set_pixel(startpoint_x - left_for, startpoint_y + down_for + i, 255, 255, 255)
+
+    # Define random point x/y for enemy and check if it is on the line
+    for _ in range(10):
+        enemy_x = random.randint(BORDER, WIDTH - BORDER - 1)
+        enemy_y = random.randint(BORDER, HEIGHT - BORDER - 1)
+        if get_grid_value(enemy_x, enemy_y) == 1:
+            continue
+        else:
+            break
+
+    display.set_pixel(enemy_x, enemy_y, 255, 0, 0)
+    return enemy_x, enemy_y
+
+@micropython.native
+def floodfill(x, y, accessible_mark, non_accessible_mark, r, g, b, max_steps=8000):
+    stack = [(x, y)]
+    steps = 0
+
+    while stack and steps < max_steps:
+        x, y = stack.pop(0)
+        grid_value = get_grid_value(x, y)
+        
+        if x < 0 or x >= WIDTH or y < 0 or y >= HEIGHT:
+            continue
+        if grid_value != 0:
+            continue
+
+        set_grid_value(x, y, accessible_mark)
+        #display.set_pixel(x, y, r, g, b)
+
+        steps += 1
+
+        # Add neighboring pixels to the stack
+        if x + 1 < WIDTH:
+            stack.append((x + 1, y))
+        if x - 1 >= 0:
+            stack.append((x - 1, y))
+        if y + 1 < HEIGHT:
+            stack.append((x, y + 1))
+        if y - 1 >= 0:
+            stack.append((x, y - 1))
+
+    return len(stack) > 0  # Indicates if there's still work left
+
+
 rtc = machine.RTC()
 
 # Joystick class
@@ -186,7 +263,7 @@ class Joystick:
             return direction
 
     def is_pressed(self):
-        return self.adc_button.read_u16() < 100
+        return self.adc_button.read_u16() < 200
 
 
 # Color conversion function
@@ -766,7 +843,170 @@ class TicTacToeGame:
                 time.sleep(2)
                 self.reset()  # Restart the game
 
+class QixGame:
+    def __init__(self):
+        self.player_x = 0
+        self.player_y = 0
+        self.opponent_x = 0
+        self.opponent_y = 0
+        self.opponent_dx = 1
+        self.opponent_dy = 1
+        self.occupied_percentage = 0
+        self.height = HEIGHT - 7
+        self.width = WIDTH
+        
+        # prev player position type (grid value)
+        self.prev_player_pos = 1
 
+        # grid values:
+        # 0 = empty
+        # 1 = line
+        # 2 = floodfill
+        # 3 = enemy
+        # 4 = temp line
+
+    def initialize_game(self):
+        display.clear()
+        initialize_grid()
+        self.draw_frame()
+        self.place_player()
+        self.place_opponent()
+
+    def draw_frame(self):
+        # Draw a frame around the play area
+        for x in range(self.width):
+            set_grid_value(x, 0, 1)
+            set_grid_value(x, self.height - 1, 1)
+            display.set_pixel(x, 0, 0, 0, 255)
+            display.set_pixel(x, self.height - 1, 0, 0, 255)
+
+        for y in range(self.height):
+            set_grid_value(0, y, 1)
+            set_grid_value(self.width - 1, y, 1)
+            display.set_pixel(0, y, 0, 0, 255)
+            display.set_pixel(self.width - 1, y, 0, 0, 255)
+
+    def place_player(self):
+        # Place the player at a random position on the edge
+        edge_positions = [(x, 0) for x in range(self.width)] + \
+                         [(x, self.height - 1) for x in range(self.width)] + \
+                         [(0, y) for y in range(self.height)] + \
+                         [(self.width - 1, y) for y in range(self.height)]
+        self.player_x, self.player_y = random.choice(edge_positions)
+        display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
+
+    def place_opponent(self):
+        # Place the opponent at a random position inside the playfield
+        self.opponent_x, self.opponent_y = random.randint(1, self.width - 2), random.randint(1, self.height - 2)
+        set_grid_value(self.opponent_x, self.opponent_y, 3)
+        display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
+
+    def move_opponent(self):
+        # Move the opponent and bounce off the boundaries
+        next_x = self.opponent_x + self.opponent_dx
+        next_y = self.opponent_y + self.opponent_dy
+
+        # Check for collision in the x direction
+        if get_grid_value(next_x, self.opponent_y) == 1 or get_grid_value(next_x, self.opponent_y) == 2:
+            self.opponent_dx = -self.opponent_dx
+
+        # Check for collision in the y direction
+        if get_grid_value(self.opponent_x, next_y) == 1 or get_grid_value(self.opponent_x, next_y) == 2:
+            self.opponent_dy = -self.opponent_dy
+
+        # check for collision with player or line and exit
+        if get_grid_value(next_x, next_y) == 4 or (next_x == self.player_x and next_y == self.player_y):
+            draw_text(self.width // 2 - 20, self.height // 2 - 10, "YOU LOSE", 255, 0, 0)
+            time.sleep(2)
+            return
+
+        # Clear current position
+        set_grid_value(self.opponent_x, self.opponent_y, 0)
+        display.set_pixel(self.opponent_x, self.opponent_y, 0, 0, 0)
+
+        # Update position
+        self.opponent_x += self.opponent_dx
+        self.opponent_y += self.opponent_dy
+        display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
+
+
+    def move_player(self, joystick):
+        # Handle player movement based on joystick input
+        direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if direction:
+            new_x, new_y = self.player_x, self.player_y
+            if direction == JOYSTICK_UP:
+                new_y -= 1
+            elif direction == JOYSTICK_DOWN:
+                new_y += 1
+            elif direction == JOYSTICK_LEFT:
+                new_x -= 1
+            elif direction == JOYSTICK_RIGHT:
+                new_x += 1
+
+            if 0 <= new_x < self.width and 0 <= new_y < self.height:
+                if get_grid_value(new_x, new_y) == 0:
+                    set_grid_value(new_x, new_y, 4)
+                    display.set_pixel(new_x, new_y, 0, 255, 0)
+                    self.prev_player_pos = 0
+                elif get_grid_value(new_x, new_y) == 1:
+                    if self.prev_player_pos == 0:
+                        self.close_area(new_x, new_y)
+                    self.prev_player_pos = 1
+
+                self.player_x, self.player_y = new_x, new_y
+                display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
+
+
+    def close_area(self, x, y):
+        # When the player closes an area by reconnecting with a border or trail
+        set_grid_value(x, y, 1)
+        display.set_pixel(x, y, 0, 0, 255)
+
+        # Flood fill from the opponent's position
+        self.flood_fill(self.opponent_x, self.opponent_y)
+
+        # Fill the non-accessible area
+        for i in range(WIDTH):
+            for j in range(self.height):
+                if get_grid_value(i, j) == 0:
+                    set_grid_value(i, j, 2)  # Mark non-accessible area as player's
+                    display.set_pixel(i, j, 0, 0, 255)
+                elif get_grid_value(i, j) == 3:
+                    set_grid_value(i, j, 0)
+                elif get_grid_value(i, j) == 1 or get_grid_value(i, j) == 4:
+                    set_grid_value(i, j, 1)
+                    display.set_pixel(i, j, 0, 55, 100)
+
+        # Calculate occupied percentage after filling
+        self.calculate_occupied_percentage()
+
+    def flood_fill(self, x, y):
+        # Apply flood fill from the opponent's position to determine the area it controls
+        floodfill(x, y, accessible_mark=3, non_accessible_mark=2, r=255, g=0, b=0)
+
+
+    def calculate_occupied_percentage(self):
+        # Calculate how much of the playfield has been occupied
+        occupied_pixels = sum(1 for i in range(len(grid)) if grid[i] == 2)
+        self.occupied_percentage = (occupied_pixels / (self.width * self.height) * 100)
+        display_score_and_time(int(self.occupied_percentage))
+
+    def check_win_condition(self):
+        return self.occupied_percentage > 75
+
+    def main_loop(self, joystick):
+        self.initialize_game()
+
+        while True:
+            self.move_player(joystick)
+            self.move_opponent()
+            if self.check_win_condition():
+                draw_text(self.width // 2 - 20, self.height // 2 - 10, "YOU WIN", 0, 255, 0)
+                time.sleep(2)
+                break
+
+            time.sleep(0.05)
 
 # Game State Management
 class GameState:
@@ -777,6 +1017,7 @@ class GameState:
             "SIMON": SimonGame(),
             "BRKOUT": BreakoutGame(),
             "PONG": PongGame(),
+            "QIX": QixGame(),
             "XXO": TicTacToeGame()
         }
         self.selected_game = None
