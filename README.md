@@ -15,6 +15,8 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
   - [Snake](#snake)
   - [Pong](#pong)
   - [Breakout](#breakout)
+  - TicTacToe / XXO
+  - Qix / Xonix
 - [Fun](#fun)
 
 ## Hardware Requirements
