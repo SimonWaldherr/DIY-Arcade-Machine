@@ -230,10 +230,12 @@ class Joystick:
         if debounce and current_time - self.last_read_time < self.debounce_interval:
             return self.last_direction
 
-        value_x = self.adc_x.read_u16() - 32768
-        value_y = self.adc_y.read_u16() - 32768
+        value_x = self.adc_x.read_u16() - 30039
+        value_y = self.adc_y.read_u16() - 28919
 
-        threshold = 10000  # Threshold for detecting direction
+        #print(value_x, value_y)
+
+        threshold = 15000  # Threshold for detecting direction
 
         direction = None
         if value_y < -threshold and value_x < -threshold:
@@ -244,16 +246,35 @@ class Joystick:
             direction = JOYSTICK_DOWN_LEFT
         elif value_y > threshold and value_x > threshold:
             direction = JOYSTICK_DOWN_RIGHT
-        elif abs(value_x) > abs(value_y):
-            if value_x > threshold:
-                direction = JOYSTICK_RIGHT
-            elif value_x < -threshold:
-                direction = JOYSTICK_LEFT
-        else:
-            if value_y > threshold:
-                direction = JOYSTICK_DOWN
-            elif value_y < -threshold:
-                direction = JOYSTICK_UP
+        elif value_y < -threshold:
+            direction = JOYSTICK_UP
+        elif value_y > threshold:
+            direction = JOYSTICK_DOWN
+        elif value_x < -threshold:
+            direction = JOYSTICK_LEFT
+        elif value_x > threshold:
+            direction = JOYSTICK_RIGHT
+
+
+        # rotate joystick 90° counter-clockwise
+        if direction == JOYSTICK_UP:
+            direction = JOYSTICK_LEFT
+        elif direction == JOYSTICK_DOWN:
+            direction = JOYSTICK_RIGHT
+        elif direction == JOYSTICK_LEFT:
+            direction = JOYSTICK_DOWN
+        elif direction == JOYSTICK_RIGHT:
+            direction = JOYSTICK_UP
+        elif direction == JOYSTICK_UP_LEFT:
+            direction = JOYSTICK_DOWN_LEFT
+        elif direction == JOYSTICK_DOWN_LEFT:
+            direction = JOYSTICK_DOWN_RIGHT
+        elif direction == JOYSTICK_DOWN_RIGHT:
+            direction = JOYSTICK_UP_RIGHT
+        elif direction == JOYSTICK_UP_RIGHT:
+            direction = JOYSTICK_UP_LEFT
+
+            
 
         if direction in possible_directions:
             if debounce:
