@@ -2,7 +2,7 @@
 
 ## my very own arcade machine
 
-Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive way to create your very own arcade machine using the Interstate 75 - RGB LED Matrix Driver from Pimoroni (PIM584), a 64x64 Pixel RGB LED Matrix with Hub75 connector, and a KY-023 Joystick Module. The project includes three classic games: Simon, Snake, and Pong, all playable on a colorful LED matrix display.
+Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive way to create your very own arcade machine using the Interstate 75 - RGB LED Matrix Driver from Pimoroni (PIM584), a 64x64 Pixel RGB LED Matrix with Hub75 connector, and a KY-023 Joystick Module. The project includes six classic games: Simon, Snake, Qix, Breakout, Tic-Tac-Toe and Pong, all playable on a colorful LED matrix display.
 
 ## Table of Contents
 
