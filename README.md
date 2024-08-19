@@ -25,6 +25,9 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
 - [64x64 Pixel RGB LED Matrix with Hub75 connector](https://amzn.to/3Yadyhh)
 - [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul)
 - Connecting wires and power supply
+- if you need a box and nice case for the joystick, you can print it:
+  - [Joystick](https://www.thingiverse.com/thing:700346)
+  - [LED-Matrix-Case](https://www.thingiverse.com/thing:6736386)
 
 ## Software Requirements
 
