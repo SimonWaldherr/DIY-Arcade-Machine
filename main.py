@@ -1076,6 +1076,9 @@ class TetrisGame:
         self.current_piece = Tetrimino()
         self.fall_time = 0
         self.text = ""
+        self.old_piece_pos = []
+        self.last_input_time = 0
+        self.input_cooldown = 60
 
     def create_grid(self, locked_positions={}):
         grid = [[tetris_black for _ in range(grid_width)] for _ in range(grid_height)]
@@ -1115,7 +1118,25 @@ class TetrisGame:
                 if color != tetris_black:
                     draw_rect(x * block_size, y * block_size, (x + 1) * block_size - 1, (y + 1) * block_size - 1, *color)
 
+    def erase_piece(self, piece_pos):
+        for x, y in piece_pos:
+            if y >= 0:
+                draw_rect(x * block_size, y * block_size, (x + 1) * block_size - 1, (y + 1) * block_size - 1, *tetris_black)
+
+    def draw_piece(self, piece_pos, color):
+        for x, y in piece_pos:
+            if y >= 0:
+                draw_rect(x * block_size, y * block_size, (x + 1) * block_size - 1, (y + 1) * block_size - 1, *color)
+
+    def handle_input(self, joystick):
+        current_time = time.ticks_ms()
+        if current_time - self.last_input_time < self.input_cooldown:
+            return None
+        self.last_input_time = current_time
+        return joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP], debounce=False)
+
     def main_loop(self, joystick):
+        display.clear()
         clock = time.ticks_ms()
         while True:
             self.grid = self.create_grid(self.locked_positions)
@@ -1123,58 +1144,84 @@ class TetrisGame:
             current_time = time.ticks_ms()
             self.fall_time += time.ticks_diff(current_time, clock)
             clock = current_time
-            display.clear()
+
+            redraw_needed = False
 
             if self.fall_time >= fall_speed:
                 self.fall_time = 0
+                old_piece_pos = [(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell]
+                self.erase_piece(old_piece_pos)  # Lösche das alte Tetrimino
+
                 self.current_piece.y += 1
                 if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
                     self.current_piece.y -= 1
                     self.change_piece = True
 
-            direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP], debounce=True)
+                redraw_needed = True
+
+            direction = self.handle_input(joystick)  # Verwende die handle_input-Methode
             if direction == JOYSTICK_LEFT:
+                self.erase_piece([(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell])
                 self.current_piece.x -= 1
                 if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
                     self.current_piece.x += 1
+                else:
+                    redraw_needed = True
             elif direction == JOYSTICK_RIGHT:
+                self.erase_piece([(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell])
                 self.current_piece.x += 1
                 if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
                     self.current_piece.x -= 1
+                else:
+                    redraw_needed = True
             elif direction == JOYSTICK_DOWN:
+                self.erase_piece([(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell])
                 self.current_piece.y += 1
                 if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
                     self.current_piece.y -= 1
+                else:
+                    redraw_needed = True
             elif direction == JOYSTICK_UP:
+                self.erase_piece([(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell])
                 self.current_piece.rotate()
                 if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
                     self.current_piece.rotate()
                     self.current_piece.rotate()
                     self.current_piece.rotate()
+                else:
+                    redraw_needed = True
 
-            shape_pos = [(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell]
-
-            for x, y in shape_pos:
-                if y >= 0:
-                    self.grid[y][x] = self.current_piece.color
+            if redraw_needed:
+                new_piece_pos = [(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell]
+                self.draw_piece(new_piece_pos, self.current_piece.color)  # Zeichne das neue Tetrimino
 
             if self.change_piece:
-                for pos in shape_pos:
+                for pos in new_piece_pos:
                     self.locked_positions[(pos[0], pos[1])] = self.current_piece.color
+
+                cleared_rows = self.clear_rows(self.grid, self.locked_positions)
+
+                if cleared_rows > 0:
+                    display.clear()
+                    self.grid = self.create_grid(self.locked_positions)  # Erneut das Grid erstellen
+                    self.draw_grid()  # Grid neu zeichnen
+                else:
+                    self.draw_piece(new_piece_pos, self.current_piece.color)  # Zeichne das aktuelle Tetrimino
+
                 self.current_piece = Tetrimino()
                 self.change_piece = False
-                self.clear_rows(self.grid, self.locked_positions)
 
-            self.draw_grid()
             display_score_and_time(len(self.locked_positions))
 
             if any(y < 1 for x, y in self.locked_positions):
                 break
 
-            time.sleep(0.05)
         display.clear()
         self.draw_text_small(10, 20, "GAME OVER", 255, 0, 0)
         time.sleep(3)
+
+
+
 # Game State Management
 class GameState:
     def __init__(self):
