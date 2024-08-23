@@ -24,6 +24,35 @@ colors_bright = [
     (255, 255, 0)  # Yellow
 ]
 
+# Farben
+tetris_black = (0, 0, 0)
+tetris_white = (255, 255, 255)
+tetris_colors = [
+    (0, 255, 255),
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (255, 165, 0),
+    (128, 0, 128),
+]
+
+# Spielfeldgröße (16x13 Blöcke)
+grid_width = 16
+grid_height = 13
+block_size = 4  # Jeder Block ist 4x4 Pixel groß
+
+# Tetrimino-Formen
+tetriminos = [
+    [[1, 1, 1, 1]],
+    [[1, 1, 1], [0, 1, 0]],
+    [[1, 1, 0], [0, 1, 1]],
+    [[0, 1, 1], [1, 1, 0]],
+    [[1, 1], [1, 1]],
+    [[1, 1, 1], [1, 0, 0]],
+    [[1, 1, 1], [0, 0, 1]],
+]
+
 colors = [(int(r * 0.5), int(g * 0.5), int(b * 0.5)) for r, g, b in colors_bright]
 inactive_colors = [(int(r * 0.2), int(g * 0.2), int(b * 0.2)) for r, g, b in colors_bright]
 
@@ -1029,6 +1058,123 @@ class QixGame:
 
             time.sleep(0.05)
 
+class Tetrimino:
+    def __init__(self):
+        self.shape = random.choice(tetriminos)
+        self.color = random.choice(tetris_colors)
+        self.x = grid_width // 2 - len(self.shape[0]) // 2
+        self.y = 0
+
+    def rotate(self):
+        self.shape = [list(row) for row in zip(*self.shape[::-1])]
+
+class TetrisGame:
+    def __init__(self):
+        self.locked_positions = {}
+        self.grid = self.create_grid(self.locked_positions)
+        self.change_piece = False
+        self.current_piece = Tetrimino()
+        self.fall_time = 0
+        self.text = ""
+
+    def create_grid(self, locked_positions={}):
+        grid = [[tetris_black for _ in range(grid_width)] for _ in range(grid_height)]
+        for y in range(grid_height):
+            for x in range(grid_width):
+                if (x, y) in locked_positions:
+                    color = locked_positions[(x, y)]
+                    grid[y][x] = color
+        return grid
+
+    def valid_move(self, shape, grid, offset):
+        off_x, off_y = offset
+        for y, row in enumerate(shape):
+            for x, cell in enumerate(row):
+                if cell:
+                    if (x + off_x < 0 or x + off_x >= grid_width or y + off_y >= grid_height or grid[y + off_y][x + off_x] != tetris_black):
+                        return False
+        return True
+
+    def clear_rows(self, grid, locked):
+        cleared_rows = 0
+        for y in range(grid_height - 1, -1, -1):
+            row = grid[y]
+            if tetris_black not in row:
+                cleared_rows += 1
+                for x in range(grid_width):
+                    del locked[(x, y)]
+                for k in range(y, 0, -1):
+                    for x in range(grid_width):
+                        locked[(x, k)] = locked.get((x, k - 1), tetris_black)
+        return cleared_rows
+
+    def draw_grid(self):
+        for y in range(grid_height):
+            for x in range(grid_width):
+                color = self.grid[y][x]
+                if color != tetris_black:
+                    draw_rect(x * block_size, y * block_size, (x + 1) * block_size - 1, (y + 1) * block_size - 1, *color)
+
+    def main_loop(self, joystick):
+        clock = time.ticks_ms()
+        while True:
+            self.grid = self.create_grid(self.locked_positions)
+            fall_speed = 500  # in milliseconds
+            current_time = time.ticks_ms()
+            self.fall_time += time.ticks_diff(current_time, clock)
+            clock = current_time
+            display.clear()
+
+            if self.fall_time >= fall_speed:
+                self.fall_time = 0
+                self.current_piece.y += 1
+                if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
+                    self.current_piece.y -= 1
+                    self.change_piece = True
+
+            direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP], debounce=True)
+            if direction == JOYSTICK_LEFT:
+                self.current_piece.x -= 1
+                if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
+                    self.current_piece.x += 1
+            elif direction == JOYSTICK_RIGHT:
+                self.current_piece.x += 1
+                if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
+                    self.current_piece.x -= 1
+            elif direction == JOYSTICK_DOWN:
+                self.current_piece.y += 1
+                if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
+                    self.current_piece.y -= 1
+            elif direction == JOYSTICK_UP:
+                self.current_piece.rotate()
+                if not self.valid_move(self.current_piece.shape, self.grid, (self.current_piece.x, self.current_piece.y)):
+                    self.current_piece.rotate()
+                    self.current_piece.rotate()
+                    self.current_piece.rotate()
+
+            shape_pos = [(self.current_piece.x + x, self.current_piece.y + y) for y, row in enumerate(self.current_piece.shape) for x, cell in enumerate(row) if cell]
+
+            for x, y in shape_pos:
+                if y >= 0:
+                    self.grid[y][x] = self.current_piece.color
+
+            if self.change_piece:
+                for pos in shape_pos:
+                    self.locked_positions[(pos[0], pos[1])] = self.current_piece.color
+                self.current_piece = Tetrimino()
+                self.change_piece = False
+                self.clear_rows(self.grid, self.locked_positions)
+
+            self.draw_grid()
+            display_score_and_time(len(self.locked_positions))
+
+            if any(y < 1 for x, y in self.locked_positions):
+                break
+
+            time.sleep(0.05)
+        display.clear()
+        self.draw_text_small(10, 20, "GAME OVER", 255, 0, 0)
+        time.sleep(3)
 # Game State Management
 class GameState:
     def __init__(self):
@@ -1039,6 +1185,7 @@ class GameState:
             "BRKOUT": BreakoutGame(),
             "PONG": PongGame(),
             "QIX": QixGame(),
+            "TETRIS": TetrisGame(),
             "XXO": TicTacToeGame()
         }
         self.selected_game = None
