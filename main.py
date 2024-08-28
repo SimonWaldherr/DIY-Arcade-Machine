@@ -248,17 +248,126 @@ def floodfill(x, y, accessible_mark, non_accessible_mark, r, g, b, max_steps=800
 
 rtc = machine.RTC()
 
+# Nunchuck class
+class Nunchuck:
+    def __init__(self, i2c, poll=True, poll_interval=50):
+        self.i2c = i2c
+        self.address = 0x52
+        self.buffer = bytearray(6)  # Puffer zur Speicherung der Sensordaten
+
+        # Initialisierungssequenz für den Nunchuk
+        self.i2c.writeto(self.address, b'\xf0\x55')
+        self.i2c.writeto(self.address, b'\xfb\x00')
+
+        # Zeitstempel der letzten Polling-Aktualisierung
+        self.last_poll = time.ticks_ms()
+        
+        # Polling-Intervall in Millisekunden
+        self.polling_threshold = poll_interval if poll else -1
+
+    def update(self):
+        self.i2c.writeto(self.address, b'\x00')
+        self.i2c.readfrom_into(self.address, self.buffer)
+
+    def __poll(self):
+        if self.polling_threshold > 0 and time.ticks_diff(time.ticks_ms(), self.last_poll) > self.polling_threshold:
+            self.update()
+            self.last_poll = time.ticks_ms()
+
+    def accelerator(self):
+        self.__poll()
+        return (
+            (self.buffer[2] << 2) + ((self.buffer[5] & 0x0C) >> 2),
+            (self.buffer[3] << 2) + ((self.buffer[5] & 0x30) >> 4),
+            (self.buffer[4] << 2) + ((self.buffer[5] & 0xC0) >> 6)
+        )
+
+    def buttons(self):
+        self.__poll()
+        return (
+            not (self.buffer[5] & 0x02),  # C-Taste
+            not (self.buffer[5] & 0x01)   # Z-Taste
+        )
+
+    def joystick(self):
+        self.__poll()
+        return (self.buffer[0], self.buffer[1])
+
+    def joystick_left(self):
+        self.__poll()
+        return self.buffer[0] < 55
+
+    def joystick_right(self):
+        self.__poll()
+        return self.buffer[0] > 200
+
+    def joystick_up(self):
+        self.__poll()
+        return self.buffer[1] > 200
+
+    def joystick_down(self):
+        self.__poll()
+        return self.buffer[1] < 55
+
+    def joystick_center(self):
+        self.__poll()
+        return 100 < self.buffer[0] < 155 and 100 < self.buffer[1] < 155
+
+    def joystick_x(self):
+        self.__poll()
+        return (self.buffer[0] >> 2) - 34
+
+    def joystick_y(self):
+        self.__poll()
+        return (self.buffer[1] >> 2) - 34
+
+    def is_shaking(self):
+        x, y, z = self.accelerator()
+        return max(x, y, z) > 800  # Schwellenwert für Erkennung
+
 # Joystick class
 class Joystick:
     def __init__(self, adc_x, adc_y, adc_button):
-        self.adc_x = adc_x
-        self.adc_y = adc_y
-        self.adc_button = adc_button
-        self.last_direction = None
-        self.last_read_time = 0
-        self.debounce_interval = 150  # Debounce interval in milliseconds
+        self.joystick_mode = "analog"
+        self.joystick_mode = "i2c"
+        # comment out the mode you don't want to use
+
+
+        if self.joystick_mode == "i2c":
+            self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
+            self.nunchuck = Nunchuck(i2c)
+        elif self.joystick_mode == "analog":
+            self.adc_x = adc_x
+            self.adc_y = adc_y
+            self.adc_button = adc_button
+            self.last_direction = None
+            self.last_read_time = 0
+            self.debounce_interval = 150
+
 
     def read_direction(self, possible_directions, debounce=True):
+        if self.joystick_mode == "i2c":
+            x, y = self.nunchuck.joystick()
+            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
+                return JOYSTICK_DOWN_LEFT
+            elif x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
+                return JOYSTICK_DOWN_RIGHT
+            elif x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
+                return JOYSTICK_UP_LEFT
+            elif x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
+                return JOYSTICK_UP_RIGHT
+            elif x < 100 and JOYSTICK_LEFT in possible_directions:
+                return JOYSTICK_LEFT
+            elif x > 150 and JOYSTICK_RIGHT in possible_directions:
+                return JOYSTICK_RIGHT
+            elif y < 100 and JOYSTICK_DOWN in possible_directions:
+                return JOYSTICK_DOWN
+            elif y > 150 and JOYSTICK_UP in possible_directions:
+                return JOYSTICK_UP
+            else:
+                return None
+            
+
         current_time = time.ticks_ms()
 
         if debounce and current_time - self.last_read_time < self.debounce_interval:
@@ -272,52 +381,32 @@ class Joystick:
         threshold = 15000  # Threshold for detecting direction
 
         direction = None
-        if value_y < -threshold and value_x < -threshold:
-            direction = JOYSTICK_UP_LEFT
-        elif value_y < -threshold and value_x > threshold:
-            direction = JOYSTICK_UP_RIGHT
-        elif value_y > threshold and value_x < -threshold:
-            direction = JOYSTICK_DOWN_LEFT
-        elif value_y > threshold and value_x > threshold:
-            direction = JOYSTICK_DOWN_RIGHT
-        elif value_y < -threshold:
-            direction = JOYSTICK_UP
-        elif value_y > threshold:
-            direction = JOYSTICK_DOWN
-        elif value_x < -threshold:
-            direction = JOYSTICK_LEFT
-        elif value_x > threshold:
-            direction = JOYSTICK_RIGHT
+        if value_y < -threshold and value_x < -threshold and JOYSTICK_DOWN_LEFT in possible_directions:
+            direction = JOYSTICK_DOWN_LEFT #JOYSTICK_UP_LEFT
+        elif value_y < -threshold and value_x > threshold and JOYSTICK_UP_LEFT in possible_directions:
+            direction = JOYSTICK_UP_LEFT #JOYSTICK_UP_RIGHT
+        elif value_y > threshold and value_x < -threshold and JOYSTICK_DOWN_RIGHT in possible_directions:
+            direction = JOYSTICK_DOWN_RIGHT #JOYSTICK_DOWN_LEFT
+        elif value_y > threshold and value_x > threshold and JOYSTICK_UP_RIGHT in possible_directions:
+            direction = JOYSTICK_UP_RIGHT #JOYSTICK_DOWN_RIGHT
+        elif value_y < -threshold and JOYSTICK_LEFT in possible_directions:
+            direction = JOYSTICK_LEFT #JOYSTICK_UP
+        elif value_y > threshold and JOYSTICK_RIGHT in possible_directions:
+            direction = JOYSTICK_RIGHT #JOYSTICK_DOWN
+        elif value_x < -threshold and JOYSTICK_DOWN in possible_directions:
+            direction = JOYSTICK_DOWN #JOYSTICK_LEFT
+        elif value_x > threshold and JOYSTICK_UP in possible_directions:
+            direction = JOYSTICK_UP #JOYSTICK_RIGHT
 
+        if debounce:
+            self.last_read_time = current_time
 
-        # rotate joystick 90° counter-clockwise
-        if direction == JOYSTICK_UP:
-            direction = JOYSTICK_LEFT
-        elif direction == JOYSTICK_DOWN:
-            direction = JOYSTICK_RIGHT
-        elif direction == JOYSTICK_LEFT:
-            direction = JOYSTICK_DOWN
-        elif direction == JOYSTICK_RIGHT:
-            direction = JOYSTICK_UP
-        elif direction == JOYSTICK_UP_LEFT:
-            direction = JOYSTICK_DOWN_LEFT
-        elif direction == JOYSTICK_DOWN_LEFT:
-            direction = JOYSTICK_DOWN_RIGHT
-        elif direction == JOYSTICK_DOWN_RIGHT:
-            direction = JOYSTICK_UP_RIGHT
-        elif direction == JOYSTICK_UP_RIGHT:
-            direction = JOYSTICK_UP_LEFT
-
-            
-
-        if direction in possible_directions:
-            if debounce:
-                self.last_read_time = current_time
-            self.last_direction = direction
-
-            return direction
+        return direction
 
     def is_pressed(self):
+        if self.joystick_mode == "i2c":
+            c, z = self.nunchuck.buttons()
+            return c or z
         return self.adc_button.read_u16() < 100
 
 
@@ -1376,6 +1465,17 @@ class GameOverMenu:
 
 # Main program
 if __name__ == '__main__':
+    # Initialisierung des I2C-Busses
+    i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20), freq=100000)
+    
+    # Erstellen des Nunchuck-Objekts
+    nunchuk = Nunchuck(i2c, poll=True, poll_interval=100)
+
+    # Game selection
     game_state = GameSelect()
+
+    # Start the display
     display.start()
+
+    # Main game loop
     game_state.run()
