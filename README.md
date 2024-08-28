@@ -15,15 +15,14 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
   - [Snake](#snake)
   - [Pong](#pong)
   - [Breakout](#breakout)
-  - TicTacToe / XXO
-  - Qix / Xonix
+  - [Qix / Xonix](#qix)
 - [Fun](#fun)
 
 ## Hardware Requirements
 
 - [Interstate 75 (W) from Pimoroni (PIM584)](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
 - [64x64 Pixel RGB LED Matrix with Hub75 connector](https://amzn.to/3Yadyhh)
-- [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul)
+- [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul) with cables or a [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) with a [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71?&linkCode=ll1&tag=produktverglei.ch-21&linkId=feb10aa9fd07044675cf07d7429703c1&language=de_DE&ref_=as_li_ss_tl)
 - Connecting wires and power supply
 - if you need a box and nice case for the joystick, you can print it:
   - [Joystick](https://www.thingiverse.com/thing:700346)
@@ -85,11 +84,19 @@ Pong is a classic table tennis game where the player controls a paddle to hit a 
 
 ### Breakout
 
-Breakout is the game where you break the wall bricks with a ball
+Breakout is the game where you break the wall bricks with a ball.
 
 - **Controls**:
   - Use the joystick to move the paddle left and right.
   - Keep the ball in play and break bricks to score points.
+ 
+### Qix
+
+Qix is a game where you claim territory on a map, but if you get hit a the enemy you loose.
+
+- **Controls**:
+  - Use the joystick to move the player.
+  - claim terretory and avoid to get hit.
 
 ## Fun
 
