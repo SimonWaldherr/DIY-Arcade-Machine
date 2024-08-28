@@ -19,6 +19,7 @@ adc2 = ADC(2)
 # global variables
 global_score = 0
 last_game = None
+game_over = False
 
 # Color definitions for Simon game
 colors_bright = [
@@ -405,8 +406,8 @@ class Joystick:
 
     def is_pressed(self):
         if self.joystick_mode == "i2c":
-            c, z = self.nunchuck.buttons()
-            return c or z
+            _, z = self.nunchuck.buttons()
+            return z
         return self.adc_button.read_u16() < 100
 
 
@@ -434,7 +435,6 @@ def hsb_to_rgb(hue, saturation, brightness):
 # Game classes
 class SimonGame:
     def __init__(self):
-        self.game_over = False
         self.sequence = []
         self.user_input = []
 
@@ -482,9 +482,15 @@ class SimonGame:
         self.draw_quad_screen()
 
     def main_loop(self, joystick):
-        global global_score
+        global global_score, game_over
+        game_over = False
+
         self.start_game()
-        while not self.game_over:
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-Button beendet das Spiel
+                game_over = True
+            
             self.sequence.append(random.randint(0, 3))
             display_score_and_time(len(self.sequence) - 1)
             self.play_sequence()
@@ -498,8 +504,8 @@ class SimonGame:
                     self.user_input.append(selected_color)
                     if not self.check_user_sequence():
                         global_score = len(self.sequence) - 1
-                        self.game_over = True
-                        GameOverMenu().run_game_over_menu()
+                        game_over = True
+                        #GameOverMenu().run_game_over_menu()
                         return
                 else:
                     print("Invalid input")
@@ -509,7 +515,6 @@ class SimonGame:
 
 class SnakeGame:
     def __init__(self):
-        self.game_over = False
         self.snake = [(32, 32)]
         self.snake_length = 3
         self.snake_direction = 'UP'
@@ -548,7 +553,7 @@ class SnakeGame:
         self.green_targets = new_green_targets
 
     def check_self_collision(self):
-        global global_score
+        global global_score, game_over
         head_x, head_y = self.snake[0]
         body = self.snake[1:]
         potential_moves = {
@@ -563,8 +568,8 @@ class SnakeGame:
                 self.snake_direction = random.choice(list(safe_moves.keys()))
             else:
                 global_score = self.score
-                self.game_over = True
-                GameOverMenu().run_game_over_menu()
+                game_over = True
+                #GameOverMenu().run_game_over_menu()
                 return
 
     def update_snake_position(self):
@@ -612,10 +617,16 @@ class SnakeGame:
             display.set_pixel(x, y, 0, 0, 0)
 
     def main_loop(self, joystick):
+        global game_over
+        game_over = False
         self.restart_game()
         step_counter = 0
 
-        while not self.game_over:
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-Button beendet das Spiel
+                game_over = True
+
             step_counter += 1
 
             if step_counter % 1024 == 0:
@@ -637,7 +648,6 @@ class SnakeGame:
 
 class PongGame:
     def __init__(self):
-        self.game_over = False
         self.paddle_height = 8
         self.paddle_speed = 2
         self.ball_speed = [1, 1]
@@ -665,7 +675,7 @@ class PongGame:
         display.set_pixel(self.ball_position[0], self.ball_position[1], 0, 0, 0)
 
     def update_ball(self):
-        global global_score
+        global global_score, game_over
         self.clear_ball()
         self.ball_position[0] += self.ball_speed[0]
         self.ball_position[1] += self.ball_speed[1]
@@ -683,8 +693,8 @@ class PongGame:
             self.left_score = 0
             self.lives -= 1
             if self.lives == 0:
-                self.game_over = True
-                GameOverMenu().run_game_over_menu()
+                game_over = True
+                #GameOverMenu().run_game_over_menu()
                 return
             self.reset_ball()
         elif self.ball_position[0] >= WIDTH - 1:
@@ -711,9 +721,15 @@ class PongGame:
             self.right_paddle = min(self.right_paddle + self.paddle_speed, HEIGHT - self.paddle_height)
 
     def main_loop(self, joystick):
+        global game_over
+        game_over = False
         self.reset_ball()
         draw_rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
-        while not self.game_over:
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-Button beendet das Spiel
+                game_over = True
+
             self.update_paddles(joystick)
             self.update_ball()
             self.draw_paddles()
@@ -726,8 +742,6 @@ class PongGame:
 # Breakout game class
 class BreakoutGame:
     def __init__(self):
-        self.game_over = False
-
         # Paddle and ball positions
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = HEIGHT - PADDLE_HEIGHT
@@ -793,6 +807,7 @@ class BreakoutGame:
         display.clear()
 
     def update_ball(self):
+        global game_over
         self.clear_ball()
         self.ball_x += self.ball_dx
         self.ball_y += self.ball_dy
@@ -811,8 +826,8 @@ class BreakoutGame:
                 self.ball_dy = -self.ball_dy
 
         if self.ball_y >= HEIGHT:
-            self.game_over = True
-            GameOverMenu().run_game_over_menu()
+            game_over = True
+            #GameOverMenu().run_game_over_menu()
             return
 
         self.draw_ball()
@@ -842,9 +857,15 @@ class BreakoutGame:
         self.draw_paddle()
 
     def main_loop(self, joystick):
+        global game_over
+        game_over = False
         display.clear()
         self.draw_bricks()
-        while not self.game_over:
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-Button beendet das Spiel
+                game_over = True
+
             self.update_ball()
             self.check_collision_with_bricks()
             self.update_paddle(joystick)
@@ -873,7 +894,6 @@ class QixGame:
         self.occupied_percentage = 0
         self.height = HEIGHT - 7
         self.width = WIDTH
-        self.game_over = False
         
         # prev player position type (grid value)
         self.prev_player_pos = 1
@@ -922,6 +942,7 @@ class QixGame:
         display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
 
     def move_opponent(self):
+        global game_over
         # Move the opponent and bounce off the boundaries
         next_x = self.opponent_x + self.opponent_dx
         next_y = self.opponent_y + self.opponent_dy
@@ -936,8 +957,8 @@ class QixGame:
 
         # check for collision with player or line and exit
         if get_grid_value(next_x, next_y) == 4 or (next_x == self.player_x and next_y == self.player_y):
-            self.game_over = True
-            GameOverMenu().run_game_over_menu()
+            game_over = True
+            #GameOverMenu().run_game_over_menu()
             return
 
         # Clear current position
@@ -1015,9 +1036,15 @@ class QixGame:
         return self.occupied_percentage > 75
 
     def main_loop(self, joystick):
+        global game_over
+        game_over = False
         self.initialize_game()
 
-        while not self.game_over:
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-Button beendet das Spiel
+                game_over = True
+
             self.move_player(joystick)
             self.move_opponent()
             if self.check_win_condition():
@@ -1039,7 +1066,6 @@ class Tetrimino:
 
 class TetrisGame:
     def __init__(self):
-        self.game_over = False
         self.locked_positions = {}
         self.grid = self.create_grid(self.locked_positions)
         self.change_piece = False
@@ -1106,9 +1132,15 @@ class TetrisGame:
         return joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP], debounce=False)
 
     def main_loop(self, joystick):
+        global game_over
+        game_over = False
         display.clear()
         clock = time.ticks_ms()
-        while not self.game_over:
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-Button beendet das Spiel
+                game_over = True
+
             self.grid = self.create_grid(self.locked_positions)
             fall_speed = 500  # in milliseconds
             current_time = time.ticks_ms()
@@ -1184,11 +1216,18 @@ class TetrisGame:
             display_score_and_time(len(self.locked_positions))
 
             if any(y < 1 for x, y in self.locked_positions):
+                game_over = True
+                # reset the grid
+                self.grid = self.create_grid()
+                x, y, w, h = 0, 0, WIDTH, HEIGHT
+                self.__init__()
+
                 break
 
+
         display.clear()
-        self.game_over = True
-        GameOverMenu().run_game_over_menu()
+        #game_over = False
+        #GameOverMenu().run_game_over_menu()
         return
 
 
@@ -1209,6 +1248,8 @@ class GameSelect:
 
     # make a method to run the selected game (from outside the class)
     def run_game(self, game):
+        global game_over
+        game_over = False
         self.games[game].main_loop(self.joystick)
 
     def run_game_selector(self):
@@ -1263,10 +1304,15 @@ class GameSelect:
             else:
                 last_game = self.selected_game
                 try:
-                    self.games[self.selected_game].main_loop(self.joystick)
+                    selected_game = self.selected_game
+                    self.selected_game = None
+
+                    self.games[selected_game].main_loop(self.joystick)
+                    GameOverMenu().run_game_over_menu()
                 except Exception as e:
                     print(f"Error: {e}")
                     self.selected_game = None
+
 
 # similar to the GameSelect class, but with "back to menu" and "restart" options when a game ends
 class GameOverMenu:
@@ -1276,11 +1322,12 @@ class GameOverMenu:
         self.selected_option = None
 
     def run_game_over_menu(self):
-        global last_game, global_score
+        global last_game, global_score, game_over
         selected = 0
         previous_selected = None
         last_move_time = time.time()
         debounce_delay = 0.1
+        game_over = False
         display.clear()
 
         while True:
