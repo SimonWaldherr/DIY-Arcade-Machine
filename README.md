@@ -1,5 +1,7 @@
 # DIY-Arcade-Machine
 
+[![short video of the diy arcade console in action (on youtube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
+
 ## my very own arcade machine
 
 Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive way to create your very own arcade machine using the Interstate 75 - RGB LED Matrix Driver from Pimoroni (PIM584), a 64x64 Pixel RGB LED Matrix with Hub75 connector, and a KY-023 Joystick Module. The project includes six classic games: Simon, Snake, Qix, Breakout, Tic-Tac-Toe and Pong, all playable on a colorful LED matrix display.
@@ -20,13 +22,22 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
 
 ## Hardware Requirements
 
-- [Interstate 75 (W) from Pimoroni (PIM584)](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
+- Interstate 75 (W) from Pimoroni (PIM584)
+  - [pimoroni shop](https://shop.pimoroni.com/products/interstate-75?variant=39443584417875)
+  - [digikey shop](https://www.digikey.de/de/products/detail/pimoroni-ltd/PIM584/15851385)
+  - [adafruit shop](https://www.adafruit.com/product/5342)
+  - [berrybase shop](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
 - [64x64 Pixel RGB LED Matrix with Hub75 connector](https://amzn.to/3Yadyhh)
-- [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul) with cables or a [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) with a [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71?&linkCode=ll1&tag=produktverglei.ch-21&linkId=feb10aa9fd07044675cf07d7429703c1&language=de_DE&ref_=as_li_ss_tl)
+- some kind of joystick
+  - [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul) with cables
+  - or a [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) with a [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71?&linkCode=ll1&tag=produktverglei.ch-21&linkId=feb10aa9fd07044675cf07d7429703c1&language=de_DE&ref_=as_li_ss_tl)
 - Connecting wires and power supply
 - if you need a box and nice case for the joystick, you can print it:
   - [Joystick](https://www.thingiverse.com/thing:700346)
-  - [LED-Matrix-Case](https://www.thingiverse.com/thing:6736386)
+  - [LED-Matrix-Case](https://www.thingiverse.com/thing:6751325)
+- i also recommend a mesh and diffuser
+  - [mesh](https://www.thingiverse.com/thing:6751323)
+  - [plexiglass with satin finish on one side](https://acrylglas-shop.com/plexiglas-gs-led-9h04-sc-black-white-hinterleuchtung-3-mm-staerke)
 
 ## Software Requirements
 
