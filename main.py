@@ -1,74 +1,74 @@
+import hub75
 import random
 import time
-
-import hub75
 import machine
 from machine import ADC
 
-# Constants
+# Constants for display dimensions
 HEIGHT = 64
 WIDTH = 64
 
 # Initialize the display
 display = hub75.Hub75(WIDTH, HEIGHT)
 
-# Initialize ADC for joystick
+# Initialize ADC for joystick inputs
 adc0 = ADC(0)
 adc1 = ADC(1)
 adc2 = ADC(2)
 
-# global variables
+# Global variables for game state
 global_score = 0
 last_game = None
 game_over = False
 
 # Color definitions for Simon game
-colors_bright = [
+COLORS_BRIGHT = [
     (255, 0, 0),  # Red
     (0, 255, 0),  # Green
     (0, 0, 255),  # Blue
     (255, 255, 0),  # Yellow
 ]
 
-# Farben
-tetris_black = (0, 0, 0)
-tetris_white = (255, 255, 255)
-tetris_colors = [
-    (0, 255, 255),
-    (255, 0, 0),
-    (0, 255, 0),
-    (0, 0, 255),
-    (255, 255, 0),
-    (255, 165, 0),
-    (128, 0, 128),
+# Color definitions for Tetris
+TETRIS_BLACK = (0, 0, 0)
+TETRIS_WHITE = (255, 255, 255)
+TETRIS_COLORS = [
+    (0, 255, 255),  # Cyan
+    (255, 0, 0),  # Red
+    (0, 255, 0),  # Green
+    (0, 0, 255),  # Blue
+    (255, 255, 0),  # Yellow
+    (255, 165, 0),  # Orange
+    (128, 0, 128),  # Purple
 ]
 
-# Spielfeldgröße (16x13 Blöcke)
-grid_width = 16
-grid_height = 13
-block_size = 4  # Jeder Block ist 4x4 Pixel groß
+# Game field size for Tetris (16x13 blocks)
+GRID_WIDTH = 16
+GRID_HEIGHT = 13
+BLOCK_SIZE = 4  # Each block is 4x4 pixels
 
-# Tetrimino-Formen
-tetriminos = [
-    [[1, 1, 1, 1]],
-    [[1, 1, 1], [0, 1, 0]],
-    [[1, 1, 0], [0, 1, 1]],
-    [[0, 1, 1], [1, 1, 0]],
-    [[1, 1], [1, 1]],
-    [[1, 1, 1], [1, 0, 0]],
-    [[1, 1, 1], [0, 0, 1]],
+# Tetrimino shapes for Tetris
+TETRIMINOS = [
+    [[1, 1, 1, 1]],  # I shape
+    [[1, 1, 1], [0, 1, 0]],  # T shape
+    [[1, 1, 0], [0, 1, 1]],  # S shape
+    [[0, 1, 1], [1, 1, 0]],  # Z shape
+    [[1, 1], [1, 1]],  # O shape
+    [[1, 1, 1], [1, 0, 0]],  # L shape
+    [[1, 1, 1], [0, 0, 1]],  # J shape
 ]
 
-colors = [(int(r * 0.5), int(g * 0.5), int(b * 0.5)) for r, g, b in colors_bright]
+# Adjusted color shades for inactive states
+colors = [(int(r * 0.5), int(g * 0.5), int(b * 0.5)) for r, g, b in COLORS_BRIGHT]
 inactive_colors = [
-    (int(r * 0.2), int(g * 0.2), int(b * 0.2)) for r, g, b in colors_bright
+    (int(r * 0.2), int(g * 0.2), int(b * 0.2)) for r, g, b in COLORS_BRIGHT
 ]
 
-# Game states for Simon
+# Game state variables for Simon game
 simon_sequence = []
 user_sequence = []
 
-# Snake game variables
+# Variables for Snake game
 score = 0
 snake = [(32, 32)]
 snake_length = 3
@@ -76,7 +76,7 @@ snake_direction = "UP"
 green_targets = []
 text = ""
 
-# Breakout variables
+# Constants for Breakout game
 PADDLE_WIDTH = 10
 PADDLE_HEIGHT = 2
 BALL_SIZE = 2
@@ -85,7 +85,7 @@ BRICK_HEIGHT = 4
 BRICK_ROWS = 5
 BRICK_COLS = 8
 
-# Joystick directions
+# Possible joystick directions
 JOYSTICK_UP = "UP"
 JOYSTICK_DOWN = "DOWN"
 JOYSTICK_LEFT = "LEFT"
@@ -95,8 +95,8 @@ JOYSTICK_UP_RIGHT = "UP-RIGHT"
 JOYSTICK_DOWN_LEFT = "DOWN-LEFT"
 JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 
-# Character dictionary
-char_dict = {
+# Dictionary mapping characters to hex strings for display
+CHAR_DICT = {
     "A": "3078ccccfccccc00",
     "B": "fc66667c6666fc00",
     "C": "3c66c0c0c0663c00",
@@ -194,7 +194,7 @@ char_dict = {
     "█": "ffffffffffffffff",
 }
 
-nums = {
+NUMS = {
     "0": ["01110", "10001", "10001", "10001", "01110"],
     "1": ["00100", "01100", "00100", "00100", "01110"],
     "2": ["11110", "00001", "01110", "10000", "11111"],
@@ -218,50 +218,67 @@ nums = {
 }
 
 
-# Helper functions
-def draw_char(x, y, char, r, g, b):
-    if char in char_dict:
-        hex_string = char_dict[char]
+def draw_character(x, y, character, red, green, blue):
+    """
+    Draw a character at position (x, y) with the given RGB color.
+    """
+    if character in CHAR_DICT:
+        hex_string = CHAR_DICT[character]
         for row in range(8):
             hex_value = hex_string[row * 2 : row * 2 + 2]
             bin_value = f"{int(hex_value, 16):08b}"
             for col in range(8):
                 if bin_value[col] == "1":
-                    display.set_pixel(x + col, y + row, r, g, b)
+                    display.set_pixel(x + col, y + row, red, green, blue)
 
 
-def draw_text(x, y, text, r, g, b):
+def draw_text(x, y, text, red, green, blue):
+    """
+    Draw text starting from position (x, y) with the given RGB color.
+    """
     offset_x = x
-    for char in text:
-        draw_char(offset_x, y, char, r, g, b)
-        offset_x += 9
+    for character in text:
+        draw_character(offset_x, y, character, red, green, blue)
+        offset_x += 9  # Move to the next character position
 
 
-def draw_char_small(x, y, char, r, g, b):
-    if char in nums:
-        matrix = nums[char]
+def draw_character_small(x, y, character, red, green, blue):
+    """
+    Draw a small character at position (x, y) with the given RGB color.
+    """
+    if character in NUMS:
+        matrix = NUMS[character]
         for row in range(5):
             for col in range(5):
                 if matrix[row][col] == "1":
-                    display.set_pixel(x + col, y + row, r, g, b)
+                    display.set_pixel(x + col, y + row, red, green, blue)
 
 
-def draw_text_small(x, y, text, r, g, b):
+def draw_text_small(x, y, text, red, green, blue):
+    """
+    Draw small text starting from position (x, y) with the given RGB color.
+    """
     offset_x = x
-    for char in text:
-        draw_char_small(offset_x, y, char, r, g, b)
-        offset_x += 6
+    for character in text:
+        draw_character_small(offset_x, y, character, red, green, blue)
+        offset_x += 6  # Move to the next character position
 
 
-def draw_rect(x1, y1, x2, y2, r, g, b):
+def draw_rectangle(x1, y1, x2, y2, red, green, blue):
+    """
+    Draw a rectangle between (x1, y1) and (x2, y2) with the given RGB color.
+    """
     for x in range(min(x1, x2), max(x1, x2) + 1):
         for y in range(min(y1, y2), max(y1, y2) + 1):
-            display.set_pixel(x, y, r, g, b)
+            display.set_pixel(x, y, red, green, blue)
 
 
 def display_score_and_time(score):
+    """
+    Display the current score and time at the bottom of the display.
+    """
     global text, global_score
-    year, month, day, wd, hour, minute, second, _ = rtc.datetime()
+    year, month, day, weekday, hour, minute, second, _ = rtc.datetime()
     time_str = "{:02}:{:02}".format(hour, minute)
     global_score = score
     score_str = str(score)
@@ -271,7 +288,7 @@ def display_score_and_time(score):
     score_y = HEIGHT - 6
     if text != score_str + " " + time_str:
         text = score_str + " " + time_str
-        draw_rect(score_x, score_y, WIDTH, score_y + 5, 0, 0, 0)
+        draw_rectangle(score_x, score_y, WIDTH, score_y + 5, 0, 0, 0)
     draw_text_small(score_x, score_y, score_str, 255, 255, 255)
     draw_text_small(time_x, time_y, time_str, 255, 255, 255)
 
@@ -281,55 +298,33 @@ grid = bytearray(WIDTH * HEIGHT)
 
 
 def initialize_grid():
+    """
+    Initialize the grid to be empty.
+    """
     global grid
     grid = bytearray(WIDTH * HEIGHT)
 
 
 def get_grid_value(x, y):
+    """
+    Get the value at position (x, y) in the grid.
+    """
     return grid[y * WIDTH + x]
 
 
 def set_grid_value(x, y, value):
+    """
+    Set the value at position (x, y) in the grid.
+    """
     grid[y * WIDTH + x] = value
 
 
-def draw_line_on_grid():
-    startpoint_x = random.randint(BORDER + 1, WIDTH - BORDER - 1)
-    startpoint_y = 0
-
-    down_for = random.randint(1, HEIGHT - 15)
-    for i in range(down_for):
-        set_grid_value(startpoint_x, startpoint_y + i, 1)
-        display.set_pixel(startpoint_x, startpoint_y + i, 255, 255, 255)
-
-    left_for = random.randint(1, startpoint_x - BORDER)
-    for i in range(left_for):
-        set_grid_value(startpoint_x - i, startpoint_y + down_for, 1)
-        display.set_pixel(startpoint_x - i, startpoint_y + down_for, 255, 255, 255)
-
-    # Draw line down to bottom
-    down_for_2 = HEIGHT - (startpoint_y + down_for)
-    for i in range(down_for_2):
-        set_grid_value(startpoint_x - left_for, startpoint_y + down_for + i, 1)
-        display.set_pixel(
-            startpoint_x - left_for, startpoint_y + down_for + i, 255, 255, 255
-        )
-
-    # Define random point x/y for enemy and check if it is on the line
-    for _ in range(10):
-        enemy_x = random.randint(BORDER, WIDTH - BORDER - 1)
-        enemy_y = random.randint(BORDER, HEIGHT - BORDER - 1)
-        if get_grid_value(enemy_x, enemy_y) == 1:
-            continue
-        else:
-            break
-
-    display.set_pixel(enemy_x, enemy_y, 255, 0, 0)
-    return enemy_x, enemy_y
-
-
-@micropython.native
-def floodfill(x, y, accessible_mark, non_accessible_mark, r, g, b, max_steps=8000):
+def flood_fill(
+    x, y, accessible_mark, non_accessible_mark, red, green, blue, max_steps=8000
+):
+    """
+    Perform flood fill starting from (x, y).
+    """
     stack = [(x, y)]
     steps = 0
 
@@ -343,11 +338,8 @@ def floodfill(x, y, accessible_mark, non_accessible_mark, r, g, b, max_steps=800
             continue
 
         set_grid_value(x, y, accessible_mark)
-        # display.set_pixel(x, y, r, g, b)
-
         steps += 1
 
-        # Add neighboring pixels to the stack
         if x + 1 < WIDTH:
             stack.append((x + 1, y))
         if x - 1 >= 0:
@@ -363,28 +355,37 @@ def floodfill(x, y, accessible_mark, non_accessible_mark, r, g, b, max_steps=800
 rtc = machine.RTC()
 
 
-# Nunchuck class
 class Nunchuck:
+    """
+    Class to handle Wii Nunchuk inputs over I2C.
+    """
+
     def __init__(self, i2c, poll=True, poll_interval=50):
         self.i2c = i2c
         self.address = 0x52
-        self.buffer = bytearray(6)  # Puffer zur Speicherung der Sensordaten
+        self.buffer = bytearray(6)  # Buffer to store sensor data
 
-        # Initialisierungssequenz für den Nunchuk
+        # Initialization sequence for the Nunchuk
         self.i2c.writeto(self.address, b"\xf0\x55")
         self.i2c.writeto(self.address, b"\xfb\x00")
 
-        # Zeitstempel der letzten Polling-Aktualisierung
+        # Timestamp of the last polling update
         self.last_poll = time.ticks_ms()
 
-        # Polling-Intervall in Millisekunden
+        # Polling interval in milliseconds
         self.polling_threshold = poll_interval if poll else -1
 
     def update(self):
+        """
+        Update the buffer with new data from the Nunchuk.
+        """
         self.i2c.writeto(self.address, b"\x00")
         self.i2c.readfrom_into(self.address, self.buffer)
 
     def __poll(self):
+        """
+        Internal method to handle polling based on the threshold.
+        """
         if (
             self.polling_threshold > 0
             and time.ticks_diff(time.ticks_ms(), self.last_poll)
@@ -394,6 +395,9 @@ class Nunchuck:
             self.last_poll = time.ticks_ms()
 
     def accelerator(self):
+        """
+        Get accelerometer data.
+        """
         self.__poll()
         return (
             (self.buffer[2] << 2) + ((self.buffer[5] & 0x0C) >> 2),
@@ -402,59 +406,92 @@ class Nunchuck:
         )
 
     def buttons(self):
+        """
+        Get button states (C and Z buttons).
+        """
         self.__poll()
         return (
-            not (self.buffer[5] & 0x02),  # C-Taste
-            not (self.buffer[5] & 0x01),  # Z-Taste
+            not (self.buffer[5] & 0x02),  # C button
+            not (self.buffer[5] & 0x01),  # Z button
         )
 
     def joystick(self):
+        """
+        Get joystick positions.
+        """
         self.__poll()
         return (self.buffer[0], self.buffer[1])
 
     def joystick_left(self):
+        """
+        Check if joystick is tilted to the left.
+        """
         self.__poll()
         return self.buffer[0] < 55
 
     def joystick_right(self):
+        """
+        Check if joystick is tilted to the right.
+        """
         self.__poll()
         return self.buffer[0] > 200
 
     def joystick_up(self):
+        """
+        Check if joystick is tilted up.
+        """
         self.__poll()
         return self.buffer[1] > 200
 
     def joystick_down(self):
+        """
+        Check if joystick is tilted down.
+        """
         self.__poll()
         return self.buffer[1] < 55
 
     def joystick_center(self):
+        """
+        Check if joystick is in the center position.
+        """
         self.__poll()
         return 100 < self.buffer[0] < 155 and 100 < self.buffer[1] < 155
 
     def joystick_x(self):
+        """
+        Get X-axis value of the joystick.
+        """
         self.__poll()
         return (self.buffer[0] >> 2) - 34
 
     def joystick_y(self):
+        """
+        Get Y-axis value of the joystick.
+        """
         self.__poll()
         return (self.buffer[1] >> 2) - 34
 
     def is_shaking(self):
+        """
+        Detect shaking motion using accelerometer data.
+        """
         x, y, z = self.accelerator()
-        return max(x, y, z) > 800  # Schwellenwert für Erkennung
+        return max(x, y, z) > 800  # Threshold for detection
 
 
-# Joystick class
 class Joystick:
+    """
+    Class to handle joystick inputs, either via analog inputs or I2C (Nunchuk).
+    """
+
     def __init__(self, adc_x, adc_y, adc_button):
-        self.joystick_mode = "analog"
+        # Choose the joystick mode: 'analog' or 'i2c'
         self.joystick_mode = "i2c"
-        # comment out the mode you don't want to use
+        # self.joystick_mode = "analog"  # Uncomment to use analog mode
 
         if self.joystick_mode == "i2c":
             self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
-            self.nunchuck = Nunchuck(i2c)
+            self.nunchuck = Nunchuck(self.i2c)
         elif self.joystick_mode == "analog":
             self.adc_x = adc_x
             self.adc_y = adc_y
@@ -464,8 +501,12 @@ class Joystick:
             self.debounce_interval = 150
 
     def read_direction(self, possible_directions, debounce=True):
+        """
+        Read the joystick direction based on possible directions.
+        """
         if self.joystick_mode == "i2c":
             x, y = self.nunchuck.joystick()
+            # Map joystick positions to directions
             if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
                 return JOYSTICK_DOWN_LEFT
             elif x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
@@ -493,43 +534,40 @@ class Joystick:
         value_x = self.adc_x.read_u16() - 30039
         value_y = self.adc_y.read_u16() - 28919
 
-        # print(value_x, value_y)
-
         threshold = 15000  # Threshold for detecting direction
-
         direction = None
         if (
             value_y < -threshold
             and value_x < -threshold
             and JOYSTICK_DOWN_LEFT in possible_directions
         ):
-            direction = JOYSTICK_DOWN_LEFT  # JOYSTICK_UP_LEFT
+            direction = JOYSTICK_DOWN_LEFT
         elif (
             value_y < -threshold
             and value_x > threshold
             and JOYSTICK_UP_LEFT in possible_directions
         ):
-            direction = JOYSTICK_UP_LEFT  # JOYSTICK_UP_RIGHT
+            direction = JOYSTICK_UP_LEFT
         elif (
             value_y > threshold
             and value_x < -threshold
             and JOYSTICK_DOWN_RIGHT in possible_directions
         ):
-            direction = JOYSTICK_DOWN_RIGHT  # JOYSTICK_DOWN_LEFT
+            direction = JOYSTICK_DOWN_RIGHT
         elif (
             value_y > threshold
             and value_x > threshold
             and JOYSTICK_UP_RIGHT in possible_directions
         ):
-            direction = JOYSTICK_UP_RIGHT  # JOYSTICK_DOWN_RIGHT
+            direction = JOYSTICK_UP_RIGHT
         elif value_y < -threshold and JOYSTICK_LEFT in possible_directions:
-            direction = JOYSTICK_LEFT  # JOYSTICK_UP
+            direction = JOYSTICK_LEFT
         elif value_y > threshold and JOYSTICK_RIGHT in possible_directions:
-            direction = JOYSTICK_RIGHT  # JOYSTICK_DOWN
+            direction = JOYSTICK_RIGHT
         elif value_x < -threshold and JOYSTICK_DOWN in possible_directions:
-            direction = JOYSTICK_DOWN  # JOYSTICK_LEFT
+            direction = JOYSTICK_DOWN
         elif value_x > threshold and JOYSTICK_UP in possible_directions:
-            direction = JOYSTICK_UP  # JOYSTICK_RIGHT
+            direction = JOYSTICK_UP
 
         if debounce:
             self.last_read_time = current_time
@@ -537,14 +575,19 @@ class Joystick:
         return direction
 
     def is_pressed(self):
+        """
+        Check if the joystick button is pressed.
+        """
         if self.joystick_mode == "i2c":
             _, z = self.nunchuck.buttons()
             return z
         return self.adc_button.read_u16() < 100
 
 
-# Color conversion function
 def hsb_to_rgb(hue, saturation, brightness):
+    """
+    Convert HSB color space to RGB.
+    """
     hue_normalized = (hue % 360) / 60
     hue_index = int(hue_normalized)
     hue_fraction = hue_normalized - hue_index
@@ -553,62 +596,136 @@ def hsb_to_rgb(hue, saturation, brightness):
     value2 = brightness * (1 - saturation * hue_fraction)
     value3 = brightness * (1 - saturation * (1 - hue_fraction))
 
-    red, green, blue = [
-        (brightness, value3, value1),
-        (value2, brightness, value1),
-        (value1, brightness, value3),
-        (value1, value2, brightness),
-        (value3, value1, brightness),
-        (brightness, value1, value2),
-    ][hue_index]
+    if hue_index == 0:
+        red, green, blue = brightness, value3, value1
+    elif hue_index == 1:
+        red, green, blue = value2, brightness, value1
+    elif hue_index == 2:
+        red, green, blue = value1, brightness, value3
+    elif hue_index == 3:
+        red, green, blue = value1, value2, brightness
+    elif hue_index == 4:
+        red, green, blue = value3, value1, brightness
+    elif hue_index == 5:
+        red, green, blue = brightness, value1, value2
+    else:
+        red, green, blue = 0, 0, 0
 
     return int(red * 255), int(green * 255), int(blue * 255)
 
 
-# Game classes
+def hsb_to_rgb(hue, saturation, brightness):
+    """
+    Convert HSB (Hue, Saturation, Brightness) color space to RGB.
+
+    Args:
+        hue (float): Hue angle in degrees (0-360).
+        saturation (float): Saturation (0-1).
+        brightness (float): Brightness (0-1).
+
+    Returns:
+        tuple: Corresponding RGB values as integers (0-255).
+    """
+    hue_normalized = (hue % 360) / 60
+    hue_index = int(hue_normalized)
+    hue_fraction = hue_normalized - hue_index
+
+    value1 = brightness * (1 - saturation)
+    value2 = brightness * (1 - saturation * hue_fraction)
+    value3 = brightness * (1 - saturation * (1 - hue_fraction))
+
+    if hue_index == 0:
+        red, green, blue = brightness, value3, value1
+    elif hue_index == 1:
+        red, green, blue = value2, brightness, value1
+    elif hue_index == 2:
+        red, green, blue = value1, brightness, value3
+    elif hue_index == 3:
+        red, green, blue = value1, value2, brightness
+    elif hue_index == 4:
+        red, green, blue = value3, value1, brightness
+    elif hue_index == 5:
+        red, green, blue = brightness, value1, value2
+    else:
+        red, green, blue = 0, 0, 0
+
+    return int(red * 255), int(green * 255), int(blue * 255)
+
+
+# Game Classes
+
+
 class SimonGame:
+    """
+    Class representing the Simon Says game.
+    """
+
     def __init__(self):
+        """
+        Initialize the Simon game with empty sequences.
+        """
         self.sequence = []
         self.user_input = []
 
     def draw_quad_screen(self):
-        draw_rect(0, 0, WIDTH // 2 - 1, (HEIGHT - 6) // 2 - 1, *inactive_colors[0])
-        draw_rect(WIDTH // 2, 0, WIDTH - 1, (HEIGHT - 6) // 2 - 1, *inactive_colors[1])
-        draw_rect(
-            0, (HEIGHT - 6) // 2, WIDTH // 2 - 1, (HEIGHT - 6) - 1, *inactive_colors[2]
-        )
-        draw_rect(
-            WIDTH // 2,
-            (HEIGHT - 6) // 2,
-            WIDTH - 1,
-            (HEIGHT - 6) - 1,
-            *inactive_colors[3],
+        """
+        Draw the four quadrants of the screen with inactive colors.
+        """
+        half_width = WIDTH // 2
+        half_height = (HEIGHT - 6) // 2  # Adjust for score display area
+        draw_rectangle(0, 0, half_width - 1, half_height - 1, *inactive_colors[0])
+        draw_rectangle(half_width, 0, WIDTH - 1, half_height - 1, *inactive_colors[1])
+        draw_rectangle(0, half_height, half_width - 1, HEIGHT - 7, *inactive_colors[2])
+        draw_rectangle(
+            half_width, half_height, WIDTH - 1, HEIGHT - 7, *inactive_colors[3]
         )
 
     def flash_color(self, index, duration=0.5):
-        x, y = index % 2, index // 2
-        draw_rect(
-            x * WIDTH // 2,
-            y * (HEIGHT - 6) // 2,
-            (x + 1) * WIDTH // 2 - 1,
-            (y + 1) * (HEIGHT - 6) // 2 - 1,
+        """
+        Flash a specific color on the screen.
+
+        Args:
+            index (int): Index of the color to flash.
+            duration (float): Duration to display the color.
+        """
+        x = index % 2
+        y = index // 2
+        half_width = WIDTH // 2
+        half_height = (HEIGHT - 6) // 2
+        draw_rectangle(
+            x * half_width,
+            y * half_height,
+            (x + 1) * half_width - 1,
+            (y + 1) * half_height - 1,
             *colors[index],
         )
         time.sleep(duration)
-        draw_rect(
-            x * WIDTH // 2,
-            y * (HEIGHT - 6) // 2,
-            (x + 1) * WIDTH // 2 - 1,
-            (y + 1) * (HEIGHT - 6) // 2 - 1,
+        draw_rectangle(
+            x * half_width,
+            y * half_height,
+            (x + 1) * half_width - 1,
+            (y + 1) * half_height - 1,
             *inactive_colors[index],
         )
 
     def play_sequence(self):
-        for color in self.sequence:
-            self.flash_color(color)
+        """
+        Play the current sequence by flashing the colors.
+        """
+        for color_index in self.sequence:
+            self.flash_color(color_index)
             time.sleep(0.5)
 
     def get_user_input(self, joystick):
+        """
+        Get the user's input via the joystick.
+
+        Args:
+            joystick (Joystick): The joystick object.
+
+        Returns:
+            str: The direction selected by the user.
+        """
         while True:
             direction = joystick.read_direction(
                 [
@@ -623,32 +740,54 @@ class SimonGame:
             time.sleep(0.1)
 
     def translate_joystick_to_color(self, direction):
-        if direction == JOYSTICK_UP_LEFT:
-            return 0
-        elif direction == JOYSTICK_UP_RIGHT:
-            return 1
-        elif direction == JOYSTICK_DOWN_LEFT:
-            return 2
-        elif direction == JOYSTICK_DOWN_RIGHT:
-            return 3
-        return None
+        """
+        Translate joystick direction to a color index.
+
+        Args:
+            direction (str): Direction from the joystick.
+
+        Returns:
+            int: Corresponding color index.
+        """
+        mapping = {
+            JOYSTICK_UP_LEFT: 0,
+            JOYSTICK_UP_RIGHT: 1,
+            JOYSTICK_DOWN_LEFT: 2,
+            JOYSTICK_DOWN_RIGHT: 3,
+        }
+        return mapping.get(direction, None)
 
     def check_user_sequence(self):
+        """
+        Check if the user's input matches the game sequence.
+
+        Returns:
+            bool: True if sequences match, False otherwise.
+        """
         return self.user_input == self.sequence[: len(self.user_input)]
 
     def start_game(self):
+        """
+        Start a new game by resetting sequences and drawing the initial screen.
+        """
         self.sequence = []
         self.user_input = []
         self.draw_quad_screen()
 
     def main_loop(self, joystick):
+        """
+        Main game loop for the Simon game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         global global_score, game_over
         game_over = False
 
         self.start_game()
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-Button beendet das Spiel
+            if c_button:  # C-button ends the game
                 game_over = True
 
             self.sequence.append(random.randint(0, 3))
@@ -660,12 +799,11 @@ class SimonGame:
                 direction = self.get_user_input(joystick)
                 selected_color = self.translate_joystick_to_color(direction)
                 if selected_color is not None:
-                    self.flash_color(selected_color, 0.2)
+                    self.flash_color(selected_color, duration=0.2)
                     self.user_input.append(selected_color)
                     if not self.check_user_sequence():
                         global_score = len(self.sequence) - 1
                         game_over = True
-                        # GameOverMenu().run_game_over_menu()
                         return
                 else:
                     print("Invalid input")
@@ -675,7 +813,14 @@ class SimonGame:
 
 
 class SnakeGame:
+    """
+    Class representing the Snake game.
+    """
+
     def __init__(self):
+        """
+        Initialize the Snake game variables.
+        """
         self.snake = [(32, 32)]
         self.snake_length = 3
         self.snake_direction = "UP"
@@ -684,6 +829,9 @@ class SnakeGame:
         self.target = self.random_target()
 
     def restart_game(self):
+        """
+        Restart the game by resetting variables and clearing the display.
+        """
         self.snake = [(32, 32)]
         self.snake_length = 3
         self.snake_direction = "UP"
@@ -693,18 +841,33 @@ class SnakeGame:
         self.place_target()
 
     def random_target(self):
+        """
+        Generate a random position for the target.
+
+        Returns:
+            tuple: Coordinates of the target.
+        """
         return (random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8))
 
     def place_target(self):
+        """
+        Place the target on the display.
+        """
         self.target = self.random_target()
         display.set_pixel(self.target[0], self.target[1], 255, 0, 0)
 
     def place_green_target(self):
+        """
+        Place a green target on the display.
+        """
         x, y = random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8)
         self.green_targets.append((x, y, 256))
         display.set_pixel(x, y, 0, 255, 0)
 
     def update_green_targets(self):
+        """
+        Update the lifespan of green targets and remove them if necessary.
+        """
         new_green_targets = []
         for x, y, lifespan in self.green_targets:
             if lifespan > 1:
@@ -714,6 +877,11 @@ class SnakeGame:
         self.green_targets = new_green_targets
 
     def check_self_collision(self):
+        """
+        Check for collision of the snake with itself.
+
+        If collision is detected, the game ends.
+        """
         global global_score, game_over
         head_x, head_y = self.snake[0]
         body = self.snake[1:]
@@ -724,7 +892,9 @@ class SnakeGame:
             "RIGHT": (head_x + 1, head_y),
         }
         safe_moves = {
-            dir: pos for dir, pos in potential_moves.items() if pos not in body
+            direction: pos
+            for direction, pos in potential_moves.items()
+            if pos not in body
         }
         if potential_moves[self.snake_direction] not in safe_moves.values():
             if safe_moves:
@@ -732,10 +902,12 @@ class SnakeGame:
             else:
                 global_score = self.score
                 game_over = True
-                # GameOverMenu().run_game_over_menu()
                 return
 
     def update_snake_position(self):
+        """
+        Update the position of the snake based on its current direction.
+        """
         head_x, head_y = self.snake[0]
         if self.snake_direction == "UP":
             head_y -= 1
@@ -755,6 +927,11 @@ class SnakeGame:
             display.set_pixel(tail[0], tail[1], 0, 0, 0)
 
     def check_target_collision(self):
+        """
+        Check if the snake has collided with the target.
+
+        If so, increase the snake length and score, and place a new target.
+        """
         head_x, head_y = self.snake[0]
         if (head_x, head_y) == self.target:
             self.snake_length += 2
@@ -762,6 +939,11 @@ class SnakeGame:
             self.score += 1
 
     def check_green_target_collision(self):
+        """
+        Check if the snake has collided with a green target.
+
+        If so, reduce the snake length.
+        """
         head_x, head_y = self.snake[0]
         for x, y, lifespan in self.green_targets:
             if (head_x, head_y) == (x, y):
@@ -770,16 +952,25 @@ class SnakeGame:
                 display.set_pixel(x, y, 0, 0, 0)
 
     def draw_snake(self):
+        """
+        Draw the snake on the display with a color gradient.
+        """
         hue = 0
         for idx, (x, y) in enumerate(self.snake[: self.snake_length]):
             hue = (hue + 5) % 360
-            r, g, b = hsb_to_rgb(hue, 1, 1)
-            display.set_pixel(x, y, r, g, b)
+            red, green, blue = hsb_to_rgb(hue, 1, 1)
+            display.set_pixel(x, y, red, green, blue)
         for idx in range(self.snake_length, len(self.snake)):
             x, y = self.snake[idx]
             display.set_pixel(x, y, 0, 0, 0)
 
     def main_loop(self, joystick):
+        """
+        Main game loop for the Snake game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         global game_over
         game_over = False
         self.restart_game()
@@ -787,7 +978,7 @@ class SnakeGame:
 
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-Button beendet das Spiel
+            if c_button:  # C-button ends the game
                 game_over = True
 
             step_counter += 1
@@ -813,67 +1004,93 @@ class SnakeGame:
 
 
 class PongGame:
+    """
+    Class representing the Pong game.
+    """
+
     def __init__(self):
+        """
+        Initialize the Pong game variables.
+        """
         self.paddle_height = 8
         self.paddle_speed = 2
         self.ball_speed = [1, 1]
         self.ball_position = [WIDTH // 2, HEIGHT // 2]
-        self.left_paddle = HEIGHT // 2 - self.paddle_height // 2
-        self.right_paddle = HEIGHT // 2 - self.paddle_height // 2
-        self.prev_left_score = 0
+        self.left_paddle_y = HEIGHT // 2 - self.paddle_height // 2
+        self.right_paddle_y = HEIGHT // 2 - self.paddle_height // 2
+        self.previous_left_score = 0
         self.left_score = 0
         self.lives = 3
 
     def draw_paddles(self):
+        """
+        Draw the paddles on the display.
+        """
+        # Clear previous paddle positions
         for y in range(HEIGHT):
             display.set_pixel(0, y, 0, 0, 0)
             display.set_pixel(WIDTH - 1, y, 0, 0, 0)
 
-        for y in range(self.left_paddle, self.left_paddle + self.paddle_height):
+        # Draw left paddle
+        for y in range(self.left_paddle_y, self.left_paddle_y + self.paddle_height):
             display.set_pixel(0, y, 255, 255, 255)
-        for y in range(self.right_paddle, self.right_paddle + self.paddle_height):
+
+        # Draw right paddle
+        for y in range(self.right_paddle_y, self.right_paddle_y + self.paddle_height):
             display.set_pixel(WIDTH - 1, y, 255, 255, 255)
 
     def draw_ball(self):
-        display.set_pixel(self.ball_position[0], self.ball_position[1], 255, 255, 255)
+        """
+        Draw the ball on the display.
+        """
+        x, y = self.ball_position
+        display.set_pixel(x, y, 255, 255, 255)
 
     def clear_ball(self):
-        display.set_pixel(self.ball_position[0], self.ball_position[1], 0, 0, 0)
+        """
+        Clear the ball from its current position.
+        """
+        x, y = self.ball_position
+        display.set_pixel(x, y, 0, 0, 0)
 
     def update_ball(self):
+        """
+        Update the ball's position and handle collisions.
+        """
         global global_score, game_over
         self.clear_ball()
         self.ball_position[0] += self.ball_speed[0]
         self.ball_position[1] += self.ball_speed[1]
 
-        if self.ball_position[1] <= 0 or self.ball_position[1] >= HEIGHT - 1:
+        x, y = self.ball_position
+
+        # Handle collision with top and bottom walls
+        if y <= 0 or y >= HEIGHT - 1:
             self.ball_speed[1] = -self.ball_speed[1]
 
-        if (
-            self.ball_position[0] == 1
-            and self.left_paddle
-            <= self.ball_position[1]
-            < self.left_paddle + self.paddle_height
-        ):
+        # Handle collision with left paddle
+        if x == 1 and self.left_paddle_y <= y < self.left_paddle_y + self.paddle_height:
             self.ball_speed[0] = -self.ball_speed[0]
             self.left_score += 1
+
+        # Handle collision with right paddle
         elif (
-            self.ball_position[0] == WIDTH - 2
-            and self.right_paddle
-            <= self.ball_position[1]
-            < self.right_paddle + self.paddle_height
+            x == WIDTH - 2
+            and self.right_paddle_y <= y < self.right_paddle_y + self.paddle_height
         ):
             self.ball_speed[0] = -self.ball_speed[0]
 
-        if self.ball_position[0] <= 0:
+        # Ball misses the left paddle
+        if x <= 0:
             self.left_score = 0
             self.lives -= 1
             if self.lives == 0:
                 game_over = True
-                # GameOverMenu().run_game_over_menu()
                 return
             self.reset_ball()
-        elif self.ball_position[0] >= WIDTH - 1:
+
+        # Ball misses the right paddle
+        elif x >= WIDTH - 1:
             self.left_score += 10
             self.reset_ball()
 
@@ -881,48 +1098,72 @@ class PongGame:
         self.draw_ball()
 
     def reset_ball(self):
+        """
+        Reset the ball to the center of the display with a random direction.
+        """
         self.ball_position = [WIDTH // 2, HEIGHT // 2]
         self.ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
 
     def update_paddles(self, joystick):
+        """
+        Update the positions of the paddles based on input and AI.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
+        # Update left paddle based on joystick input
         direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
         if direction == JOYSTICK_UP:
-            self.left_paddle = max(self.left_paddle - self.paddle_speed, 0)
+            self.left_paddle_y = max(self.left_paddle_y - self.paddle_speed, 0)
         elif direction == JOYSTICK_DOWN:
-            self.left_paddle = min(
-                self.left_paddle + self.paddle_speed, HEIGHT - self.paddle_height
+            self.left_paddle_y = min(
+                self.left_paddle_y + self.paddle_speed, HEIGHT - self.paddle_height
             )
 
-        if self.ball_position[1] < self.right_paddle + self.paddle_height // 2:
-            self.right_paddle = max(self.right_paddle - self.paddle_speed, 0)
-        elif self.ball_position[1] > self.right_paddle + self.paddle_height // 2:
-            self.right_paddle = min(
-                self.right_paddle + self.paddle_speed, HEIGHT - self.paddle_height
+        # Simple AI for right paddle
+        ball_y = self.ball_position[1]
+        paddle_center = self.right_paddle_y + self.paddle_height // 2
+        if ball_y < paddle_center:
+            self.right_paddle_y = max(self.right_paddle_y - self.paddle_speed, 0)
+        elif ball_y > paddle_center:
+            self.right_paddle_y = min(
+                self.right_paddle_y + self.paddle_speed, HEIGHT - self.paddle_height
             )
 
     def main_loop(self, joystick):
+        """
+        Main game loop for the Pong game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         global game_over
         game_over = False
         self.reset_ball()
-        draw_rect(0, 0, WIDTH, HEIGHT, 0, 0, 0)
+        display.clear()
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-Button beendet das Spiel
+            if c_button:  # C-button ends the game
                 game_over = True
 
             self.update_paddles(joystick)
             self.update_ball()
             self.draw_paddles()
-            if self.left_score != self.prev_left_score:
+            if self.left_score != self.previous_left_score:
                 display_score_and_time(self.left_score)
-                self.prev_left_score = self.left_score
+                self.previous_left_score = self.left_score
             time.sleep(0.05)
 
 
-# Breakout game class
 class BreakoutGame:
+    """
+    Class representing the Breakout game.
+    """
+
     def __init__(self):
-        # Paddle and ball positions
+        """
+        Initialize the Breakout game variables.
+        """
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = HEIGHT - PADDLE_HEIGHT
         self.ball_x = WIDTH // 2
@@ -932,7 +1173,7 @@ class BreakoutGame:
         self.ball_dx = 1
         self.ball_dy = -1
 
-        # Bricks
+        # Create bricks
         self.bricks = self.create_bricks()
 
         # Game variables
@@ -942,77 +1183,104 @@ class BreakoutGame:
         display.clear()
 
     def create_bricks(self):
+        """
+        Create the initial set of bricks.
+
+        Returns:
+            list: List of brick positions.
+        """
         bricks = []
         for row in range(BRICK_ROWS):
             for col in range(BRICK_COLS):
-                bricks.append((col * (BRICK_WIDTH + 1) + 1, row * (BRICK_HEIGHT + 1)))
+                x = col * (BRICK_WIDTH + 1) + 1
+                y = row * (BRICK_HEIGHT + 1)
+                bricks.append((x, y))
         return bricks
 
     def draw_paddle(self):
+        """
+        Draw the paddle on the display.
+        """
         for x in range(self.paddle_x, self.paddle_x + PADDLE_WIDTH):
             for y in range(self.paddle_y, self.paddle_y + PADDLE_HEIGHT):
                 display.set_pixel(x, y, 255, 255, 255)
 
     def clear_paddle(self):
+        """
+        Clear the paddle from its current position.
+        """
         for x in range(self.paddle_x, self.paddle_x + PADDLE_WIDTH):
             for y in range(self.paddle_y, self.paddle_y + PADDLE_HEIGHT):
                 display.set_pixel(x, y, 0, 0, 0)
 
     def draw_ball(self):
-        # display.set_pixel(self.ball_x, self.ball_y, 255, 255, 255)
-        # 2x2 ball
+        """
+        Draw the ball on the display.
+        """
+        # Draw a 2x2 ball
         display.set_pixel(self.ball_x, self.ball_y, 255, 255, 255)
         display.set_pixel(self.ball_x + 1, self.ball_y, 255, 255, 255)
         display.set_pixel(self.ball_x, self.ball_y + 1, 255, 255, 255)
         display.set_pixel(self.ball_x + 1, self.ball_y + 1, 255, 255, 255)
 
     def clear_ball(self):
-        # display.set_pixel(self.ball_x, self.ball_y, 0, 0, 0)
-        # 2x2 ball
+        """
+        Clear the ball from its current position.
+        """
+        # Clear a 2x2 ball
         display.set_pixel(self.ball_x, self.ball_y, 0, 0, 0)
         display.set_pixel(self.ball_x + 1, self.ball_y, 0, 0, 0)
         display.set_pixel(self.ball_x, self.ball_y + 1, 0, 0, 0)
         display.set_pixel(self.ball_x + 1, self.ball_y + 1, 0, 0, 0)
 
     def draw_bricks(self):
+        """
+        Draw all the bricks on the display.
+        """
         for x, y in self.bricks:
             hue = (y) * 360 // (BRICK_ROWS * BRICK_COLS)
-            r, g, b = hsb_to_rgb(hue, 1, 1)
-
+            red, green, blue = hsb_to_rgb(hue, 1, 1)
             for dx in range(BRICK_WIDTH):
                 for dy in range(BRICK_HEIGHT):
-                    display.set_pixel(x + dx, y + dy, r, g, b)
+                    display.set_pixel(x + dx, y + dy, red, green, blue)
 
     def clear_bricks(self):
+        """
+        Clear all the bricks from the display.
+        """
         display.clear()
 
     def update_ball(self):
+        """
+        Update the ball's position and handle collisions.
+        """
         global game_over
         self.clear_ball()
         self.ball_x += self.ball_dx
         self.ball_y += self.ball_dy
 
-        # Check collision with walls
+        # Handle collision with walls
         if self.ball_x <= 0 or self.ball_x >= WIDTH - 1:
             self.ball_dx = -self.ball_dx
-
-        # Check collision with paddle
         if self.ball_y <= 1:
             self.ball_dy = -self.ball_dy
 
-        # Check collision with paddle
+        # Handle collision with paddle
         if self.ball_y >= HEIGHT - PADDLE_HEIGHT - 2:
             if self.paddle_x <= self.ball_x <= self.paddle_x + PADDLE_WIDTH:
                 self.ball_dy = -self.ball_dy
 
+        # Ball falls below paddle
         if self.ball_y >= HEIGHT:
             game_over = True
-            # GameOverMenu().run_game_over_menu()
             return
 
         self.draw_ball()
 
     def check_collision_with_bricks(self):
+        """
+        Check for collision between the ball and bricks.
+        """
         global global_score
         for brick in self.bricks:
             bx, by = brick
@@ -1030,6 +1298,12 @@ class BreakoutGame:
                 break
 
     def update_paddle(self, joystick):
+        """
+        Update the paddle's position based on joystick input.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if direction == JOYSTICK_LEFT:
             self.clear_paddle()
@@ -1040,13 +1314,19 @@ class BreakoutGame:
         self.draw_paddle()
 
     def main_loop(self, joystick):
+        """
+        Main game loop for the Breakout game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         global game_over
         game_over = False
         display.clear()
         self.draw_bricks()
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-Button beendet das Spiel
+            if c_button:  # C-button ends the game
                 game_over = True
 
             self.update_ball()
@@ -1068,7 +1348,14 @@ class BreakoutGame:
 
 
 class QixGame:
+    """
+    Class representing the Qix game.
+    """
+
     def __init__(self):
+        """
+        Initialize the Qix game variables.
+        """
         self.player_x = 0
         self.player_y = 0
         self.opponent_x = 0
@@ -1076,20 +1363,16 @@ class QixGame:
         self.opponent_dx = 1
         self.opponent_dy = 1
         self.occupied_percentage = 0
-        self.height = HEIGHT - 7
+        self.height = HEIGHT - 7  # Adjust for score display area
         self.width = WIDTH
 
-        # prev player position type (grid value)
+        # Previous player position type (grid value)
         self.prev_player_pos = 1
 
-        # grid values:
-        # 0 = empty
-        # 1 = line
-        # 2 = floodfill
-        # 3 = enemy
-        # 4 = temp line
-
     def initialize_game(self):
+        """
+        Initialize the game by setting up the grid and placing the player and opponent.
+        """
         display.clear()
         initialize_grid()
         self.draw_frame()
@@ -1097,7 +1380,9 @@ class QixGame:
         self.place_opponent()
 
     def draw_frame(self):
-        # Draw a frame around the play area
+        """
+        Draw a frame around the play area.
+        """
         for x in range(self.width):
             set_grid_value(x, 0, 1)
             set_grid_value(x, self.height - 1, 1)
@@ -1111,7 +1396,9 @@ class QixGame:
             display.set_pixel(self.width - 1, y, 0, 0, 255)
 
     def place_player(self):
-        # Place the player at a random position on the edge
+        """
+        Place the player at a random position on the edge.
+        """
         edge_positions = (
             [(x, 0) for x in range(self.width)]
             + [(x, self.height - 1) for x in range(self.width)]
@@ -1122,39 +1409,35 @@ class QixGame:
         display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
 
     def place_opponent(self):
-        # Place the opponent at a random position inside the playfield
-        self.opponent_x, self.opponent_y = random.randint(
-            1, self.width - 2
-        ), random.randint(1, self.height - 2)
+        """
+        Place the opponent at a random position inside the playfield.
+        """
+        self.opponent_x = random.randint(1, self.width - 2)
+        self.opponent_y = random.randint(1, self.height - 2)
         set_grid_value(self.opponent_x, self.opponent_y, 3)
         display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
 
     def move_opponent(self):
+        """
+        Move the opponent and handle collisions with boundaries and trails.
+        """
         global game_over
-        # Move the opponent and bounce off the boundaries
         next_x = self.opponent_x + self.opponent_dx
         next_y = self.opponent_y + self.opponent_dy
 
         # Check for collision in the x direction
-        if (
-            get_grid_value(next_x, self.opponent_y) == 1
-            or get_grid_value(next_x, self.opponent_y) == 2
-        ):
+        if get_grid_value(next_x, self.opponent_y) in (1, 2):
             self.opponent_dx = -self.opponent_dx
 
         # Check for collision in the y direction
-        if (
-            get_grid_value(self.opponent_x, next_y) == 1
-            or get_grid_value(self.opponent_x, next_y) == 2
-        ):
+        if get_grid_value(self.opponent_x, next_y) in (1, 2):
             self.opponent_dy = -self.opponent_dy
 
-        # check for collision with player or line and exit
+        # Check for collision with player or trail
         if get_grid_value(next_x, next_y) == 4 or (
             next_x == self.player_x and next_y == self.player_y
         ):
             game_over = True
-            # GameOverMenu().run_game_over_menu()
             return
 
         # Clear current position
@@ -1167,7 +1450,12 @@ class QixGame:
         display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
 
     def move_player(self, joystick):
-        # Handle player movement based on joystick input
+        """
+        Move the player based on joystick input.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         direction = joystick.read_direction(
             [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
         )
@@ -1196,7 +1484,14 @@ class QixGame:
                 display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
 
     def close_area(self, x, y):
-        # When the player closes an area by reconnecting with a border or trail
+        """
+        Close an area when the player reconnects with a border or trail.
+
+        Args:
+            x (int): X-coordinate of the connection point.
+            y (int): Y-coordinate of the connection point.
+        """
+        # Finalize the trail
         set_grid_value(x, y, 1)
         display.set_pixel(x, y, 0, 0, 255)
 
@@ -1204,41 +1499,64 @@ class QixGame:
         self.flood_fill(self.opponent_x, self.opponent_y)
 
         # Fill the non-accessible area
-        for i in range(WIDTH):
+        for i in range(self.width):
             for j in range(self.height):
-                if get_grid_value(i, j) == 0:
-                    set_grid_value(i, j, 2)  # Mark non-accessible area as player's
+                grid_value = get_grid_value(i, j)
+                if grid_value == 0:
+                    set_grid_value(i, j, 2)  # Mark as player's area
                     display.set_pixel(i, j, 0, 0, 255)
-                elif get_grid_value(i, j) == 3:
+                elif grid_value == 3:
                     set_grid_value(i, j, 0)
-                elif get_grid_value(i, j) == 1 or get_grid_value(i, j) == 4:
+                elif grid_value in (1, 4):
                     set_grid_value(i, j, 1)
                     display.set_pixel(i, j, 0, 55, 100)
 
-        # Calculate occupied percentage after filling
+        # Recalculate occupied percentage
         self.calculate_occupied_percentage()
 
     def flood_fill(self, x, y):
-        # Apply flood fill from the opponent's position to determine the area it controls
-        floodfill(x, y, accessible_mark=3, non_accessible_mark=2, r=255, g=0, b=0)
+        """
+        Perform flood fill from the opponent's position.
+
+        Args:
+            x (int): X-coordinate to start flood fill.
+            y (int): Y-coordinate to start flood fill.
+        """
+        flood_fill(
+            x, y, accessible_mark=3, non_accessible_mark=2, red=255, green=0, blue=0
+        )
 
     def calculate_occupied_percentage(self):
-        # Calculate how much of the playfield has been occupied
-        occupied_pixels = sum(1 for i in range(len(grid)) if grid[i] == 2)
-        self.occupied_percentage = occupied_pixels / (self.width * self.height) * 100
+        """
+        Calculate the percentage of the playfield occupied by the player.
+        """
+        occupied_pixels = sum(1 for value in grid if value == 2)
+        self.occupied_percentage = (occupied_pixels / (self.width * self.height)) * 100
         display_score_and_time(int(self.occupied_percentage))
 
     def check_win_condition(self):
+        """
+        Check if the player has won the game.
+
+        Returns:
+            bool: True if the player has won, False otherwise.
+        """
         return self.occupied_percentage > 75
 
     def main_loop(self, joystick):
+        """
+        Main game loop for the Qix game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         global game_over
         game_over = False
         self.initialize_game()
 
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-Button beendet das Spiel
+            if c_button:  # C-button ends the game
                 game_over = True
 
             self.move_player(joystick)
@@ -1254,100 +1572,177 @@ class QixGame:
 
 
 class Tetrimino:
+    """
+    Class representing a Tetrimino piece in Tetris.
+    """
+
     def __init__(self):
-        self.shape = random.choice(tetriminos)
-        self.color = random.choice(tetris_colors)
-        self.x = grid_width // 2 - len(self.shape[0]) // 2
+        """
+        Initialize a new Tetrimino with random shape and color.
+        """
+        self.shape = random.choice(TETRIMINOS)
+        self.color = random.choice(TETRIS_COLORS)
+        self.x = GRID_WIDTH // 2 - len(self.shape[0]) // 2
         self.y = 0
 
     def rotate(self):
+        """
+        Rotate the Tetrimino shape clockwise.
+        """
         self.shape = [list(row) for row in zip(*self.shape[::-1])]
 
 
 class TetrisGame:
+    """
+    Class representing the Tetris game.
+    """
+
     def __init__(self):
+        """
+        Initialize the Tetris game variables.
+        """
         self.locked_positions = {}
         self.grid = self.create_grid(self.locked_positions)
         self.change_piece = False
         self.current_piece = Tetrimino()
         self.fall_time = 0
         self.text = ""
-        self.old_piece_pos = []
         self.last_input_time = 0
         self.input_cooldown = 60
 
-    def create_grid(self, locked_positions={}):
-        grid = [[tetris_black for _ in range(grid_width)] for _ in range(grid_height)]
-        for y in range(grid_height):
-            for x in range(grid_width):
+    def create_grid(self, locked_positions=None):
+        """
+        Create the game grid with locked positions.
+
+        Args:
+            locked_positions (dict): Dictionary of locked positions.
+
+        Returns:
+            list: The game grid.
+        """
+        if locked_positions is None:
+            locked_positions = {}
+        grid = [[TETRIS_BLACK for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
                 if (x, y) in locked_positions:
                     color = locked_positions[(x, y)]
                     grid[y][x] = color
         return grid
 
     def valid_move(self, shape, grid, offset):
+        """
+        Check if a move is valid.
+
+        Args:
+            shape (list): The shape of the Tetrimino.
+            grid (list): The game grid.
+            offset (tuple): The offset position.
+
+        Returns:
+            bool: True if the move is valid, False otherwise.
+        """
         off_x, off_y = offset
         for y, row in enumerate(shape):
             for x, cell in enumerate(row):
                 if cell:
+                    new_x = x + off_x
+                    new_y = y + off_y
                     if (
-                        x + off_x < 0
-                        or x + off_x >= grid_width
-                        or y + off_y >= grid_height
-                        or grid[y + off_y][x + off_x] != tetris_black
+                        new_x < 0
+                        or new_x >= GRID_WIDTH
+                        or new_y >= GRID_HEIGHT
+                        or grid[new_y][new_x] != TETRIS_BLACK
                     ):
                         return False
         return True
 
-    def clear_rows(self, grid, locked):
+    def clear_rows(self, grid, locked_positions):
+        """
+        Clear completed rows from the grid.
+
+        Args:
+            grid (list): The game grid.
+            locked_positions (dict): Dictionary of locked positions.
+
+        Returns:
+            int: Number of rows cleared.
+        """
         cleared_rows = 0
-        for y in range(grid_height - 1, -1, -1):
+        for y in range(GRID_HEIGHT - 1, -1, -1):
             row = grid[y]
-            if tetris_black not in row:
+            if TETRIS_BLACK not in row:
                 cleared_rows += 1
-                for x in range(grid_width):
-                    del locked[(x, y)]
+                for x in range(GRID_WIDTH):
+                    del locked_positions[(x, y)]
                 for k in range(y, 0, -1):
-                    for x in range(grid_width):
-                        locked[(x, k)] = locked.get((x, k - 1), tetris_black)
+                    for x in range(GRID_WIDTH):
+                        locked_positions[(x, k)] = locked_positions.get(
+                            (x, k - 1), TETRIS_BLACK
+                        )
         return cleared_rows
 
     def draw_grid(self):
-        for y in range(grid_height):
-            for x in range(grid_width):
+        """
+        Draw the grid with locked positions.
+        """
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
                 color = self.grid[y][x]
-                if color != tetris_black:
-                    draw_rect(
-                        x * block_size,
-                        y * block_size,
-                        (x + 1) * block_size - 1,
-                        (y + 1) * block_size - 1,
+                if color != TETRIS_BLACK:
+                    draw_rectangle(
+                        x * BLOCK_SIZE,
+                        y * BLOCK_SIZE,
+                        (x + 1) * BLOCK_SIZE - 1,
+                        (y + 1) * BLOCK_SIZE - 1,
                         *color,
                     )
 
-    def erase_piece(self, piece_pos):
-        for x, y in piece_pos:
+    def erase_piece(self, piece_positions):
+        """
+        Erase a Tetrimino from the display.
+
+        Args:
+            piece_positions (list): List of positions occupied by the piece.
+        """
+        for x, y in piece_positions:
             if y >= 0:
-                draw_rect(
-                    x * block_size,
-                    y * block_size,
-                    (x + 1) * block_size - 1,
-                    (y + 1) * block_size - 1,
-                    *tetris_black,
+                draw_rectangle(
+                    x * BLOCK_SIZE,
+                    y * BLOCK_SIZE,
+                    (x + 1) * BLOCK_SIZE - 1,
+                    (y + 1) * BLOCK_SIZE - 1,
+                    *TETRIS_BLACK,
                 )
 
-    def draw_piece(self, piece_pos, color):
-        for x, y in piece_pos:
+    def draw_piece(self, piece_positions, color):
+        """
+        Draw a Tetrimino on the display.
+
+        Args:
+            piece_positions (list): List of positions occupied by the piece.
+            color (tuple): Color of the piece.
+        """
+        for x, y in piece_positions:
             if y >= 0:
-                draw_rect(
-                    x * block_size,
-                    y * block_size,
-                    (x + 1) * block_size - 1,
-                    (y + 1) * block_size - 1,
+                draw_rectangle(
+                    x * BLOCK_SIZE,
+                    y * BLOCK_SIZE,
+                    (x + 1) * BLOCK_SIZE - 1,
+                    (y + 1) * BLOCK_SIZE - 1,
                     *color,
                 )
 
     def handle_input(self, joystick):
+        """
+        Handle joystick input with cooldown.
+
+        Args:
+            joystick (Joystick): The joystick object.
+
+        Returns:
+            str: Direction input from the joystick.
+        """
         current_time = time.ticks_ms()
         if current_time - self.last_input_time < self.input_cooldown:
             return None
@@ -1357,13 +1752,19 @@ class TetrisGame:
         )
 
     def main_loop(self, joystick):
+        """
+        Main game loop for the Tetris game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
         global game_over
         game_over = False
         display.clear()
         clock = time.ticks_ms()
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-Button beendet das Spiel
+            if c_button:  # C-button ends the game
                 game_over = True
 
             self.grid = self.create_grid(self.locked_positions)
@@ -1376,13 +1777,13 @@ class TetrisGame:
 
             if self.fall_time >= fall_speed:
                 self.fall_time = 0
-                old_piece_pos = [
+                old_piece_positions = [
                     (self.current_piece.x + x, self.current_piece.y + y)
                     for y, row in enumerate(self.current_piece.shape)
                     for x, cell in enumerate(row)
                     if cell
                 ]
-                self.erase_piece(old_piece_pos)  # Lösche das alte Tetrimino
+                self.erase_piece(old_piece_positions)
 
                 self.current_piece.y += 1
                 if not self.valid_move(
@@ -1395,7 +1796,7 @@ class TetrisGame:
 
                 redraw_needed = True
 
-            direction = self.handle_input(joystick)  # Verwende die handle_input-Methode
+            direction = self.handle_input(joystick)
             if direction == JOYSTICK_LEFT:
                 self.erase_piece(
                     [
@@ -1465,63 +1866,66 @@ class TetrisGame:
                     self.grid,
                     (self.current_piece.x, self.current_piece.y),
                 ):
-                    self.current_piece.rotate()
-                    self.current_piece.rotate()
-                    self.current_piece.rotate()
+                    # Rotate back if move is invalid
+                    for _ in range(3):
+                        self.current_piece.rotate()
                 else:
                     redraw_needed = True
 
             if redraw_needed:
-                new_piece_pos = [
+                new_piece_positions = [
                     (self.current_piece.x + x, self.current_piece.y + y)
                     for y, row in enumerate(self.current_piece.shape)
                     for x, cell in enumerate(row)
                     if cell
                 ]
-                self.draw_piece(
-                    new_piece_pos, self.current_piece.color
-                )  # Zeichne das neue Tetrimino
+                self.draw_piece(new_piece_positions, self.current_piece.color)
 
             if self.change_piece:
-                for pos in new_piece_pos:
+                for pos in new_piece_positions:
                     self.locked_positions[(pos[0], pos[1])] = self.current_piece.color
 
                 cleared_rows = self.clear_rows(self.grid, self.locked_positions)
 
                 if cleared_rows > 0:
                     display.clear()
-                    self.grid = self.create_grid(
-                        self.locked_positions
-                    )  # Erneut das Grid erstellen
-                    self.draw_grid()  # Grid neu zeichnen
+                    self.grid = self.create_grid(self.locked_positions)
+                    self.draw_grid()
                 else:
-                    self.draw_piece(
-                        new_piece_pos, self.current_piece.color
-                    )  # Zeichne das aktuelle Tetrimino
+                    self.draw_piece(new_piece_positions, self.current_piece.color)
 
                 self.current_piece = Tetrimino()
                 self.change_piece = False
 
             display_score_and_time(len(self.locked_positions))
 
+            # Check for game over condition
             if any(y < 1 for x, y in self.locked_positions):
                 game_over = True
-                # reset the grid
-                self.grid = self.create_grid()
-                x, y, w, h = 0, 0, WIDTH, HEIGHT
-                self.__init__()
-
+                self.__init__()  # Reset the game
                 break
 
         display.clear()
-        # game_over = False
-        # GameOverMenu().run_game_over_menu()
         return
 
 
-# Game Selector class
+# Game Over Menu
+
+# class GameOverMenu:
+
+
+# Game Selector Class
+
+
 class GameSelect:
+    """
+    Class for selecting and running games.
+    """
+
     def __init__(self):
+        """
+        Initialize the game selector with available games.
+        """
         self.joystick = Joystick(adc0, adc1, adc2)
         self.games = {
             "SNAKE": SnakeGame(),
@@ -1533,15 +1937,23 @@ class GameSelect:
         }
         self.selected_game = None
 
-    # make a method to run the selected game (from outside the class)
-    def run_game(self, game):
+    def run_game(self, game_name):
+        """
+        Run the selected game.
+
+        Args:
+            game_name (str): Name of the game to run.
+        """
         global game_over
         game_over = False
-        self.games[game].main_loop(self.joystick)
+        self.games[game_name].main_loop(self.joystick)
 
     def run_game_selector(self):
-        games = list(self.games.keys())
-        selected = 0
+        """
+        Display the game selection menu and handle user input.
+        """
+        games_list = list(self.games.keys())
+        selected_index = 0
         previous_selected = None
         top_index = 0
         display_size = 4
@@ -1551,45 +1963,46 @@ class GameSelect:
         while True:
             current_time = time.time()
 
-            # Update display only when selection changes
-            if selected != previous_selected:
-                previous_selected = selected
+            if selected_index != previous_selected:
+                previous_selected = selected_index
                 display.clear()
                 for i in range(display_size):
-                    game_index = top_index + i
-                    if game_index < len(games):
+                    game_idx = top_index + i
+                    if game_idx < len(games_list):
                         color = (
                             (255, 255, 255)
-                            if game_index == selected
+                            if game_idx == selected_index
                             else (111, 111, 111)
                         )
-                        draw_text(8, 5 + i * 15, games[game_index], *color)
+                        draw_text(8, 5 + i * 15, games_list[game_idx], *color)
 
-            # Check joystick direction with debounce logic
             if current_time - last_move_time > debounce_delay:
                 direction = self.joystick.read_direction(
                     [JOYSTICK_UP, JOYSTICK_DOWN], debounce=False
                 )
-                if direction == JOYSTICK_UP and selected > 0:
-                    selected -= 1
-                    if selected < top_index:
+                if direction == JOYSTICK_UP and selected_index > 0:
+                    selected_index -= 1
+                    if selected_index < top_index:
                         top_index -= 1
                     last_move_time = current_time
-                elif direction == JOYSTICK_DOWN and selected < len(games) - 1:
-                    selected += 1
-                    if selected > top_index + display_size - 1:
+                elif (
+                    direction == JOYSTICK_DOWN and selected_index < len(games_list) - 1
+                ):
+                    selected_index += 1
+                    if selected_index > top_index + display_size - 1:
                         top_index += 1
                     last_move_time = current_time
 
-            # Check if joystick button is pressed
             if self.joystick.is_pressed():
-                self.selected_game = games[selected]
+                self.selected_game = games_list[selected_index]
                 break
 
-            # Maintain a consistent frame rate
             time.sleep(0.05)
 
     def run(self):
+        """
+        Main loop to run the game selector and handle game execution.
+        """
         global last_game
         while True:
             if self.selected_game is None:
@@ -1599,24 +2012,32 @@ class GameSelect:
                 try:
                     selected_game = self.selected_game
                     self.selected_game = None
-
                     self.games[selected_game].main_loop(self.joystick)
                     GameOverMenu().run_game_over_menu()
-                except Exception as e:
-                    print(f"Error: {e}")
+                except Exception as error:
+                    print(f"Error: {error}")
                     self.selected_game = None
 
 
-# similar to the GameSelect class, but with "back to menu" and "restart" options when a game ends
 class GameOverMenu:
+    """
+    Class for displaying the game over menu.
+    """
+
     def __init__(self):
+        """
+        Initialize the game over menu with options.
+        """
         self.joystick = Joystick(adc0, adc1, adc2)
-        self.menu = ["RETRY", "MENU"]
+        self.menu_options = ["RETRY", "MENU"]
         self.selected_option = None
 
     def run_game_over_menu(self):
+        """
+        Display the game over menu and handle user input.
+        """
         global last_game, global_score, game_over
-        selected = 0
+        selected_index = 0
         previous_selected = None
         last_move_time = time.time()
         debounce_delay = 0.1
@@ -1626,54 +2047,56 @@ class GameOverMenu:
         while True:
             current_time = time.time()
 
-            # display "Game Over" message
+            # Display "Game Over" message
             draw_text(10, 10, "LOST", 255, 20, 20)
-
-            # display score and time
             display_score_and_time(global_score)
 
-            # display menu options
-            if selected != previous_selected:
-                previous_selected = selected
+            # Display menu options
+            if selected_index != previous_selected:
+                previous_selected = selected_index
                 display.clear()
-                for i, option in enumerate(self.menu):
-                    color = (255, 255, 255) if i == selected else (111, 111, 111)
+                for i, option in enumerate(self.menu_options):
+                    color = (255, 255, 255) if i == selected_index else (111, 111, 111)
                     draw_text(8, 30 + i * 15, option, *color)
 
             if current_time - last_move_time > debounce_delay:
                 direction = self.joystick.read_direction(
                     [JOYSTICK_UP, JOYSTICK_DOWN], debounce=False
                 )
-                if direction == JOYSTICK_UP and selected > 0:
-                    selected -= 1
+                if direction == JOYSTICK_UP and selected_index > 0:
+                    selected_index -= 1
                     last_move_time = current_time
-                elif direction == JOYSTICK_DOWN and selected < len(self.menu) - 1:
-                    selected += 1
+                elif (
+                    direction == JOYSTICK_DOWN
+                    and selected_index < len(self.menu_options) - 1
+                ):
+                    selected_index += 1
                     last_move_time = current_time
 
             if self.joystick.is_pressed():
-                if self.menu[selected] == "RETRY":
+                if self.menu_options[selected_index] == "RETRY":
                     global_score = 0
                     GameSelect().run_game(last_game)
-                elif self.menu[selected] == "MENU":
+                elif self.menu_options[selected_index] == "MENU":
                     return
 
             time.sleep(0.05)
 
 
-# Main program
+# Main Program Execution
+
 if __name__ == "__main__":
-    # Initialisierung des I2C-Busses
+    # Initialize the I2C bus for Nunchuk
     i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20), freq=100000)
 
-    # Erstellen des Nunchuck-Objekts
+    # Create the Nunchuk object
     nunchuk = Nunchuck(i2c, poll=True, poll_interval=100)
 
-    # Game selection
+    # Start the game selection
     game_state = GameSelect()
 
     # Start the display
     display.start()
 
-    # Main game loop
+    # Run the main game loop
     game_state.run()
