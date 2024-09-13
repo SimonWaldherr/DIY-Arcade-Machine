@@ -18,6 +18,7 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
   - [Pong](#pong)
   - [Breakout](#breakout)
   - [Qix / Xonix](#qix)
+  - [Tetris](#tetris)
 - [Fun](#fun)
 
 ## Hardware Requirements
@@ -108,6 +109,17 @@ Qix is a game where you claim territory on a map, but if you get hit a the enemy
 - **Controls**:
   - Use the joystick to move the player.
   - claim terretory and avoid to get hit.
+
+i also implemented the game in golang using ebiten, you can find it [here](https://github.com/SimonWaldherr/golang-examples/blob/master/non-std-lib/ebiten-qix.go).
+
+### Tetris
+
+Tetris is a game where you have to stack blocks to make lines.
+
+- **Controls**:
+  - Use the joystick to move the blocks left and right.
+  - Use the joystick to rotate the blocks.
+  - Use the joystick to move the blocks down faster.
 
 ## Fun
 
