@@ -14,6 +14,7 @@ Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive
 - [Usage](#usage)
 - [Games](#games)
   - [Simon](#simon)
+  - [Asteroid](#asteroid)
   - [Snake](#snake)
   - [Pong](#pong)
   - [Breakout](#breakout)
@@ -77,6 +78,14 @@ Simon is a memory game where the player must remember and repeat a sequence of c
 - **Controls**:
   - Use the joystick to select the corresponding quadrant of the flashed color.
   - Repeat the sequence shown on the display.
+
+### Asteroid
+
+Asteroid is a game where you have to shoot the asteroids.
+
+- **Controls**:
+  - Use the joystick to rotate and accelerate the space ship.
+  - Use the joystick button to shoot.
 
 ### Snake
 

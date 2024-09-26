@@ -2,6 +2,7 @@ import hub75
 import random
 import time
 import machine
+import math
 from machine import ADC
 
 # Constants for display dimensions
@@ -216,6 +217,15 @@ NUMS = {
     "(": ["00010", "00100", "00100", "00100", "00010"],
     ")": ["00100", "00010", "00010", "00010", "00100"],
 }
+
+def sleep_ms(ms):
+    """
+    Sleep for the given number of milliseconds.
+    """
+    time.sleep(ms / 1000)
+
+def get_time():
+    return time.time()
 
 
 def draw_character(x, y, character, red, green, blue):
@@ -699,7 +709,9 @@ class SimonGame:
             (y + 1) * half_height - 1,
             *colors[index],
         )
-        time.sleep(duration)
+
+        sleep_ms(duration * 1000)
+
         draw_rectangle(
             x * half_width,
             y * half_height,
@@ -714,7 +726,8 @@ class SimonGame:
         """
         for color_index in self.sequence:
             self.flash_color(color_index)
-            time.sleep(0.5)
+
+            sleep_ms(500)
 
     def get_user_input(self, joystick):
         """
@@ -737,7 +750,8 @@ class SimonGame:
             )
             if direction:
                 return direction
-            time.sleep(0.1)
+
+            sleep_ms(100)
 
     def translate_joystick_to_color(self, direction):
         """
@@ -809,7 +823,7 @@ class SimonGame:
                     print("Invalid input")
                     break
 
-            time.sleep(1)
+            sleep_ms(1000)
 
 
 class SnakeGame:
@@ -1000,7 +1014,7 @@ class SnakeGame:
             self.draw_snake()
             display_score_and_time(self.score)
 
-            time.sleep(max(0.03, (0.09 - max(0.01, self.snake_length / 300))))
+            sleep_ms(max(0.03, (0.09 - max(0.01, self.snake_length / 300))) * 1000)
 
 
 class PongGame:
@@ -1152,7 +1166,8 @@ class PongGame:
             if self.left_score != self.previous_left_score:
                 display_score_and_time(self.left_score)
                 self.previous_left_score = self.left_score
-            time.sleep(0.05)
+
+            sleep_ms(50)
 
 
 class BreakoutGame:
@@ -1337,14 +1352,14 @@ class BreakoutGame:
                 display.clear()
                 draw_text(10, 5, "YOU", 255, 255, 255)
                 draw_text(10, 20, "WON", 255, 255, 255)
-                time.sleep(3)
+                sleep_ms(3000)
                 break
             elif self.score < 60:
-                time.sleep(0.05)
+                sleep_ms(50)
             elif self.score < 120:
-                time.sleep(0.03)
+                sleep_ms(30)
             else:
-                time.sleep(0.01)
+                sleep_ms(10)
 
 
 class QixGame:
@@ -1565,10 +1580,10 @@ class QixGame:
                 draw_text(
                     self.width // 2 - 20, self.height // 2 - 10, "YOU WIN", 0, 255, 0
                 )
-                time.sleep(2)
+                sleep_ms(2000)
                 break
 
-            time.sleep(0.05)
+            sleep_ms(50)
 
 
 class Tetrimino:
@@ -1909,6 +1924,284 @@ class TetrisGame:
         return
 
 
+class Projectile:
+    def __init__(self, x, y, angle, speed):
+        self.x = x
+        self.y = y
+        self.angle = angle
+        self.speed = speed
+        self.lifetime = 10  # Frames
+
+    def update(self):
+        self.x += math.cos(math.radians(self.angle)) * self.speed
+        self.y -= math.sin(math.radians(self.angle)) * self.speed
+        self.x %= PIXEL_WIDTH
+        self.y %= PIXEL_HEIGHT
+        self.lifetime -= 1
+
+    def is_alive(self):
+        return self.lifetime > 0
+    
+    def draw(self):
+        # Zeichne das Projektil als einzelner Pixel
+        px = int(self.x) % PIXEL_WIDTH
+        py = int(self.y) % PIXEL_HEIGHT
+        self.draw_line((self.x, self.y), (self.x + math.cos(math.radians(self.angle)), self.y - math.sin(math.radians(self.angle))), RED)
+
+    def draw_line(self, start, end, color):
+        # Bresenham's Linie-Algorithmus
+        x0, y0 = int(start[0]), int(start[1])
+        x1, y1 = int(end[0]), int(end[1])
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        x, y = x0, y0
+        sx = -1 if x0 > x1 else 1
+        sy = -1 if y0 > y1 else 1
+        if dx > dy:
+            err = dx / 2.0
+            while x != x1:
+                display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                err -= dy
+                if err < 0:
+                    y += sy
+                    err += dx
+                x += sx
+        else:
+            err = dy / 2.0
+            while y != y1:
+                display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                err -= dx
+                if err < 0:
+                    x += sx
+                    err += dy
+                y += sy
+        display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+
+
+class Asteroid:
+    def __init__(self, x=None, y=None, size=None, start=False):
+        self.x, self.y = 32, 32
+
+        # use values from parameter if they are not None
+        if x is not None:
+            self.x = x
+        if y is not None:
+            self.y = y
+            
+        while (start == True and (self.x > 22 and self.x < 42) or (self.y > 22 and self.y < 42)):
+            self.x = random.uniform(0, PIXEL_WIDTH)
+            self.y = random.uniform(0, PIXEL_HEIGHT)
+
+        self.angle = random.uniform(0, 360)
+        self.speed = random.uniform(0.5, 1.5)
+        self.size = size if size is not None else random.randint(4, 8)
+
+    def update(self):
+        self.x += math.cos(math.radians(self.angle)) * self.speed
+        self.y -= math.sin(math.radians(self.angle)) * self.speed
+        self.x %= PIXEL_WIDTH
+        self.y %= PIXEL_HEIGHT
+
+    def draw(self):
+        # Zeichne Kreis durch Setzen mehrerer Pixel
+        for degree in range(0, 360, 10):
+            rad = math.radians(degree)
+            px = int((self.x + math.cos(rad) * self.size) % PIXEL_WIDTH)
+            py = int((self.y + math.sin(rad) * self.size) % PIXEL_HEIGHT)
+            display.set_pixel(px, py, *WHITE)
+
+class Ship:
+    def __init__(self):
+        self.x = PIXEL_WIDTH / 2
+        self.y = PIXEL_HEIGHT / 2
+        self.angle = 0
+        self.speed = 0
+        self.max_speed = 2
+        self.size = 3
+        self.cooldown = 0
+
+    def update(self, direction):
+        # Drehung des Raumschiffs basierend auf Richtungseingaben
+        if direction == "LEFT":
+            self.angle = (self.angle + 5) % 360
+        elif direction == "RIGHT":
+            self.angle = (self.angle - 5) % 360
+
+        # Vorwärtsbewegung
+        if direction == "UP":
+            self.speed = min(self.speed + 0.1, self.max_speed)
+        else:
+            self.speed = max(self.speed - 0.05, 0)
+
+        # Position aktualisieren
+        self.x += math.cos(math.radians(self.angle)) * self.speed
+        self.y -= math.sin(math.radians(self.angle)) * self.speed
+
+        # Bildschirmrand überprüfen (Wrap-Around)
+        self.x %= PIXEL_WIDTH
+        self.y %= PIXEL_HEIGHT
+
+        # Cooldown für Schüsse
+        if self.cooldown > 0:
+            self.cooldown -= 1
+
+    def draw(self):
+        # Dreieck als Raumschiff
+        points = [
+            (self.x + math.cos(math.radians(self.angle)) * self.size,
+             self.y - math.sin(math.radians(self.angle)) * self.size),
+            (self.x + math.cos(math.radians(self.angle + 120)) * self.size,
+             self.y - math.sin(math.radians(self.angle + 120)) * self.size),
+            (self.x + math.cos(math.radians(self.angle - 120)) * self.size,
+             self.y - math.sin(math.radians(self.angle - 120)) * self.size),
+        ]
+        # Linien zwischen den Punkten zeichnen
+        if self.speed > 0:
+            self.draw_line(points[1], points[2], RED) # hinten - rot wenn das Raumschiff sich bewegt
+            
+        self.draw_line(points[0], points[1], WHITE) # links - Backbord
+        self.draw_line(points[2], points[0], WHITE) # rechts - Steuerbord
+
+    def draw_line(self, start, end, color):
+        # Bresenham's Linie-Algorithmus
+        x0, y0 = int(start[0]), int(start[1])
+        x1, y1 = int(end[0]), int(end[1])
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        x, y = x0, y0
+        sx = -1 if x0 > x1 else 1
+        sy = -1 if y0 > y1 else 1
+        if dx > dy:
+            err = dx / 2.0
+            while x != x1:
+                display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                err -= dy
+                if err < 0:
+                    y += sy
+                    err += dx
+                x += sx
+        else:
+            err = dy / 2.0
+            while y != y1:
+                display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                err -= dx
+                if err < 0:
+                    x += sx
+                    err += dy
+                y += sy
+        display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+
+    def shoot(self):
+        if self.cooldown == 0:
+            self.cooldown = SHIP_COOLDOWN
+            bullet_speed = 4
+            bullet_x = self.x + math.cos(math.radians(self.angle)) * self.size
+            bullet_y = self.y - math.sin(math.radians(self.angle)) * self.size
+            return Projectile(bullet_x, bullet_y, self.angle, bullet_speed)
+        return None
+
+PIXEL_WIDTH, PIXEL_HEIGHT = 64, 64
+SHIP_COOLDOWN = 10  # Frames zwischen Schüssen
+FPS = 20
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+BLACK = (0, 0, 0)
+
+def hypot(x, y):
+    return math.sqrt(x*x + y*y)
+
+class AsteroidGame:
+    def __init__(self):
+        self.display = display
+        self.ship = Ship()
+        self.asteroids = [Asteroid(start=True) for _ in range(3)]
+        self.projectiles = []
+        self.running = True
+        self.score = 0
+
+    def check_collisions(self):
+        # Kollisionen zwischen Projektilen und Asteroiden
+        for projectile in self.projectiles[:]:
+            for asteroid in self.asteroids[:]:
+                distance = hypot(projectile.x - asteroid.x, projectile.y - asteroid.y)
+                if distance < asteroid.size:
+                    self.projectiles.remove(projectile)
+                    self.asteroids.remove(asteroid)
+                    self.score += 10
+                    # Zerlege den Asteroiden, wenn er groß genug ist
+                    if asteroid.size > 3:
+                        for _ in range(2):
+                            new_size = asteroid.size // 2
+                            self.asteroids.append(Asteroid(asteroid.x, asteroid.y, new_size))
+                    break
+
+        # Kollisionen zwischen Schiff und Asteroiden
+        for asteroid in self.asteroids:
+            distance = hypot(self.ship.x - asteroid.x, self.ship.y - asteroid.y)
+            if distance < asteroid.size + self.ship.size:
+                self.running = False
+                self.score = max(self.score, self.score)  # Optional: Halte den höchsten Score
+                break
+
+    def main_loop(self, joystick):
+        """
+        Hauptspiel-Schleife für das Asteroid-Spiel.
+
+        Args:
+            joystick: Das Joystick-Objekt zur Steuerung.
+        """
+        self.running = True
+        self.score = 0
+        while self.running:
+            start_time = time.ticks_ms()
+
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:  # C-Taste beendet das Spiel
+                self.running = False
+
+            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if direction:
+                self.ship.update(direction)
+            else:
+                self.ship.update(None)
+
+            if z_button:
+                projectile = self.ship.shoot()
+                if projectile:
+                    self.projectiles.append(projectile)
+
+            self.ship.update(direction)
+
+            for asteroid in self.asteroids:
+                asteroid.update()
+
+            for projectile in self.projectiles[:]:
+                projectile.update()
+                if not projectile.is_alive():
+                    self.projectiles.remove(projectile)
+
+            self.check_collisions()
+
+            self.display.clear()
+
+            # Zeichnen aller Objekte
+            self.ship.draw()
+            for asteroid in self.asteroids:
+                asteroid.draw()
+            for projectile in self.projectiles:
+                projectile.draw()
+
+            # Spielstand anzeigen
+            display_score_and_time(self.score)
+
+            # Framerate kontrollieren
+            elapsed = time.ticks_diff(time.ticks_ms(), start_time)
+            frame_duration = 10 // FPS
+            sleep_time = frame_duration - elapsed
+            if sleep_time > 0:
+                sleep_ms(sleep_time)
+
+
 # Game Over Menu
 
 # class GameOverMenu:
@@ -1931,6 +2224,7 @@ class GameSelect:
             "SNAKE": SnakeGame(),
             "SIMON": SimonGame(),
             "BRKOUT": BreakoutGame(),
+            "ASTRD": AsteroidGame(),
             "PONG": PongGame(),
             "QIX": QixGame(),
             "TETRIS": TetrisGame(),
@@ -1997,7 +2291,7 @@ class GameSelect:
                 self.selected_game = games_list[selected_index]
                 break
 
-            time.sleep(0.05)
+            sleep_ms(50)
 
     def run(self):
         """
@@ -2080,7 +2374,7 @@ class GameOverMenu:
                 elif self.menu_options[selected_index] == "MENU":
                     return
 
-            time.sleep(0.05)
+            sleep_ms(50)
 
 
 # Main Program Execution
