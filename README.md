@@ -1,6 +1,8 @@
 # DIY-Arcade-Machine
 
-[![short video of the diy arcade console in action (on youtube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
+this branch contains the PyGame version - which emulates the real Arcade hardware.  
+
+[![short video of the diy arcade console in action (on youtube)](https://img.youtube.com/vi/er3-OS2g9QY/0.jpg)](https://www.youtube.com/watch?v=er3-OS2g9QY)
 
 ## my very own arcade machine
 
