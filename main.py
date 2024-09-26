@@ -1,28 +1,63 @@
-import hub75
+import pygame
 import random
 import time
-import machine
+import sys
 import math
-from machine import ADC
 
 # Constants for display dimensions
 HEIGHT = 64
 WIDTH = 64
+PIXEL_SIZE = 10  # Size of each pixel on the screen
+
+# Initialize PyGame
+pygame.init()
 
 # Initialize the display
-display = hub75.Hub75(WIDTH, HEIGHT)
+class PyGameDisplay:
+    def __init__(self, width, height, pixel_size):
+        self.width = width
+        self.height = height
+        self.pixel_size = pixel_size
+        self.screen = pygame.display.set_mode(
+            (self.width * self.pixel_size, self.height * self.pixel_size)
+        )
+        self.clock = pygame.time.Clock()
+        self.pixels = [[(0, 0, 0) for _ in range(self.width)] for _ in range(self.height)]
+        pygame.display.set_caption("LED Matrix Simulator")
+        self.running = True
 
-# Initialize ADC for joystick inputs
-adc0 = ADC(0)
-adc1 = ADC(1)
-adc2 = ADC(2)
+    def set_pixel(self, x, y, r, g, b):
+        if 0 <= x < self.width and 0 <= y < self.height:
+            self.pixels[y][x] = (r, g, b)
+            rect = pygame.Rect(
+                x * self.pixel_size, y * self.pixel_size, self.pixel_size, self.pixel_size
+            )
+            pygame.draw.rect(self.screen, (r, g, b), rect)
+
+    def clear(self):
+        self.screen.fill((0, 0, 0))
+        self.pixels = [[(0, 0, 0) for _ in range(self.width)] for _ in range(self.height)]
+
+    def update(self):
+        pygame.display.flip()
+        self.clock.tick(60)  # Limit to 60 FPS
+
+    def start(self):
+        pass  # No action needed in PyGame
+
+    def stop(self):
+        self.running = False
+        pygame.quit()
+
+
+display = PyGameDisplay(WIDTH, HEIGHT, PIXEL_SIZE)
 
 # Global variables for game state
 global_score = 0
 last_game = None
 game_over = False
 
-# Color definitions for Simon game
+# Color definitions
 COLORS_BRIGHT = [
     (255, 0, 0),  # Red
     (0, 255, 0),  # Green
@@ -30,7 +65,6 @@ COLORS_BRIGHT = [
     (255, 255, 0),  # Yellow
 ]
 
-# Color definitions for Tetris
 TETRIS_BLACK = (0, 0, 0)
 TETRIS_WHITE = (255, 255, 255)
 TETRIS_COLORS = [
@@ -222,10 +256,32 @@ def sleep_ms(ms):
     """
     Sleep for the given number of milliseconds.
     """
-    time.sleep(ms / 1000)
+    end_time = time.time() + ms / 1000.0
+    while time.time() < end_time:
+        input_handler.process_events()
+        if input_handler.quit:
+            pygame.quit()
+            sys.exit()
+        display.update()
+        time.sleep(0.01)  # Sleep a bit to prevent high CPU usage
 
 def get_time():
     return time.time()
+
+def ticks_ms():
+    return int(time.time() * 1000)
+
+def ticks_diff(a, b):
+    return a - b
+
+def ticks_add(a, b):
+    return a + b
+
+def ticks_us():
+    return int(time.time() * 1000000)
+
+def ticks_diff_us(a, b):
+    return a - b
 
 
 def draw_character(x, y, character, red, green, blue):
@@ -241,7 +297,6 @@ def draw_character(x, y, character, red, green, blue):
                 if bin_value[col] == "1":
                     display.set_pixel(x + col, y + row, red, green, blue)
 
-
 def draw_text(x, y, text, red, green, blue):
     """
     Draw text starting from position (x, y) with the given RGB color.
@@ -250,7 +305,6 @@ def draw_text(x, y, text, red, green, blue):
     for character in text:
         draw_character(offset_x, y, character, red, green, blue)
         offset_x += 9  # Move to the next character position
-
 
 def draw_character_small(x, y, character, red, green, blue):
     """
@@ -263,7 +317,6 @@ def draw_character_small(x, y, character, red, green, blue):
                 if matrix[row][col] == "1":
                     display.set_pixel(x + col, y + row, red, green, blue)
 
-
 def draw_text_small(x, y, text, red, green, blue):
     """
     Draw small text starting from position (x, y) with the given RGB color.
@@ -273,7 +326,6 @@ def draw_text_small(x, y, text, red, green, blue):
         draw_character_small(offset_x, y, character, red, green, blue)
         offset_x += 6  # Move to the next character position
 
-
 def draw_rectangle(x1, y1, x2, y2, red, green, blue):
     """
     Draw a rectangle between (x1, y1) and (x2, y2) with the given RGB color.
@@ -282,13 +334,14 @@ def draw_rectangle(x1, y1, x2, y2, red, green, blue):
         for y in range(min(y1, y2), max(y1, y2) + 1):
             display.set_pixel(x, y, red, green, blue)
 
-
 def display_score_and_time(score):
     """
     Display the current score and time at the bottom of the display.
     """
     global text, global_score
-    year, month, day, weekday, hour, minute, second, _ = rtc.datetime()
+    now = time.localtime()
+    hour = now.tm_hour
+    minute = now.tm_min
     time_str = "{:02}:{:02}".format(hour, minute)
     global_score = score
     score_str = str(score)
@@ -302,10 +355,8 @@ def display_score_and_time(score):
     draw_text_small(score_x, score_y, score_str, 255, 255, 255)
     draw_text_small(time_x, time_y, time_str, 255, 255, 255)
 
-
 # Global variable for the grid
 grid = bytearray(WIDTH * HEIGHT)
-
 
 def initialize_grid():
     """
@@ -314,20 +365,17 @@ def initialize_grid():
     global grid
     grid = bytearray(WIDTH * HEIGHT)
 
-
 def get_grid_value(x, y):
     """
     Get the value at position (x, y) in the grid.
     """
     return grid[y * WIDTH + x]
 
-
 def set_grid_value(x, y, value):
     """
     Set the value at position (x, y) in the grid.
     """
     grid[y * WIDTH + x] = value
-
 
 def flood_fill(
     x, y, accessible_mark, non_accessible_mark, red, green, blue, max_steps=8000
@@ -360,269 +408,6 @@ def flood_fill(
             stack.append((x, y - 1))
 
     return len(stack) > 0  # Indicates if there's still work left
-
-
-rtc = machine.RTC()
-
-
-class Nunchuck:
-    """
-    Class to handle Wii Nunchuk inputs over I2C.
-    """
-
-    def __init__(self, i2c, poll=True, poll_interval=50):
-        self.i2c = i2c
-        self.address = 0x52
-        self.buffer = bytearray(6)  # Buffer to store sensor data
-
-        # Initialization sequence for the Nunchuk
-        self.i2c.writeto(self.address, b"\xf0\x55")
-        self.i2c.writeto(self.address, b"\xfb\x00")
-
-        # Timestamp of the last polling update
-        self.last_poll = time.ticks_ms()
-
-        # Polling interval in milliseconds
-        self.polling_threshold = poll_interval if poll else -1
-
-    def update(self):
-        """
-        Update the buffer with new data from the Nunchuk.
-        """
-        self.i2c.writeto(self.address, b"\x00")
-        self.i2c.readfrom_into(self.address, self.buffer)
-
-    def __poll(self):
-        """
-        Internal method to handle polling based on the threshold.
-        """
-        if (
-            self.polling_threshold > 0
-            and time.ticks_diff(time.ticks_ms(), self.last_poll)
-            > self.polling_threshold
-        ):
-            self.update()
-            self.last_poll = time.ticks_ms()
-
-    def accelerator(self):
-        """
-        Get accelerometer data.
-        """
-        self.__poll()
-        return (
-            (self.buffer[2] << 2) + ((self.buffer[5] & 0x0C) >> 2),
-            (self.buffer[3] << 2) + ((self.buffer[5] & 0x30) >> 4),
-            (self.buffer[4] << 2) + ((self.buffer[5] & 0xC0) >> 6),
-        )
-
-    def buttons(self):
-        """
-        Get button states (C and Z buttons).
-        """
-        self.__poll()
-        return (
-            not (self.buffer[5] & 0x02),  # C button
-            not (self.buffer[5] & 0x01),  # Z button
-        )
-
-    def joystick(self):
-        """
-        Get joystick positions.
-        """
-        self.__poll()
-        return (self.buffer[0], self.buffer[1])
-
-    def joystick_left(self):
-        """
-        Check if joystick is tilted to the left.
-        """
-        self.__poll()
-        return self.buffer[0] < 55
-
-    def joystick_right(self):
-        """
-        Check if joystick is tilted to the right.
-        """
-        self.__poll()
-        return self.buffer[0] > 200
-
-    def joystick_up(self):
-        """
-        Check if joystick is tilted up.
-        """
-        self.__poll()
-        return self.buffer[1] > 200
-
-    def joystick_down(self):
-        """
-        Check if joystick is tilted down.
-        """
-        self.__poll()
-        return self.buffer[1] < 55
-
-    def joystick_center(self):
-        """
-        Check if joystick is in the center position.
-        """
-        self.__poll()
-        return 100 < self.buffer[0] < 155 and 100 < self.buffer[1] < 155
-
-    def joystick_x(self):
-        """
-        Get X-axis value of the joystick.
-        """
-        self.__poll()
-        return (self.buffer[0] >> 2) - 34
-
-    def joystick_y(self):
-        """
-        Get Y-axis value of the joystick.
-        """
-        self.__poll()
-        return (self.buffer[1] >> 2) - 34
-
-    def is_shaking(self):
-        """
-        Detect shaking motion using accelerometer data.
-        """
-        x, y, z = self.accelerator()
-        return max(x, y, z) > 800  # Threshold for detection
-
-
-class Joystick:
-    """
-    Class to handle joystick inputs, either via analog inputs or I2C (Nunchuk).
-    """
-
-    def __init__(self, adc_x, adc_y, adc_button):
-        # Choose the joystick mode: 'analog' or 'i2c'
-        self.joystick_mode = "i2c"
-        # self.joystick_mode = "analog"  # Uncomment to use analog mode
-
-        if self.joystick_mode == "i2c":
-            self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
-            self.nunchuck = Nunchuck(self.i2c)
-        elif self.joystick_mode == "analog":
-            self.adc_x = adc_x
-            self.adc_y = adc_y
-            self.adc_button = adc_button
-            self.last_direction = None
-            self.last_read_time = 0
-            self.debounce_interval = 150
-
-    def read_direction(self, possible_directions, debounce=True):
-        """
-        Read the joystick direction based on possible directions.
-        """
-        if self.joystick_mode == "i2c":
-            x, y = self.nunchuck.joystick()
-            # Map joystick positions to directions
-            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
-                return JOYSTICK_DOWN_LEFT
-            elif x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
-                return JOYSTICK_DOWN_RIGHT
-            elif x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
-                return JOYSTICK_UP_LEFT
-            elif x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
-                return JOYSTICK_UP_RIGHT
-            elif x < 100 and JOYSTICK_LEFT in possible_directions:
-                return JOYSTICK_LEFT
-            elif x > 150 and JOYSTICK_RIGHT in possible_directions:
-                return JOYSTICK_RIGHT
-            elif y < 100 and JOYSTICK_DOWN in possible_directions:
-                return JOYSTICK_DOWN
-            elif y > 150 and JOYSTICK_UP in possible_directions:
-                return JOYSTICK_UP
-            else:
-                return None
-
-        current_time = time.ticks_ms()
-
-        if debounce and current_time - self.last_read_time < self.debounce_interval:
-            return self.last_direction
-
-        value_x = self.adc_x.read_u16() - 30039
-        value_y = self.adc_y.read_u16() - 28919
-
-        threshold = 15000  # Threshold for detecting direction
-        direction = None
-        if (
-            value_y < -threshold
-            and value_x < -threshold
-            and JOYSTICK_DOWN_LEFT in possible_directions
-        ):
-            direction = JOYSTICK_DOWN_LEFT
-        elif (
-            value_y < -threshold
-            and value_x > threshold
-            and JOYSTICK_UP_LEFT in possible_directions
-        ):
-            direction = JOYSTICK_UP_LEFT
-        elif (
-            value_y > threshold
-            and value_x < -threshold
-            and JOYSTICK_DOWN_RIGHT in possible_directions
-        ):
-            direction = JOYSTICK_DOWN_RIGHT
-        elif (
-            value_y > threshold
-            and value_x > threshold
-            and JOYSTICK_UP_RIGHT in possible_directions
-        ):
-            direction = JOYSTICK_UP_RIGHT
-        elif value_y < -threshold and JOYSTICK_LEFT in possible_directions:
-            direction = JOYSTICK_LEFT
-        elif value_y > threshold and JOYSTICK_RIGHT in possible_directions:
-            direction = JOYSTICK_RIGHT
-        elif value_x < -threshold and JOYSTICK_DOWN in possible_directions:
-            direction = JOYSTICK_DOWN
-        elif value_x > threshold and JOYSTICK_UP in possible_directions:
-            direction = JOYSTICK_UP
-
-        if debounce:
-            self.last_read_time = current_time
-
-        return direction
-
-    def is_pressed(self):
-        """
-        Check if the joystick button is pressed.
-        """
-        if self.joystick_mode == "i2c":
-            _, z = self.nunchuck.buttons()
-            return z
-        return self.adc_button.read_u16() < 100
-
-
-def hsb_to_rgb(hue, saturation, brightness):
-    """
-    Convert HSB color space to RGB.
-    """
-    hue_normalized = (hue % 360) / 60
-    hue_index = int(hue_normalized)
-    hue_fraction = hue_normalized - hue_index
-
-    value1 = brightness * (1 - saturation)
-    value2 = brightness * (1 - saturation * hue_fraction)
-    value3 = brightness * (1 - saturation * (1 - hue_fraction))
-
-    if hue_index == 0:
-        red, green, blue = brightness, value3, value1
-    elif hue_index == 1:
-        red, green, blue = value2, brightness, value1
-    elif hue_index == 2:
-        red, green, blue = value1, brightness, value3
-    elif hue_index == 3:
-        red, green, blue = value1, value2, brightness
-    elif hue_index == 4:
-        red, green, blue = value3, value1, brightness
-    elif hue_index == 5:
-        red, green, blue = brightness, value1, value2
-    else:
-        red, green, blue = 0, 0, 0
-
-    return int(red * 255), int(green * 255), int(blue * 255)
-
 
 def hsb_to_rgb(hue, saturation, brightness):
     """
@@ -661,9 +446,94 @@ def hsb_to_rgb(hue, saturation, brightness):
 
     return int(red * 255), int(green * 255), int(blue * 255)
 
+# Input Handler for keyboard events
+class InputHandler:
+    def __init__(self):
+        self.keys_pressed = set()
+        self.quit = False
 
-# Game Classes
+    def process_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.quit = True
+            elif event.type == pygame.KEYDOWN:
+                self.keys_pressed.add(event.key)
+            elif event.type == pygame.KEYUP:
+                if event.key in self.keys_pressed:
+                    self.keys_pressed.remove(event.key)
 
+input_handler = InputHandler()
+
+# Joystick and Nunchuk classes adapted for keyboard input
+class Nunchuck:
+    def __init__(self):
+        pass
+
+    def buttons(self):
+        """
+        Simulate buttons C and Z.
+        Return tuple of booleans (C_button, Z_button)
+        """
+        keys = input_handler.keys_pressed
+        c_button = pygame.K_x in keys  # Map 'X' key to C button
+        z_button = pygame.K_y in keys  # Map 'Y' key to Z button
+        return c_button, z_button
+
+class Joystick:
+    """
+    Class to handle joystick inputs via keyboard.
+    """
+
+    def __init__(self):
+        self.nunchuck = Nunchuck()
+
+    def read_direction(self, possible_directions, debounce=True):
+        """
+        Read the joystick direction based on possible directions.
+        """
+        direction = None
+        keys = input_handler.keys_pressed
+        if (
+            pygame.K_LEFT in keys
+            and pygame.K_UP in keys
+            and JOYSTICK_UP_LEFT in possible_directions
+        ):
+            direction = JOYSTICK_UP_LEFT
+        elif (
+            pygame.K_RIGHT in keys
+            and pygame.K_UP in keys
+            and JOYSTICK_UP_RIGHT in possible_directions
+        ):
+            direction = JOYSTICK_UP_RIGHT
+        elif (
+            pygame.K_LEFT in keys
+            and pygame.K_DOWN in keys
+            and JOYSTICK_DOWN_LEFT in possible_directions
+        ):
+            direction = JOYSTICK_DOWN_LEFT
+        elif (
+            pygame.K_RIGHT in keys
+            and pygame.K_DOWN in keys
+            and JOYSTICK_DOWN_RIGHT in possible_directions
+        ):
+            direction = JOYSTICK_DOWN_RIGHT
+        elif pygame.K_LEFT in keys and JOYSTICK_LEFT in possible_directions:
+            direction = JOYSTICK_LEFT
+        elif pygame.K_RIGHT in keys and JOYSTICK_RIGHT in possible_directions:
+            direction = JOYSTICK_RIGHT
+        elif pygame.K_UP in keys and JOYSTICK_UP in possible_directions:
+            direction = JOYSTICK_UP
+        elif pygame.K_DOWN in keys and JOYSTICK_DOWN in possible_directions:
+            direction = JOYSTICK_DOWN
+
+        return direction
+
+    def is_pressed(self):
+        """
+        Check if the joystick button is pressed.
+        """
+        keys = input_handler.keys_pressed
+        return pygame.K_x in keys or pygame.K_y in keys
 
 class SimonGame:
     """
@@ -1758,7 +1628,7 @@ class TetrisGame:
         Returns:
             str: Direction input from the joystick.
         """
-        current_time = time.ticks_ms()
+        current_time = ticks_ms()
         if current_time - self.last_input_time < self.input_cooldown:
             return None
         self.last_input_time = current_time
@@ -1776,7 +1646,7 @@ class TetrisGame:
         global game_over
         game_over = False
         display.clear()
-        clock = time.ticks_ms()
+        clock = ticks_ms()
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
             if c_button:  # C-button ends the game
@@ -1784,8 +1654,8 @@ class TetrisGame:
 
             self.grid = self.create_grid(self.locked_positions)
             fall_speed = 500  # in milliseconds
-            current_time = time.ticks_ms()
-            self.fall_time += time.ticks_diff(current_time, clock)
+            current_time = ticks_ms()
+            self.fall_time += ticks_diff(current_time, clock)
             clock = current_time
 
             redraw_needed = False
@@ -2153,7 +2023,7 @@ class AsteroidGame:
         self.running = True
         self.score = 0
         while self.running:
-            start_time = time.ticks_ms()
+            start_time = ticks_ms()
 
             c_button, z_button = joystick.nunchuck.buttons()
             if c_button:  # C-Taste beendet das Spiel
@@ -2195,20 +2065,11 @@ class AsteroidGame:
             display_score_and_time(self.score)
 
             # Framerate kontrollieren
-            elapsed = time.ticks_diff(time.ticks_ms(), start_time)
+            elapsed = ticks_diff(ticks_ms(), start_time)
             frame_duration = 10 // FPS
             sleep_time = frame_duration - elapsed
             if sleep_time > 0:
                 sleep_ms(sleep_time)
-
-
-# Game Over Menu
-
-# class GameOverMenu:
-
-
-# Game Selector Class
-
 
 class GameSelect:
     """
@@ -2219,7 +2080,10 @@ class GameSelect:
         """
         Initialize the game selector with available games.
         """
-        self.joystick = Joystick(adc0, adc1, adc2)
+
+        self.joystick = Joystick()
+
+
         self.games = {
             "SNAKE": SnakeGame(),
             "SIMON": SimonGame(),
@@ -2322,7 +2186,7 @@ class GameOverMenu:
         """
         Initialize the game over menu with options.
         """
-        self.joystick = Joystick(adc0, adc1, adc2)
+        self.joystick = Joystick()
         self.menu_options = ["RETRY", "MENU"]
         self.selected_option = None
 
@@ -2376,15 +2240,10 @@ class GameOverMenu:
 
             sleep_ms(50)
 
-
-# Main Program Execution
-
 if __name__ == "__main__":
-    # Initialize the I2C bus for Nunchuk
-    i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20), freq=100000)
-
-    # Create the Nunchuk object
-    nunchuk = Nunchuck(i2c, poll=True, poll_interval=100)
+    # Initialize PyGame
+    pygame.init()
+    input_handler = InputHandler()
 
     # Start the game selection
     game_state = GameSelect()
