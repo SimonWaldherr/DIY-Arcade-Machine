@@ -1,6 +1,7 @@
 # DIY-Arcade-Machine
 
-this branch contains the PyGame version - which emulates the real Arcade hardware.  
+This branch contains the PyGame version - which emulates the real Arcade hardware.  
+The original version is [here](https://github.com/SimonWaldherr/DIY-Arcade-Machine).  
 
 [![short video of the diy arcade console in action (on youtube)](https://img.youtube.com/vi/er3-OS2g9QY/0.jpg)](https://www.youtube.com/watch?v=er3-OS2g9QY)
 
