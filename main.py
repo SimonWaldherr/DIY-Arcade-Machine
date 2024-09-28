@@ -464,6 +464,13 @@ class InputHandler:
 
 input_handler = InputHandler()
 
+def reset_input_handler():
+    input_handler.keys_pressed.clear()
+
+# Exception to restart the program / go back to the main menu
+class RestartProgram(Exception):
+    pass
+
 # Joystick and Nunchuk classes adapted for keyboard input
 class Nunchuck:
     def __init__(self):
@@ -475,8 +482,15 @@ class Nunchuck:
         Return tuple of booleans (C_button, Z_button)
         """
         keys = input_handler.keys_pressed
+
         c_button = pygame.K_x in keys  # Map 'X' key to C button
         z_button = pygame.K_y in keys  # Map 'Y' key to Z button
+        esc_button = pygame.K_ESCAPE in keys  # Map 'ESC' key to exit
+
+        # if both C and Z buttons are pressed, restart the program
+        if (c_button and z_button) or esc_button:
+            raise RestartProgram()
+
         return c_button, z_button
 
 class Joystick:
@@ -532,6 +546,16 @@ class Joystick:
         """
         Check if the joystick button is pressed.
         """
+
+        keys = input_handler.keys_pressed
+
+        if pygame.K_RETURN in keys:
+            return True
+
+        if pygame.K_ESCAPE in keys:
+            pygame.quit()  # Beendet pygame
+            raise SystemExit  # Beendet das Programm komplett
+        
         keys = input_handler.keys_pressed
         return pygame.K_x in keys or pygame.K_y in keys
 
@@ -2167,14 +2191,10 @@ class GameSelect:
                 self.run_game_selector()
             else:
                 last_game = self.selected_game
-                try:
-                    selected_game = self.selected_game
-                    self.selected_game = None
-                    self.games[selected_game].main_loop(self.joystick)
-                    GameOverMenu().run_game_over_menu()
-                except Exception as error:
-                    print(f"Error: {error}")
-                    self.selected_game = None
+                selected_game = self.selected_game
+                self.selected_game = None
+                self.games[selected_game].main_loop(self.joystick)
+                GameOverMenu().run_game_over_menu()
 
 
 class GameOverMenu:
@@ -2240,16 +2260,41 @@ class GameOverMenu:
 
             sleep_ms(50)
 
+def main():
+    """ global last_game, global_score
+    last_game = None
+    global_score = 0
+    GameSelect().run() """
+
+    try:
+        while True:
+            # Start the game selection
+            game_state = GameSelect()
+
+            # Run the main game loop
+            game_state.run()
+    except RestartProgram:
+        # reset the game state and buttons
+        game_state = None
+        reset_input_handler()  
+
+        
+
+        print("Programm wird neu gestartet...")
+        main()  # Starte main() erneut
+
+    
+
 if __name__ == "__main__":
     # Initialize PyGame
     pygame.init()
-    input_handler = InputHandler()
 
-    # Start the game selection
-    game_state = GameSelect()
+    pygame.display.set_caption("MicroGames")
+
+    input_handler = InputHandler()
 
     # Start the display
     display.start()
 
-    # Run the main game loop
-    game_state.run()
+    main()
+    
