@@ -1,12 +1,12 @@
 # DIY-Arcade-Machine
 
-[![short video of the diy arcade console in action (on youtube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
+[![Short video of the DIY Arcade Console in action (on YouTube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
 
-## my very own arcade machine
+## My Very Own Arcade Machine
 
-Welcome to the DIY-Arcade-Machine project! This project is a fun and interactive way to create your very own arcade machine using the Interstate 75 - RGB LED Matrix Driver from Pimoroni (PIM584), a 64x64 Pixel RGB LED Matrix with Hub75 connector, and a KY-023 Joystick Module (or a Nunchuck). The project includes seven games which are inspired by the classic games: Simon, Snake, Qix, Breakout, Tetris, Asteroid and Pong, all playable on a colorful LED matrix display.
+Welcome to the DIY-Arcade-Machine project! This is a hands-on project to build your very own arcade machine using the Interstate 75 - RGB LED Matrix Driver from Pimoroni (PIM584), a 64x64 Pixel RGB LED Matrix with a Hub75 connector, and a KY-023 Joystick Module (or a Nunchuck). The project includes several games inspired by the classics: Simon, Snake, Qix, Breakout, Tetris, Asteroid, and Pong, all playable on a vibrant LED matrix display.
 
-If you want test it without building your own LED-Matrix-DIY-Arcade-Machine, you can try the [PyGame-Branch](https://github.com/SimonWaldherr/DIY-Arcade-Machine/tree/pygame) which "simulates" the games on normal PC/Mac Computers.
+Don’t have the hardware yet? You can still try out the games by running the [PyGame Branch](https://github.com/SimonWaldherr/DIY-Arcade-Machine/tree/pygame), which simulates the experience on your PC or Mac.
 
 ## Table of Contents
 
@@ -26,120 +26,89 @@ If you want test it without building your own LED-Matrix-DIY-Arcade-Machine, you
 
 ## Hardware Requirements
 
-- Interstate 75 (W) from Pimoroni (PIM584)
-  - [pimoroni shop](https://shop.pimoroni.com/products/interstate-75?variant=39443584417875)
-  - [digikey shop](https://www.digikey.de/de/products/detail/pimoroni-ltd/PIM584/15851385)
-  - [adafruit shop](https://www.adafruit.com/product/5342)
-  - [berrybase shop](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
-- [64x64 Pixel RGB LED Matrix with Hub75 connector](https://amzn.to/3Yadyhh)
-- some kind of joystick
-  - [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul) with cables
-  - or a [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) with a [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71?&linkCode=ll1&tag=produktverglei.ch-21&linkId=feb10aa9fd07044675cf07d7429703c1&language=de_DE&ref_=as_li_ss_tl)
-- Connecting wires and power supply
-- if you need a box and nice case for the joystick, you can print it:
-  - [Joystick](https://www.thingiverse.com/thing:700346)
-  - [LED-Matrix-Case](https://www.thingiverse.com/thing:6751325)
-- i also recommend a mesh and diffuser
-  - [mesh](https://www.thingiverse.com/thing:6751323)
-  - [plexiglass with satin finish on one side](https://acrylglas-shop.com/plexiglas-gs-led-9h04-sc-black-white-hinterleuchtung-3-mm-staerke)
+- **Interstate 75 (W) by Pimoroni (PIM584)**
+  - Available at: [Pimoroni](https://shop.pimoroni.com/products/interstate-75?variant=39443584417875) | [DigiKey](https://www.digikey.de/de/products/detail/pimoroni-ltd/PIM584/15851385) | [Adafruit](https://www.adafruit.com/product/5342) | [BerryBase](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
+- **64x64 Pixel RGB LED Matrix with Hub75 connector**  
+  - [Amazon link](https://amzn.to/3Yadyhh)
+- **Joystick options**  
+  - [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul) or  
+  - [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) + [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71)
+- **Wiring and Power Supply**
+- **Optional 3D-printed enclosures**  
+  - [Joystick Case](https://www.thingiverse.com/thing:700346)  
+  - [LED Matrix Case](https://www.thingiverse.com/thing:6751325)
+- **Optional Mesh and Diffuser**  
+  - [Mesh](https://www.thingiverse.com/thing:6751323)  
+  - [Satin-Finished Plexiglass](https://acrylglas-shop.com/plexiglas-gs-led-9h04-sc-black-white-hinterleuchtung-3-mm-staerke)
 
 ## Software Requirements
 
 - [MicroPython](https://github.com/pimoroni/pimoroni-pico/releases/download/v1.23.0-1/pico-v1.23.0-1-pimoroni-micropython.uf2)
-- [Thonny](https://thonny.org/)
+- [Thonny IDE](https://thonny.org/)
 
 ## Installation
 
-1. **Set up your microcontroller with MicroPython**:
-   - Follow the instructions for your specific microcontroller to install MicroPython.
+### 1. Set up your Microcontroller with MicroPython
+- Follow the instructions for your microcontroller to flash it with MicroPython.
 
-2. **Connect the hardware**:
-   - Connect the Interstate 75 to the RGB LED Matrix using the Hub75 connector.
-   - Connect the KY-023 Joystick Module to the appropriate GPIO pins on the microcontroller.
+### 2. Connect the Hardware
+- Connect the Interstate 75 to the RGB LED Matrix using the Hub75 connector.
+- Connect the KY-023 Joystick Module (or Nunchuck) to the GPIO pins on the microcontroller.
 
-3. **Upload the code**:
-   - Copy the provided Python script to your microcontroller using a tool like Thonny.
+### 3. Upload the Code
+- Use Thonny (or another compatible tool) to copy the provided Python script to your microcontroller.
 
 ## Usage
 
-1. **Power up your microcontroller**:
-   - Ensure that all components are properly connected and power up your microcontroller.
+### 1. Power Up
+- Ensure all connections are secure, then power up the microcontroller.
 
-2. **Run the main script**:
-   - The script will start the game selector interface on the LED matrix display.
+### 2. Start the Game Selector
+- Once powered, the game selector interface will appear on the LED matrix.
 
-3. **Select a game**:
-   - Use the joystick to navigate and select a game from the menu. Press the joystick button to start the selected game.
+### 3. Select a Game
+- Use the joystick to navigate the menu and select a game. Press the joystick button to start.
 
-4. **Play the game**:
-    - Follow the instructions below to play the selected game. Use the joystick to control the game.
+### 4. Play
+- Refer to the instructions below for controls on each game.
 
-5. **Exit the game**:
-    - Press both joystick buttons to exit the game and return to the game selector interface.
+### 5. Exit a Game
+- To exit a game and return to the menu, press both joystick buttons simultaneously.
 
 ## Games
 
 ### Simon
-
-Simon is a memory game where the player must remember and repeat a sequence of colors.
-
-- **Controls**:
-  - Use the joystick to select the corresponding quadrant of the flashed color.
-  - Repeat the sequence shown on the display.
+A memory game where the player must recall and repeat a sequence of colors.
+- **Controls**: Use the joystick to select the flashed color. Repeat the sequence as it grows.
 
 ### Asteroid
-
-Asteroid is a game where you have to shoot the asteroids.
-
-- **Controls**:
-  - Use the joystick to rotate and accelerate the space ship.
-  - Use the joystick button to shoot.
+A classic shooter where the goal is to destroy asteroids.
+- **Controls**: Use the joystick to rotate and move your ship. Press the button to shoot.
 
 ### Snake
-
-Snake is a classic game where the player controls a snake to eat targets and grow in length.
-
-- **Controls**:
-  - Use the joystick to control the direction of the snake (UP, DOWN, LEFT, RIGHT).
-  - Avoid running into the snake's own body.
+Guide the snake to eat targets and grow in length, but avoid hitting the walls or yourself.
+- **Controls**: Use the joystick to control the snake's direction (UP, DOWN, LEFT, RIGHT).
 
 ### Pong
-
-Pong is a classic table tennis game where the player controls a paddle to hit a ball back and forth.
-
-- **Controls**:
-  - Use the joystick to move the paddle up and down.
-  - Keep the ball in play to score points.
+A classic two-player table tennis game, where you control a paddle to keep the ball in play.
+- **Controls**: Move the paddle up and down using the joystick.
 
 ### Breakout
+Break the bricks with the ball without letting it fall off the screen.
+- **Controls**: Use the joystick to move the paddle left and right. Break as many bricks as possible!
 
-Breakout is the game where you break the wall bricks with a ball.
-
-- **Controls**:
-  - Use the joystick to move the paddle left and right.
-  - Keep the ball in play and break bricks to score points.
- 
 ### Qix
-
-Qix is a game where you claim territory on a map, but if you get hit a the enemy you loose.
-
-- **Controls**:
-  - Use the joystick to move the player.
-  - claim terretory and avoid to get hit.
-
-i also implemented the game in golang using ebiten, you can find it [here](https://github.com/SimonWaldherr/golang-examples/blob/master/non-std-lib/ebiten-qix.go).
+Claim territory while avoiding enemies. Move strategically to win.
+- **Controls**: Move with the joystick to claim territory while avoiding enemy contact.  
+  - For a version written in Go using the Ebiten engine, [click here](https://github.com/SimonWaldherr/golang-examples/blob/master/non-std-lib/ebiten-qix.go).
 
 ### Tetris
-
-Tetris is a game where you have to stack blocks to make lines.
-
-- **Controls**:
-  - Use the joystick to move the blocks left and right.
-  - Use the joystick to rotate the blocks.
-  - Use the joystick to move the blocks down faster.
+Stack blocks to form complete lines and score points.
+- **Controls**: Use the joystick to move and rotate the blocks. Speed them up by moving them down.
 
 ## Fun
 
-Enjoy building and playing on your very own DIY-Arcade-Machine! If you have any questions or need further assistance, feel free to reach out.
+Enjoy building and gaming on your very own DIY-Arcade-Machine! If you encounter any issues or need assistance, feel free to open an issue or reach out.
 
-Happy Gaming!
+**Happy Gaming!**
+
