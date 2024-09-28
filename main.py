@@ -364,6 +364,10 @@ def flood_fill(
 
 rtc = machine.RTC()
 
+# Exception to restart the program / go back to the main menu
+class RestartProgram(Exception):
+    pass
+
 
 class Nunchuck:
     """
@@ -425,7 +429,9 @@ class Nunchuck:
         z_button = not (self.buffer[5] & 0x01)
 
         if c_button and z_button:
-            machine.reset()
+            #machine.reset()
+            raise RestartProgram()
+
 
         return c_button, z_button
 
@@ -2307,15 +2313,10 @@ class GameSelect:
                 self.run_game_selector()
             else:
                 last_game = self.selected_game
-                try:
-                    selected_game = self.selected_game
-                    self.selected_game = None
-                    self.games[selected_game].main_loop(self.joystick)
-                    GameOverMenu().run_game_over_menu()
-                except Exception as error:
-                    print(f"Error: {error}")
-                    self.selected_game = None
-
+                selected_game = self.selected_game
+                self.selected_game = None
+                self.games[selected_game].main_loop(self.joystick)
+                GameOverMenu().run_game_over_menu()
 
 class GameOverMenu:
     """
@@ -2380,8 +2381,19 @@ class GameOverMenu:
 
             sleep_ms(50)
 
+def main():
+    try:
+        while True:
+            # Start the game selection
+            game_state = GameSelect()
 
-# Main Program Execution
+            # Run the main game loop
+            game_state.run()
+    except RestartProgram:
+        # reset the game state and buttons
+        game_state = None
+        game_over = False
+        main()  # Starte main() erneut
 
 if __name__ == "__main__":
     # Initialize the I2C bus for Nunchuk
@@ -2390,11 +2402,7 @@ if __name__ == "__main__":
     # Create the Nunchuk object
     nunchuk = Nunchuck(i2c, poll=True, poll_interval=100)
 
-    # Start the game selection
-    game_state = GameSelect()
-
     # Start the display
     display.start()
-
-    # Run the main game loop
-    game_state.run()
+    
+    main()
