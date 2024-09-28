@@ -71,6 +71,12 @@ If you want test it without building your own LED-Matrix-DIY-Arcade-Machine, you
 3. **Select a game**:
    - Use the joystick to navigate and select a game from the menu. Press the joystick button to start the selected game.
 
+4. **Play the game**:
+    - Follow the instructions below to play the selected game. Use the joystick to control the game.
+
+5. **Exit the game**:
+    - Press both joystick buttons to exit the game and return to the game selector interface.
+
 ## Games
 
 ### Simon
