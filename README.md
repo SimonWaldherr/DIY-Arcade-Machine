@@ -35,8 +35,8 @@ Don’t have the hardware yet? You can still try out the games by running the [P
   - [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) + [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71)
 - **Wiring and Power Supply**
 - **Optional 3D-printed enclosures**  
-  - [Joystick Case](https://www.thingiverse.com/thing:700346)  
-  - [LED Matrix Case](https://www.thingiverse.com/thing:6751325)
+  - [Joystick Case](https://www.thingiverse.com/thing:700346) if you use the KY-023  
+  - [LED Matrix Case](https://www.thingiverse.com/thing:6751325) or [the tilted version](https://www.thingiverse.com/thing:6781604)
 - **Optional Mesh and Diffuser**  
   - [Mesh](https://www.thingiverse.com/thing:6751323)  
   - [Satin-Finished Plexiglass](https://acrylglas-shop.com/plexiglas-gs-led-9h04-sc-black-white-hinterleuchtung-3-mm-staerke)
