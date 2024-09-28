@@ -420,10 +420,14 @@ class Nunchuck:
         Get button states (C and Z buttons).
         """
         self.__poll()
-        return (
-            not (self.buffer[5] & 0x02),  # C button
-            not (self.buffer[5] & 0x01),  # Z button
-        )
+
+        c_button = not (self.buffer[5] & 0x02)
+        z_button = not (self.buffer[5] & 0x01)
+
+        if c_button and z_button:
+            machine.reset()
+
+        return c_button, z_button
 
     def joystick(self):
         """
