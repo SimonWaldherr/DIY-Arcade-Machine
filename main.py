@@ -193,6 +193,27 @@ CHAR_DICT = {
     "@": "3c66dececec07e00",
     "^": "183c666600000000",
     "█": "ffffffffffffffff",
+    "░": "",
+    "▒": "",
+    "▓": "",
+    "□": "",
+    "■": "",
+    "▪": "",
+    "▫": "",
+    "▲": "",
+    "▼": "",
+    "►": "",
+    "◄": "",
+    "↕": "",
+    "↔": "",
+    "↑": "",
+    "↓": "",
+    "→": "",
+    "←": "",
+    "∟": "",
+    "∠": "",
+    "∡": "",
+    "|": "1818181818181818",
 }
 
 NUMS = {
@@ -210,6 +231,7 @@ NUMS = {
     ".": ["00000", "00000", "00000", "00000", "00001"],
     ":": ["00000", "00100", "00000", "00100", "00000"],
     "/": ["00001", "00010", "00100", "01000", "10000"],
+    "|": ["00100", "00100", "00100", "00100", "00100"],
     "-": ["00000", "00000", "11111", "00000", "00000"],
     "=": ["00000", "11111", "00000", "11111", "00000"],
     "+": ["00000", "00100", "01110", "00100", "00000"],
@@ -1027,6 +1049,405 @@ class SnakeGame:
             sleep_ms(max(0.03, (0.09 - max(0.01, self.snake_length / 300))) * 1000)
 
 
+class SnakeZeroPlayerGame:
+    """
+    Class representing the Snake game.
+    """
+
+    def __init__(self):
+        """
+        Initialize the Snake game variables.
+        """
+        self.snake = [(32, 32)]
+        self.snake_length = 3
+        self.snake_direction = "UP"
+        self.score = 0
+        self.green_targets = []
+        self.target = self.random_target()
+        self.step_counter = 0
+        self.step_counter2 = 0
+
+    def restart_game(self):
+        """
+        Restart the game by resetting variables and clearing the display.
+        """
+        self.snake = [(32, 32)]
+        self.snake_length = 3
+        self.snake_direction = "UP"
+        self.score = 0
+        self.green_targets = []
+        display.clear()
+        self.place_target()
+
+    def random_target(self):
+        """
+        Generate a random position for the target.
+
+        Returns:
+            tuple: Coordinates of the target.
+        """
+        return (random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8))
+
+    def place_target(self):
+        """
+        Place the target on the display.
+        """
+        self.target = self.random_target()
+        display.set_pixel(self.target[0], self.target[1], 255, 0, 0)
+
+    def place_green_target(self):
+        """
+        Place a green target on the display.
+        """
+        x, y = random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8)
+        self.green_targets.append((x, y, 256))
+        display.set_pixel(x, y, 0, 255, 0)
+
+    def update_green_targets(self):
+        """
+        Update the lifespan of green targets and remove them if necessary.
+        """
+        new_green_targets = []
+        for x, y, lifespan in self.green_targets:
+            if lifespan > 1:
+                new_green_targets.append((x, y, lifespan - 1))
+            else:
+                display.set_pixel(x, y, 0, 0, 0)
+        self.green_targets = new_green_targets
+
+    def check_self_collision(self):
+        """
+        Check for collision of the snake with itself.
+
+        If collision is detected, the game ends.
+        """
+        global global_score, game_over
+        head_x, head_y = self.snake[0]
+        body = self.snake[1:]
+        potential_moves = {
+            "UP": (head_x, head_y - 1),
+            "DOWN": (head_x, head_y + 1),
+            "LEFT": (head_x - 1, head_y),
+            "RIGHT": (head_x + 1, head_y),
+        }
+        safe_moves = {
+            direction: pos
+            for direction, pos in potential_moves.items()
+            if pos not in body
+        }
+        if potential_moves[self.snake_direction] not in safe_moves.values():
+            if safe_moves:
+                self.snake_direction = random.choice(list(safe_moves.keys()))
+            else:
+                global_score = self.score
+                game_over = True
+                return
+
+    def update_snake_position(self):
+        """
+        Update the position of the snake based on its current direction.
+        """
+        head_x, head_y = self.snake[0]
+        if self.snake_direction == "UP":
+            head_y -= 1
+        elif self.snake_direction == "DOWN":
+            head_y += 1
+        elif self.snake_direction == "LEFT":
+            head_x -= 1
+        elif self.snake_direction == "RIGHT":
+            head_x += 1
+
+        head_x %= WIDTH
+        head_y %= HEIGHT
+
+        self.snake.insert(0, (head_x, head_y))
+        if len(self.snake) > self.snake_length:
+            tail = self.snake.pop()
+            display.set_pixel(tail[0], tail[1], 0, 0, 0)
+
+    def check_target_collision(self):
+        """
+        Check if the snake has collided with the target.
+
+        If so, increase the snake length and score, and place a new target.
+        """
+        head_x, head_y = self.snake[0]
+        if (head_x, head_y) == self.target:
+            self.snake_length += 2
+            self.place_target()
+            self.score += 1
+
+    def check_green_target_collision(self):
+        """
+        Check if the snake has collided with a green target.
+
+        If so, reduce the snake length.
+        """
+        head_x, head_y = self.snake[0]
+        for x, y, lifespan in self.green_targets:
+            if (head_x, head_y) == (x, y):
+                self.snake_length = max(self.snake_length // 2, 2)
+                self.green_targets.remove((x, y, lifespan))
+                display.set_pixel(x, y, 0, 0, 0)
+
+    def draw_snake(self):
+        """
+        Draw the snake on the display with a color gradient.
+        """
+        hue = 0
+        for idx, (x, y) in enumerate(self.snake[: self.snake_length]):
+            hue = (hue + 5) % 360
+            red, green, blue = hsb_to_rgb(hue, 1, 1)
+            display.set_pixel(x, y, red, green, blue)
+        for idx in range(self.snake_length, len(self.snake)):
+            x, y = self.snake[idx]
+            display.set_pixel(x, y, 0, 0, 0)
+
+    def find_nearest_target(self, head_x, head_y, green_targets, red_target):
+        def manhattan_distance(x1, y1, x2, y2):
+            return abs(x1 - x2) + abs(y1 - y2)
+
+        min_distance_green = float('inf')
+        nearest_green_target = None
+
+        for x, y, _ in green_targets:
+            distance = manhattan_distance(head_x, head_y, x, y)
+            if distance < min_distance_green:
+                min_distance_green = distance
+                nearest_green_target = (x, y)
+
+        distance_red = manhattan_distance(head_x, head_y, red_target[0], red_target[1])
+
+        if nearest_green_target and min_distance_green <= distance_red * 1.5:
+            return nearest_green_target
+        else:
+            return red_target
+
+
+    def update_direction(self):
+        """
+        Update the snake's direction towards the nearest target.
+        """
+        head_x, head_y = self.snake[0]
+        target_x, target_y = self.find_nearest_target(head_x, head_y, self.green_targets, self.target)
+        
+        opposite_directions = {'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
+
+        new_direction = self.snake_direction  # Default to current direction
+
+        if head_x == target_x:
+            if head_y < target_y and self.snake_direction != 'UP':
+                new_direction = 'DOWN'
+            elif head_y > target_y and self.snake_direction != 'DOWN':
+                new_direction = 'UP'
+        elif head_y == target_y:
+            if head_x < target_x and self.snake_direction != 'LEFT':
+                new_direction = 'RIGHT'
+            elif head_x > target_x and self.snake_direction != 'RIGHT':
+                new_direction = 'LEFT'
+        else:
+            if abs(head_x - target_x) < abs(head_y - target_y):
+                if head_x < target_x and self.snake_direction != 'LEFT':
+                    new_direction = 'RIGHT'
+                elif head_x > target_x and self.snake_direction != 'RIGHT':
+                    new_direction = 'LEFT'
+            else:
+                if head_y < target_y and self.snake_direction != 'UP':
+                    new_direction = 'DOWN'
+                elif head_y > target_y and self.snake_direction != 'DOWN':
+                    new_direction = 'UP'
+
+        # Prevent moving in the opposite direction immediately
+        if new_direction == opposite_directions[self.snake_direction]:
+            new_direction = self.snake_direction
+        
+        return new_direction
+
+
+    def main_loop(self, joystick):
+        """
+        Main game loop for the Snake game.
+
+        Args:
+            joystick (Joystick): The joystick object.
+        """
+        global game_over
+        game_over = False
+        self.restart_game()
+        step_counter = 0
+
+        while not game_over:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:  # C-button ends the game
+                game_over = True
+
+
+            self.step_counter += 1
+            self.step_counter2 += 1
+            
+            if self.step_counter2 % 1024 == 0:
+                self.place_green_target()
+            self.update_green_targets()
+
+            if step_counter % 8 == 0:
+                self.snake_direction = self.update_direction()
+            elif len(self.green_targets) > 0:
+                if self.snake[0][0] == self.green_targets[0][0] or self.snake[0][1] == self.green_targets[0][1]:
+                    self.snake_direction = self.update_direction()
+            elif self.snake[0][0] == self.target[0] or self.snake[0][1] == self.target[1] or self.snake[0][0] < 4 or self.snake[0][0] > WIDTH-4 or self.snake[0][1] < 4 or self.snake[0][1] > HEIGHT-4:
+                self.snake_direction = self.update_direction()
+
+
+            self.check_self_collision()
+            self.update_snake_position()
+            self.check_target_collision()
+            self.check_green_target_collision()
+            self.draw_snake()
+            display_score_and_time(self.score)
+
+            sleep_ms(max(0.03, (0.09 - max(0.01, self.snake_length / 300))) * 1000)
+
+ANT_COLOR = (255, 0, 0)
+UP, RIGHT, DOWN, LEFT = 0, 1, 2, 3
+class Ant:
+    """
+    Class representing Langton's Ant.
+    """
+    def __init__(self, x, y):
+        """
+        Initialize the ant's position and direction.
+        
+        Args:
+            x (int): Initial x-coordinate.
+            y (int): Initial y-coordinate.
+        """
+        self.x = x
+        self.y = y
+        self.direction = UP
+
+    def turn_right(self):
+        """
+        Turn the ant 90 degrees to the right.
+        """
+        self.direction = (self.direction + 1) % 4
+
+    def turn_left(self):
+        """
+        Turn the ant 90 degrees to the left.
+        """
+        self.direction = (self.direction - 1) % 4
+
+    def move_forward(self):
+        """
+        Move the ant one unit forward in the current direction.
+        Wrap around if the ant reaches the edge of the grid.
+        """
+        if self.direction == UP:
+            self.y -= 1
+        elif self.direction == RIGHT:
+            self.x += 1
+        elif self.direction == DOWN:
+            self.y += 1
+        elif self.direction == LEFT:
+            self.x -= 1
+
+        # Wrap around edges
+        self.x %= GRID_WIDTH
+        self.y %= GRID_HEIGHT
+
+class LangtonsAntZeroPlayerGame:
+    """
+    Class representing Langton's Ant game.
+    """
+    def __init__(self):
+        """
+        Initialize the Langton's Ant game variables.
+        """
+        self.grid = [[0 for _ in range(GRID_HEIGHT)] for _ in range(GRID_WIDTH)]
+        self.ant = Ant(GRID_WIDTH // 2, GRID_HEIGHT // 2)
+        self.steps = 0
+        self.speed = 100  # Milliseconds between steps
+
+    def restart_game(self):
+        """
+        Restart the game by resetting the grid and ant's position.
+        """
+        self.grid = [[0 for _ in range(GRID_HEIGHT)] for _ in range(GRID_WIDTH)]
+        self.ant = Ant(GRID_WIDTH // 2, GRID_HEIGHT // 2)
+        self.steps = 0
+        display.clear()
+
+    def update_ant(self):
+        """
+        Apply Langton's Ant rules to update the grid and ant's direction.
+        """
+        x, y = self.ant.x, self.ant.y
+        if self.grid[x][y] == 0:
+            self.ant.turn_right()
+            self.grid[x][y] = 1
+        else:
+            self.ant.turn_left()
+            self.grid[x][y] = 0
+        self.ant.move_forward()
+        self.steps += 1
+
+    def draw_ant(self):
+        """
+        Draw the ant on the display.
+        """
+        # Draw the ant
+        display.set_pixel(self.ant.x, self.ant.y, *ANT_COLOR)
+
+    def clear_ant_previous_position(self, prev_x, prev_y):
+        """
+        Clear the ant's previous position on the display.
+        
+        Args:
+            prev_x (int): Previous x-coordinate of the ant.
+            prev_y (int): Previous y-coordinate of the ant.
+        """
+        color = WHITE if self.grid[prev_x][prev_y] == 0 else BLACK
+        display.set_pixel(prev_x, prev_y, *color)
+
+    def draw_grid_cell(self, x, y):
+        """
+        Draw a single cell on the grid based on its state.
+        
+        Args:
+            x (int): x-coordinate of the cell.
+            y (int): y-coordinate of the cell.
+
+        Based on the state of the cell, the color is set to either black or white.
+        """
+        color = WHITE if self.grid[x][y] == 0 else BLACK
+        display.set_pixel(x, y, *color)
+
+    def main_loop(self):
+        """
+        Main game loop for Langton's Ant.
+        """
+        self.restart_game()
+
+        while True:
+            # Apply Langton's Ant rules
+            prev_x, prev_y = self.ant.x, self.ant.y
+            self.update_ant()
+
+            # Clear the ant's previous position
+            self.clear_ant_previous_position(prev_x, prev_y)
+
+            # Draw the new state of the grid cell where the ant moved
+            self.draw_grid_cell(prev_x, prev_y)
+
+            # Draw the ant at the new position
+            self.draw_ant()
+
+            # Optionally, display steps or other information
+            display_score_and_time(self.steps)
+
+            # Control the speed of the animation
+            sleep_ms(self.speed)
+
 class PongGame:
     """
     Class representing the Pong game.
@@ -1135,7 +1556,7 @@ class PongGame:
         Args:
             joystick (Joystick): The joystick object.
         """
-        # Update left paddle based on joystick input
+        # Update left paddle based on joystick input (or if zerp-player game based on AI)
         direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
         if direction == JOYSTICK_UP:
             self.left_paddle_y = max(self.left_paddle_y - self.paddle_speed, 0)
@@ -1594,7 +2015,6 @@ class QixGame:
                 break
 
             sleep_ms(50)
-
 
 class Tetrimino:
     """
@@ -2238,7 +2658,15 @@ class GameSelect:
             "PONG": PongGame(),
             "QIX": QixGame(),
             "TETRIS": TetrisGame(),
+            "|SNAKE": SnakeZeroPlayerGame(),
+            "|ANT": LangtonsAntZeroPlayerGame(),
         }
+
+        # Sort games: alphabetically for alphabetical keys, special characters at the end
+        self.sorted_games = sorted(
+            self.games.keys(), key=lambda k: (not k[0].isalpha(), k)
+        )
+
         self.selected_game = None
 
     def run_game(self, game_name):
@@ -2256,7 +2684,7 @@ class GameSelect:
         """
         Display the game selection menu and handle user input.
         """
-        games_list = list(self.games.keys())
+        games_list = self.sorted_games
         selected_index = 0
         previous_selected = None
         top_index = 0
@@ -2278,7 +2706,13 @@ class GameSelect:
                             if game_idx == selected_index
                             else (111, 111, 111)
                         )
-                        draw_text(8, 5 + i * 15, games_list[game_idx], *color)
+                        # if first character is a non alphabetical character, make the character red
+                        if not games_list[game_idx][0].isalpha():
+                            red = (255, 0, 0)
+                            draw_text(8, 5 + i * 15, games_list[game_idx][0], *red)
+                            draw_text(8 + 9, 5 + i * 15, games_list[game_idx][1:], *color)
+                        else:
+                            draw_text(8, 5 + i * 15, games_list[game_idx], *color)
 
             if current_time - last_move_time > debounce_delay:
                 direction = self.joystick.read_direction(
@@ -2302,6 +2736,7 @@ class GameSelect:
                 break
 
             sleep_ms(50)
+
 
     def run(self):
         """
