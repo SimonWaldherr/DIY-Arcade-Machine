@@ -185,6 +185,9 @@ NUMS = {
     ")": ["00100", "00010", "00010", "00010", "00100"],
 }
 
+def hypot(x, y):
+    return math.sqrt(x*x + y*y)
+
 def sleep_ms(ms):
     """
     Sleep for the given number of milliseconds.
@@ -536,6 +539,26 @@ class SimonGame:
     Class representing the Simon Says game.
     """
 
+    # Class-level attributes for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
+    HALF_WIDTH = WIDTH // 2
+    HALF_HEIGHT = (HEIGHT - 6) // 2  # Adjust for score display area
+
+    # Static colors for inactive and active states
+    COLORS_BRIGHT = [
+        (255, 0, 0),    # Red
+        (0, 255, 0),    # Green
+        (0, 0, 255),    # Blue
+        (255, 255, 0),  # Yellow
+    ]
+    INACTIVE_COLORS = [
+        (128, 0, 0),    # Dim Red
+        (0, 128, 0),    # Dim Green
+        (0, 0, 128),    # Dim Blue
+        (128, 128, 0),  # Dim Yellow
+    ]
+
     def __init__(self):
         """
         Initialize the Simon game with empty sequences.
@@ -547,44 +570,39 @@ class SimonGame:
         """
         Draw the four quadrants of the screen with inactive colors.
         """
-        half_width = WIDTH // 2
-        half_height = (HEIGHT - 6) // 2  # Adjust for score display area
-        draw_rectangle(0, 0, half_width - 1, half_height - 1, *inactive_colors[0])
-        draw_rectangle(half_width, 0, WIDTH - 1, half_height - 1, *inactive_colors[1])
-        draw_rectangle(0, half_height, half_width - 1, HEIGHT - 7, *inactive_colors[2])
-        draw_rectangle(
-            half_width, half_height, WIDTH - 1, HEIGHT - 7, *inactive_colors[3]
-        )
+        # Pre-calculate quadrant boundaries
+        quadrants = [
+            (0, 0, self.HALF_WIDTH, self.HALF_HEIGHT),
+            (self.HALF_WIDTH, 0, self.WIDTH, self.HALF_HEIGHT),
+            (0, self.HALF_HEIGHT, self.HALF_WIDTH, self.HEIGHT - 7),
+            (self.HALF_WIDTH, self.HALF_HEIGHT, self.WIDTH, self.HEIGHT - 7)
+        ]
+        
+        # Draw all quadrants with inactive colors
+        for i, (x1, y1, x2, y2) in enumerate(quadrants):
+            draw_rectangle(x1, y1, x2 - 1, y2 - 1, *self.INACTIVE_COLORS[i])
 
-    def flash_color(self, index, duration=0.5):
+    def flash_color(self, index, duration=500):
         """
         Flash a specific color on the screen.
 
         Args:
             index (int): Index of the color to flash.
-            duration (float): Duration to display the color.
+            duration (int): Duration to display the color in milliseconds.
         """
-        x = index % 2
-        y = index // 2
-        half_width = WIDTH // 2
-        half_height = (HEIGHT - 6) // 2
-        draw_rectangle(
-            x * half_width,
-            y * half_height,
-            (x + 1) * half_width - 1,
-            (y + 1) * half_height - 1,
-            *colors[index],
-        )
+        # Calculate quadrant boundaries based on the index
+        x_offset = (index % 2) * self.HALF_WIDTH
+        y_offset = (index // 2) * self.HALF_HEIGHT
 
-        sleep_ms(int(duration * 1000))
+        # Draw the active color in the specified quadrant
+        draw_rectangle(x_offset, y_offset, x_offset + self.HALF_WIDTH - 1,
+                       y_offset + self.HALF_HEIGHT - 1, *self.COLORS_BRIGHT[index])
 
-        draw_rectangle(
-            x * half_width,
-            y * half_height,
-            (x + 1) * half_width - 1,
-            (y + 1) * half_height - 1,
-            *inactive_colors[index],
-        )
+        sleep_ms(duration)
+
+        # Restore the inactive color
+        draw_rectangle(x_offset, y_offset, x_offset + self.HALF_WIDTH - 1,
+                       y_offset + self.HALF_HEIGHT - 1, *self.INACTIVE_COLORS[index])
 
     def play_sequence(self):
         """
@@ -592,7 +610,7 @@ class SimonGame:
         """
         for color_index in self.sequence:
             self.flash_color(color_index)
-            sleep_ms(500)
+            sleep_ms(200)  # Shorter sleep for smoother transitions
 
     def get_user_input(self, joystick):
         """
@@ -602,38 +620,20 @@ class SimonGame:
             joystick (Joystick): The joystick object.
 
         Returns:
-            str: The direction selected by the user.
+            int: The direction selected by the user mapped to the color index.
         """
-        while True:
-            direction = joystick.read_direction(
-                [
-                    JOYSTICK_UP_LEFT,
-                    JOYSTICK_UP_RIGHT,
-                    JOYSTICK_DOWN_LEFT,
-                    JOYSTICK_DOWN_RIGHT,
-                ]
-            )
-            if direction:
-                return direction
-            sleep_ms(100)
-
-    def translate_joystick_to_color(self, direction):
-        """
-        Translate joystick direction to a color index.
-
-        Args:
-            direction (str): Direction from the joystick.
-
-        Returns:
-            int: Corresponding color index.
-        """
-        mapping = {
+        direction_map = {
             JOYSTICK_UP_LEFT: 0,
             JOYSTICK_UP_RIGHT: 1,
             JOYSTICK_DOWN_LEFT: 2,
-            JOYSTICK_DOWN_RIGHT: 3,
+            JOYSTICK_DOWN_RIGHT: 3
         }
-        return mapping.get(direction, None)
+
+        while True:
+            direction = joystick.read_direction(direction_map.keys())
+            if direction in direction_map:
+                return direction_map[direction]
+            sleep_ms(50)  # Reduced sleep to lower response time
 
     def check_user_sequence(self):
         """
@@ -642,7 +642,7 @@ class SimonGame:
         Returns:
             bool: True if sequences match, False otherwise.
         """
-        return self.user_input == self.sequence[: len(self.user_input)]
+        return self.user_input == self.sequence[:len(self.user_input)]
 
     def start_game(self):
         """
@@ -665,20 +665,25 @@ class SimonGame:
         self.start_game()
         while not game_over:
             try:
+                # Check for exit condition
                 c_button, _ = joystick.nunchuck.buttons()
                 if c_button:  # C-button ends the game
                     game_over = True
+                    return
 
+                # Add a random color to the sequence
                 self.sequence.append(random.randint(0, 3))
                 display_score_and_time(len(self.sequence) - 1)
+
+                # Play the sequence
                 self.play_sequence()
                 self.user_input = []
 
+                # Get user input and validate
                 for _ in range(len(self.sequence)):
-                    direction = self.get_user_input(joystick)
-                    selected_color = self.translate_joystick_to_color(direction)
+                    selected_color = self.get_user_input(joystick)
                     if selected_color is not None:
-                        self.flash_color(selected_color, duration=0.2)
+                        self.flash_color(selected_color, duration=200)
                         self.user_input.append(selected_color)
                         if not self.check_user_sequence():
                             global_score = len(self.sequence) - 1
@@ -687,140 +692,124 @@ class SimonGame:
                     else:
                         break
 
-                sleep_ms(1000)
-                gc.collect()
+                sleep_ms(500)  # Small delay between sequences
+                gc.collect()  # Manually trigger garbage collection for efficiency
             except RestartProgram:
                 game_over = True
                 return
+
 
 class SnakeGame:
     """
     Class representing the Snake game.
     """
 
+    # Class-level attributes for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
+    INITIAL_LENGTH = 3
+    INITIAL_POSITION = (32, 32)
+    MAX_GREEN_TARGETS = 5
+
+    # Static colors
+    SNAKE_COLOR = (0, 255, 0)
+    TARGET_COLOR = (255, 0, 0)
+    GREEN_TARGET_COLOR = (0, 255, 0)
+    CLEAR_COLOR = (0, 0, 0)
+
     def __init__(self):
         """
         Initialize the Snake game variables.
-
-        Args:
-            mode (str): "single" for singleplayer, "zero" for zero-player.
         """
-        self.snake = [(32, 32)]
-        self.snake_length = 3
+        self.snake = [self.INITIAL_POSITION]  # Only store head initially
+        self.snake_length = self.INITIAL_LENGTH
         self.snake_direction = "UP"
         self.score = 0
         self.green_targets = []
         self.target = self.random_target()
-        self.step_counter = 0
-        self.step_counter2 = 0
         self.running = True
+
+    def random_target(self):
+        """
+        Generate a random position for the target.
+        """
+        return (random.randint(1, self.WIDTH - 2), random.randint(1, self.HEIGHT - 8))
 
     def restart_game(self):
         """
         Restart the game by resetting variables and clearing the display.
         """
-        self.snake = [(32, 32)]
-        self.snake_length = 3
+        self.snake = [self.INITIAL_POSITION]
+        self.snake_length = self.INITIAL_LENGTH
         self.snake_direction = "UP"
         self.score = 0
-        self.green_targets = []
+        self.green_targets.clear()
         display.clear()
         self.place_target()
-
-    def random_target(self):
-        """
-        Generate a random position for the target.
-
-        Returns:
-            tuple: Coordinates of the target.
-        """
-        return (random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8))
 
     def place_target(self):
         """
         Place the target on the display.
         """
         self.target = self.random_target()
-        display.set_pixel(self.target[0], self.target[1], 255, 0, 0)
+        display.set_pixel(self.target[0], self.target[1], *self.TARGET_COLOR)
 
     def place_green_target(self):
         """
         Place a green target on the display.
         """
-        x, y = random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 8)
-        self.green_targets.append((x, y, 256))
-        display.set_pixel(x, y, 0, 255, 0)
+        if len(self.green_targets) < self.MAX_GREEN_TARGETS:
+            x, y = self.random_target()
+            self.green_targets.append((x, y, 256))
+            display.set_pixel(x, y, *self.GREEN_TARGET_COLOR)
 
     def update_green_targets(self):
         """
         Update the lifespan of green targets and remove them if necessary.
         """
-        new_green_targets = []
+        updated_targets = []
         for x, y, lifespan in self.green_targets:
             if lifespan > 1:
-                new_green_targets.append((x, y, lifespan - 1))
+                updated_targets.append((x, y, lifespan - 1))
             else:
-                display.set_pixel(x, y, 0, 0, 0)
-        self.green_targets = new_green_targets
+                display.set_pixel(x, y, *self.CLEAR_COLOR)
+        self.green_targets = updated_targets
 
     def check_self_collision(self):
         """
         Check for collision of the snake with itself.
-
-        If collision is detected, the game ends.
         """
-        global global_score, game_over
-        head_x, head_y = self.snake[0]
-        body = self.snake[1:]
-        potential_moves = {
-            "UP": (head_x, head_y - 1),
-            "DOWN": (head_x, head_y + 1),
-            "LEFT": (head_x - 1, head_y),
-            "RIGHT": (head_x + 1, head_y),
-        }
-        safe_moves = {
-            direction: pos
-            for direction, pos in potential_moves.items()
-            if pos not in body
-        }
-        if potential_moves[self.snake_direction] not in safe_moves.values():
-            if safe_moves:
-                self.snake_direction = random.choice(list(safe_moves.keys()))
-            else:
-                global_score = self.score
-                game_over = True
-                return
+        global game_over
+        head = self.snake[0]
+        if head in self.snake[1:]:
+            game_over = True
 
     def update_snake_position(self):
         """
         Update the position of the snake based on its current direction.
         """
         head_x, head_y = self.snake[0]
-        if self.snake_direction == "UP":
-            head_y -= 1
-        elif self.snake_direction == "DOWN":
-            head_y += 1
-        elif self.snake_direction == "LEFT":
-            head_x -= 1
-        elif self.snake_direction == "RIGHT":
-            head_x += 1
+        new_head = {
+            "UP": (head_x, (head_y - 1) % self.HEIGHT),
+            "DOWN": (head_x, (head_y + 1) % self.HEIGHT),
+            "LEFT": ((head_x - 1) % self.WIDTH, head_y),
+            "RIGHT": ((head_x + 1) % self.WIDTH, head_y),
+        }[self.snake_direction]
 
-        head_x %= WIDTH
-        head_y %= HEIGHT
+        # Add new head to the snake
+        self.snake.insert(0, new_head)
 
-        self.snake.insert(0, (head_x, head_y))
+        # Remove tail if the snake hasn't grown
         if len(self.snake) > self.snake_length:
             tail = self.snake.pop()
-            display.set_pixel(tail[0], tail[1], 0, 0, 0)
+            display.set_pixel(tail[0], tail[1], *self.CLEAR_COLOR)
 
     def check_target_collision(self):
         """
         Check if the snake has collided with the target.
-
-        If so, increase the snake length and score, and place a new target.
         """
-        head_x, head_y = self.snake[0]
-        if (head_x, head_y) == self.target:
+        head = self.snake[0]
+        if head == self.target:
             self.snake_length += 2
             self.place_target()
             self.score += 1
@@ -828,89 +817,25 @@ class SnakeGame:
     def check_green_target_collision(self):
         """
         Check if the snake has collided with a green target.
-
-        If so, reduce the snake length.
         """
-        head_x, head_y = self.snake[0]
-        for x, y, lifespan in self.green_targets:
-            if (head_x, head_y) == (x, y):
+        head = self.snake[0]
+        for target in self.green_targets:
+            if (head[0], head[1]) == (target[0], target[1]):
                 self.snake_length = max(self.snake_length // 2, 2)
-                self.green_targets.remove((x, y, lifespan))
-                display.set_pixel(x, y, 0, 0, 0)
+                self.green_targets.remove(target)
+                display.set_pixel(target[0], target[1], *self.CLEAR_COLOR)
 
     def draw_snake(self):
         """
-        Draw the snake on the display with a color gradient.
+        Draw the snake on the display.
         """
-        hue = 0
-        for idx, (x, y) in enumerate(self.snake[: self.snake_length]):
-            hue = (hue + 5) % 360
-            red, green, blue = hsb_to_rgb(hue, 1, 1)
+        for i, (x, y) in enumerate(self.snake):
+            # Dim the color for the body based on its position
+            brightness = 1 - (i / len(self.snake)) * 0.5
+            red, green, blue = (int(c * brightness) for c in self.SNAKE_COLOR)
             display.set_pixel(x, y, red, green, blue)
-        for idx in range(self.snake_length, len(self.snake)):
-            x, y = self.snake[idx]
-            display.set_pixel(x, y, 0, 0, 0)
 
-    def find_nearest_target(self, head_x, head_y, green_targets, red_target):
-        def manhattan_distance(x1, y1, x2, y2):
-            return abs(x1 - x2) + abs(y1 - y2)
-
-        min_distance_green = float('inf')
-        nearest_green_target = None
-
-        for x, y, _ in green_targets:
-            distance = manhattan_distance(head_x, head_y, x, y)
-            if distance < min_distance_green:
-                min_distance_green = distance
-                nearest_green_target = (x, y)
-
-        distance_red = manhattan_distance(head_x, head_y, red_target[0], red_target[1])
-
-        if nearest_green_target and min_distance_green <= distance_red * 1.5:
-            return nearest_green_target
-        else:
-            return red_target
-
-    def update_direction(self):
-        """
-        Update the snake's direction towards the nearest target.
-        """
-        head_x, head_y = self.snake[0]
-        target_x, target_y = self.find_nearest_target(head_x, head_y, self.green_targets, self.target)
-        
-        opposite_directions = {'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
-
-        new_direction = self.snake_direction  # Default to current direction
-
-        if head_x == target_x:
-            if head_y < target_y and self.snake_direction != 'UP':
-                new_direction = 'DOWN'
-            elif head_y > target_y and self.snake_direction != 'DOWN':
-                new_direction = 'UP'
-        elif head_y == target_y:
-            if head_x < target_x and self.snake_direction != 'LEFT':
-                new_direction = 'RIGHT'
-            elif head_x > target_x and self.snake_direction != 'RIGHT':
-                new_direction = 'LEFT'
-        else:
-            if abs(head_x - target_x) < abs(head_y - target_y):
-                if head_x < target_x and self.snake_direction != 'LEFT':
-                    new_direction = 'RIGHT'
-                elif head_x > target_x and self.snake_direction != 'RIGHT':
-                    new_direction = 'LEFT'
-            else:
-                if head_y < target_y and self.snake_direction != 'UP':
-                    new_direction = 'DOWN'
-                elif head_y > target_y and self.snake_direction != 'DOWN':
-                    new_direction = 'UP'
-
-        # Prevent moving in the opposite direction immediately
-        if new_direction == opposite_directions[self.snake_direction]:
-            new_direction = self.snake_direction
-        
-        return new_direction
-
-    def main_loop(self, joystick, mode="single"):
+    def main_loop(self, joystick):
         """
         Main game loop for the Snake game.
 
@@ -920,52 +845,32 @@ class SnakeGame:
         global game_over
         game_over = False
         self.restart_game()
-        step_counter = 0
-
-        #if mode == "zero":
-        #    self.mode = "zero"
-
         while not game_over:
             try:
                 c_button, _ = joystick.nunchuck.buttons()
                 if c_button:  # C-button ends the game
                     game_over = True
 
-                self.step_counter += 1
-
-                if mode == "zero":
-                    self.step_counter2 += 1
-                    if self.step_counter2 % 1024 == 0:
-                        self.place_green_target()
-                    self.update_green_targets()
-
-                if mode == "single":
-                    if self.step_counter % 1024 == 0:
-                        self.place_green_target()
-                    self.update_green_targets()
-
-                if mode == "zero":
-                    direction = self.update_direction()
+                direction = joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                )
+                if direction:
                     self.snake_direction = direction
-                else:
-                    direction = joystick.read_direction(
-                        [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-                    )
-                    if direction:
-                        self.snake_direction = direction
 
-                self.check_self_collision()
                 self.update_snake_position()
+                self.check_self_collision()
                 self.check_target_collision()
                 self.check_green_target_collision()
                 self.draw_snake()
+                self.update_green_targets()
                 display_score_and_time(self.score)
 
-                sleep_ms(max(30, int(90 - max(10, self.snake_length / 3))) )
+                sleep_ms(max(30, 90 - max(10, self.snake_length // 3)))
                 gc.collect()
             except RestartProgram:
                 game_over = True
                 return
+
 
 
 class PongGame:
@@ -973,56 +878,63 @@ class PongGame:
     Class representing the Pong game.
     """
 
+    # Class-level attributes for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
+    PADDLE_HEIGHT = 8
+    PADDLE_SPEED = 2
+    BALL_INITIAL_SPEED = [1, 1]
+    LIVES = 3
+
+    # Static colors
+    BALL_COLOR = (255, 255, 255)
+    PADDLE_COLOR = (255, 255, 255)
+    CLEAR_COLOR = (0, 0, 0)
+
     def __init__(self):
         """
         Initialize the Pong game variables.
         """
-        self.paddle_height = 8
-        self.paddle_speed = 2
-        self.ball_speed = [1, 1]
-        self.ball_position = [WIDTH // 2, HEIGHT // 2]
-        self.left_paddle_y = HEIGHT // 2 - self.paddle_height // 2
-        self.right_paddle_y = HEIGHT // 2 - self.paddle_height // 2
-        self.previous_left_score = 0
-        self.left_score = 0
-        self.lives = 3
+        self.ball_speed = self.BALL_INITIAL_SPEED[:]
+        self.ball_position = [self.WIDTH // 2, self.HEIGHT // 2]
+        self.left_paddle_y = self.HEIGHT // 2 - self.PADDLE_HEIGHT // 2
+        self.right_paddle_y = self.HEIGHT // 2 - self.PADDLE_HEIGHT // 2
+        self.score = 0
+        self.lives = self.LIVES
 
-    def draw_paddles(self):
+    def draw_paddle(self, x, paddle_y):
         """
-        Draw the paddles on the display.
+        Draw the paddle on the display.
         """
-        # Clear previous paddle positions
-        for y in range(HEIGHT):
-            display.set_pixel(0, y, 0, 0, 0)
-            display.set_pixel(WIDTH - 1, y, 0, 0, 0)
+        for y in range(paddle_y, paddle_y + self.PADDLE_HEIGHT):
+            display.set_pixel(x, y, *self.PADDLE_COLOR)
 
-        # Draw left paddle
-        for y in range(self.left_paddle_y, self.left_paddle_y + self.paddle_height):
-            display.set_pixel(0, y, 255, 255, 255)
-
-        # Draw right paddle
-        for y in range(self.right_paddle_y, self.right_paddle_y + self.paddle_height):
-            display.set_pixel(WIDTH - 1, y, 255, 255, 255)
+    def clear_paddle(self, x, paddle_y):
+        """
+        Clear the paddle from its current position.
+        """
+        for y in range(paddle_y, paddle_y + self.PADDLE_HEIGHT):
+            display.set_pixel(x, y, *self.CLEAR_COLOR)
 
     def draw_ball(self):
         """
         Draw the ball on the display.
         """
         x, y = self.ball_position
-        display.set_pixel(x, y, 255, 255, 255)
+        display.set_pixel(x, y, *self.BALL_COLOR)
 
     def clear_ball(self):
         """
         Clear the ball from its current position.
         """
         x, y = self.ball_position
-        display.set_pixel(x, y, 0, 0, 0)
+        display.set_pixel(x, y, *self.CLEAR_COLOR)
 
     def update_ball(self):
         """
         Update the ball's position and handle collisions.
         """
-        global global_score, game_over
+        global game_over
         self.clear_ball()
         self.ball_position[0] += self.ball_speed[0]
         self.ball_position[1] += self.ball_speed[1]
@@ -1030,24 +942,20 @@ class PongGame:
         x, y = self.ball_position
 
         # Handle collision with top and bottom walls
-        if y <= 0 or y >= HEIGHT - 1:
+        if y <= 0 or y >= self.HEIGHT - 1:
             self.ball_speed[1] = -self.ball_speed[1]
 
         # Handle collision with left paddle
-        if x == 1 and self.left_paddle_y <= y < self.left_paddle_y + self.paddle_height:
+        if x == 1 and self.left_paddle_y <= y < self.left_paddle_y + self.PADDLE_HEIGHT:
             self.ball_speed[0] = -self.ball_speed[0]
-            self.left_score += 1
+            self.score += 1
 
         # Handle collision with right paddle
-        elif (
-            x == WIDTH - 2
-            and self.right_paddle_y <= y < self.right_paddle_y + self.paddle_height
-        ):
+        elif x == self.WIDTH - 2 and self.right_paddle_y <= y < self.right_paddle_y + self.PADDLE_HEIGHT:
             self.ball_speed[0] = -self.ball_speed[0]
 
         # Ball misses the left paddle
         if x <= 0:
-            self.left_score = 0
             self.lives -= 1
             if self.lives == 0:
                 game_over = True
@@ -1055,18 +963,17 @@ class PongGame:
             self.reset_ball()
 
         # Ball misses the right paddle
-        elif x >= WIDTH - 1:
-            self.left_score += 10
+        elif x >= self.WIDTH - 1:
+            self.score += 10
             self.reset_ball()
 
-        global_score = self.left_score
         self.draw_ball()
 
     def reset_ball(self):
         """
         Reset the ball to the center of the display with a random direction.
         """
-        self.ball_position = [WIDTH // 2, HEIGHT // 2]
+        self.ball_position = [self.WIDTH // 2, self.HEIGHT // 2]
         self.ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
 
     def update_paddles(self, joystick):
@@ -1079,21 +986,29 @@ class PongGame:
         # Update left paddle based on joystick input
         direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
         if direction == JOYSTICK_UP:
-            self.left_paddle_y = max(self.left_paddle_y - self.paddle_speed, 0)
+            self.clear_paddle(0, self.left_paddle_y)
+            self.left_paddle_y = max(self.left_paddle_y - self.PADDLE_SPEED, 0)
         elif direction == JOYSTICK_DOWN:
+            self.clear_paddle(0, self.left_paddle_y)
             self.left_paddle_y = min(
-                self.left_paddle_y + self.paddle_speed, HEIGHT - self.paddle_height
+                self.left_paddle_y + self.PADDLE_SPEED, self.HEIGHT - self.PADDLE_HEIGHT
             )
 
         # Simple AI for right paddle
         ball_y = self.ball_position[1]
-        paddle_center = self.right_paddle_y + self.paddle_height // 2
+        paddle_center = self.right_paddle_y + self.PADDLE_HEIGHT // 2
         if ball_y < paddle_center:
-            self.right_paddle_y = max(self.right_paddle_y - self.paddle_speed, 0)
+            self.clear_paddle(self.WIDTH - 1, self.right_paddle_y)
+            self.right_paddle_y = max(self.right_paddle_y - self.PADDLE_SPEED, 0)
         elif ball_y > paddle_center:
+            self.clear_paddle(self.WIDTH - 1, self.right_paddle_y)
             self.right_paddle_y = min(
-                self.right_paddle_y + self.paddle_speed, HEIGHT - self.paddle_height
+                self.right_paddle_y + self.PADDLE_SPEED, self.HEIGHT - self.PADDLE_HEIGHT
             )
+
+        # Draw paddles after updates
+        self.draw_paddle(0, self.left_paddle_y)
+        self.draw_paddle(self.WIDTH - 1, self.right_paddle_y)
 
     def main_loop(self, joystick):
         """
@@ -1114,10 +1029,7 @@ class PongGame:
 
                 self.update_paddles(joystick)
                 self.update_ball()
-                self.draw_paddles()
-                if self.left_score != self.previous_left_score:
-                    display_score_and_time(self.left_score)
-                    self.previous_left_score = self.left_score
+                display_score_and_time(self.score)
 
                 sleep_ms(50)
                 gc.collect()
@@ -1125,32 +1037,41 @@ class PongGame:
                 game_over = True
                 return
 
+
 class BreakoutGame:
     """
     Class representing the Breakout game.
     """
 
+    # Class-level attributes for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
+    PADDLE_WIDTH = 10
+    PADDLE_HEIGHT = 2
+    BALL_SIZE = 2
+    BRICK_WIDTH = 8
+    BRICK_HEIGHT = 4
+    BRICK_ROWS = 5
+    BRICK_COLS = 8
+
+    # Static colors
+    PADDLE_COLOR = (255, 255, 255)
+    BALL_COLOR = (255, 255, 255)
+    CLEAR_COLOR = (0, 0, 0)
+
     def __init__(self):
         """
         Initialize the Breakout game variables.
         """
-        self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
-        self.paddle_y = HEIGHT - PADDLE_HEIGHT
-        self.ball_x = WIDTH // 2
-        self.ball_y = HEIGHT // 2
-
-        # Ball direction
+        self.paddle_x = (self.WIDTH - self.PADDLE_WIDTH) // 2
+        self.paddle_y = self.HEIGHT - self.PADDLE_HEIGHT
+        self.ball_x = self.WIDTH // 2
+        self.ball_y = self.HEIGHT // 2
         self.ball_dx = 1
         self.ball_dy = -1
-
-        # Create bricks
         self.bricks = self.create_bricks()
-
-        # Game variables
         self.score = 0
-        self.paddle_speed = 2
-
-        display.clear()
+        self.lives = 3
 
     def create_bricks(self):
         """
@@ -1160,10 +1081,10 @@ class BreakoutGame:
             list: List of brick positions.
         """
         bricks = []
-        for row in range(BRICK_ROWS):
-            for col in range(BRICK_COLS):
-                x = col * (BRICK_WIDTH + 1) + 1
-                y = row * (BRICK_HEIGHT + 1)
+        for row in range(self.BRICK_ROWS):
+            for col in range(self.BRICK_COLS):
+                x = col * (self.BRICK_WIDTH + 1) + 1
+                y = row * (self.BRICK_HEIGHT + 1)
                 bricks.append((x, y))
         return bricks
 
@@ -1171,47 +1092,43 @@ class BreakoutGame:
         """
         Draw the paddle on the display.
         """
-        for x in range(self.paddle_x, self.paddle_x + PADDLE_WIDTH):
-            for y in range(self.paddle_y, self.paddle_y + PADDLE_HEIGHT):
-                display.set_pixel(x, y, 255, 255, 255)
+        for x in range(self.paddle_x, self.paddle_x + self.PADDLE_WIDTH):
+            for y in range(self.paddle_y, self.paddle_y + self.PADDLE_HEIGHT):
+                display.set_pixel(x, y, *self.PADDLE_COLOR)
 
     def clear_paddle(self):
         """
         Clear the paddle from its current position.
         """
-        for x in range(self.paddle_x, self.paddle_x + PADDLE_WIDTH):
-            for y in range(self.paddle_y, self.paddle_y + PADDLE_HEIGHT):
-                display.set_pixel(x, y, 0, 0, 0)
+        for x in range(self.paddle_x, self.paddle_x + self.PADDLE_WIDTH):
+            for y in range(self.paddle_y, self.paddle_y + self.PADDLE_HEIGHT):
+                display.set_pixel(x, y, *self.CLEAR_COLOR)
 
     def draw_ball(self):
         """
         Draw the ball on the display.
         """
-        # Draw a 2x2 ball
-        display.set_pixel(self.ball_x, self.ball_y, 255, 255, 255)
-        display.set_pixel(self.ball_x + 1, self.ball_y, 255, 255, 255)
-        display.set_pixel(self.ball_x, self.ball_y + 1, 255, 255, 255)
-        display.set_pixel(self.ball_x + 1, self.ball_y + 1, 255, 255, 255)
+        for dx in range(self.BALL_SIZE):
+            for dy in range(self.BALL_SIZE):
+                display.set_pixel(self.ball_x + dx, self.ball_y + dy, *self.BALL_COLOR)
 
     def clear_ball(self):
         """
         Clear the ball from its current position.
         """
-        # Clear a 2x2 ball
-        display.set_pixel(self.ball_x, self.ball_y, 0, 0, 0)
-        display.set_pixel(self.ball_x + 1, self.ball_y, 0, 0, 0)
-        display.set_pixel(self.ball_x, self.ball_y + 1, 0, 0, 0)
-        display.set_pixel(self.ball_x + 1, self.ball_y + 1, 0, 0, 0)
+        for dx in range(self.BALL_SIZE):
+            for dy in range(self.BALL_SIZE):
+                display.set_pixel(self.ball_x + dx, self.ball_y + dy, *self.CLEAR_COLOR)
 
     def draw_bricks(self):
         """
         Draw all the bricks on the display.
         """
         for x, y in self.bricks:
-            hue = (y) * 360 // (BRICK_ROWS * BRICK_COLS)
+            hue = (y * 360) // (self.BRICK_ROWS * self.BRICK_COLS)
             red, green, blue = hsb_to_rgb(hue, 1, 1)
-            for dx in range(BRICK_WIDTH):
-                for dy in range(BRICK_HEIGHT):
+            for dx in range(self.BRICK_WIDTH):
+                for dy in range(self.BRICK_HEIGHT):
                     display.set_pixel(x + dx, y + dy, red, green, blue)
 
     def clear_bricks(self):
@@ -1230,20 +1147,23 @@ class BreakoutGame:
         self.ball_y += self.ball_dy
 
         # Handle collision with walls
-        if self.ball_x <= 0 or self.ball_x >= WIDTH - 1:
+        if self.ball_x <= 0 or self.ball_x >= self.WIDTH - self.BALL_SIZE:
             self.ball_dx = -self.ball_dx
         if self.ball_y <= 1:
             self.ball_dy = -self.ball_dy
 
         # Handle collision with paddle
-        if self.ball_y >= HEIGHT - PADDLE_HEIGHT - 2:
-            if self.paddle_x <= self.ball_x <= self.paddle_x + PADDLE_WIDTH:
+        if self.ball_y >= self.HEIGHT - self.PADDLE_HEIGHT - self.BALL_SIZE:
+            if self.paddle_x <= self.ball_x <= self.paddle_x + self.PADDLE_WIDTH:
                 self.ball_dy = -self.ball_dy
 
         # Ball falls below paddle
-        if self.ball_y >= HEIGHT:
-            game_over = True
-            return
+        if self.ball_y >= self.HEIGHT:
+            self.lives -= 1
+            if self.lives == 0:
+                game_over = True
+                return
+            self.reset_ball()
 
         self.draw_ball()
 
@@ -1252,11 +1172,11 @@ class BreakoutGame:
         Check for collision between the ball and bricks.
         """
         global global_score
-        for brick in self.bricks:
+        for brick in self.bricks[:]:
             bx, by = brick
             if (
-                bx <= self.ball_x < bx + BRICK_WIDTH
-                and by <= self.ball_y < by + BRICK_HEIGHT
+                bx <= self.ball_x < bx + self.BRICK_WIDTH
+                and by <= self.ball_y < by + self.BRICK_HEIGHT
             ):
                 self.clear_ball()
                 self.ball_dy = -self.ball_dy
@@ -1277,11 +1197,20 @@ class BreakoutGame:
         direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if direction == JOYSTICK_LEFT:
             self.clear_paddle()
-            self.paddle_x = max(self.paddle_x - self.paddle_speed, 0)
+            self.paddle_x = max(self.paddle_x - 2, 0)
         elif direction == JOYSTICK_RIGHT:
             self.clear_paddle()
-            self.paddle_x = min(self.paddle_x + self.paddle_speed, WIDTH - PADDLE_WIDTH)
+            self.paddle_x = min(self.paddle_x + 2, self.WIDTH - self.PADDLE_WIDTH)
         self.draw_paddle()
+
+    def reset_ball(self):
+        """
+        Reset the ball to the center of the display with a random direction.
+        """
+        self.ball_x = self.WIDTH // 2
+        self.ball_y = self.HEIGHT // 2
+        self.ball_dx = random.choice([-1, 1])
+        self.ball_dy = random.choice([-1, 1])
 
     def main_loop(self, joystick):
         """
@@ -1304,7 +1233,8 @@ class BreakoutGame:
                 self.check_collision_with_bricks()
                 self.update_paddle(joystick)
                 display_score_and_time(self.score)
-                if self.score == BRICK_ROWS * BRICK_COLS * 10:
+
+                if self.score == self.BRICK_ROWS * self.BRICK_COLS * 10:
                     display.clear()
                     draw_text(10, 5, "YOU", 255, 255, 255)
                     draw_text(10, 20, "WON", 255, 255, 255)
@@ -1322,24 +1252,31 @@ class BreakoutGame:
                 return
 
 
-PIXEL_WIDTH, PIXEL_HEIGHT = 64, 64
-SHIP_COOLDOWN = 10  # Frames zwischen Schüssen
-FPS = 20
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-BLACK = (0, 0, 0)
-
-def hypot(x, y):
-    return math.sqrt(x*x + y*y)
-
 class AsteroidGame:
+    """
+    Class representing the Asteroid game.
+    """
+
+    # Class-level constants for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
+    SHIP_COOLDOWN = 10  # Frames between shots
+    MAX_PROJECTILE_LIFETIME = 10
+    FPS = 20
+    MAX_ASTEROIDS = 3
+    WHITE = (255, 255, 255)
+    RED = (255, 0, 0)
+    CLEAR_COLOR = (0, 0, 0)
+
     def __init__(self):
-        self.display = display
+        """
+        Initialize the game variables.
+        """
         self.ship = self.Ship()
-        self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
+        self.asteroids = [self.Asteroid(start=True) for _ in range(self.MAX_ASTEROIDS)]
         self.projectiles = []
-        self.running = True
         self.score = 0
+        self.running = True
 
     class Projectile:
         def __init__(self, x, y, angle, speed):
@@ -1347,67 +1284,29 @@ class AsteroidGame:
             self.y = y
             self.angle = angle
             self.speed = speed
-            self.lifetime = 10  # Frames
+            self.lifetime = AsteroidGame.MAX_PROJECTILE_LIFETIME
 
         def update(self):
             self.x += math.cos(math.radians(self.angle)) * self.speed
             self.y -= math.sin(math.radians(self.angle)) * self.speed
-            self.x %= WIDTH
-            self.y %= HEIGHT
+            self.x %= AsteroidGame.WIDTH
+            self.y %= AsteroidGame.HEIGHT
             self.lifetime -= 1
 
         def is_alive(self):
             return self.lifetime > 0
         
         def draw(self):
-            # Draw the projectile as a single pixel
-            px = int(self.x) % WIDTH
-            py = int(self.y) % HEIGHT
-            self.draw_line((self.x, self.y), (self.x + math.cos(math.radians(self.angle)), self.y - math.sin(math.radians(self.angle))), (255, 0, 0))
-
-        def draw_line(self, start, end, color):
-            # Bresenham's Line Algorithm
-            x0, y0 = int(start[0]), int(start[1])
-            x1, y1 = int(end[0]), int(end[1])
-            dx = abs(x1 - x0)
-            dy = abs(y1 - y0)
-            x, y = x0, y0
-            sx = -1 if x0 > x1 else 1
-            sy = -1 if y0 > y1 else 1
-            if dx > dy:
-                err = dx / 2.0
-                while x != x1:
-                    display.set_pixel(x % WIDTH, y % HEIGHT, *color)
-                    err -= dy
-                    if err < 0:
-                        y += sy
-                        err += dx
-                    x += sx
-            else:
-                err = dy / 2.0
-                while y != y1:
-                    display.set_pixel(x % WIDTH, y % HEIGHT, *color)
-                    err -= dx
-                    if err < 0:
-                        x += sx
-                        err += dy
-                    y += sy
-            display.set_pixel(x % WIDTH, y % HEIGHT, *color)
+            display.set_pixel(int(self.x) % AsteroidGame.WIDTH, int(self.y) % AsteroidGame.HEIGHT, *AsteroidGame.RED)
 
     class Asteroid:
         def __init__(self, x=None, y=None, size=None, start=False):
-            self.x, self.y = 32, 32
-
-            # use values from parameter if they are not None
-            if x is not None:
-                self.x = x
-            if y is not None:
-                self.y = y
-                
-            while (start and (22 < self.x < 42 or 22 < self.y < 42)):
-                self.x = random.uniform(0, WIDTH)
-                self.y = random.uniform(0, HEIGHT)
-
+            self.x = random.uniform(0, AsteroidGame.WIDTH) if x is None else x
+            self.y = random.uniform(0, AsteroidGame.HEIGHT) if y is None else y
+            if start:
+                while 22 < self.x < 42 or 22 < self.y < 42:
+                    self.x = random.uniform(0, AsteroidGame.WIDTH)
+                    self.y = random.uniform(0, AsteroidGame.HEIGHT)
             self.angle = random.uniform(0, 360)
             self.speed = random.uniform(0.5, 1.5)
             self.size = size if size is not None else random.randint(4, 8)
@@ -1415,21 +1314,20 @@ class AsteroidGame:
         def update(self):
             self.x += math.cos(math.radians(self.angle)) * self.speed
             self.y -= math.sin(math.radians(self.angle)) * self.speed
-            self.x %= WIDTH
-            self.y %= HEIGHT
+            self.x %= AsteroidGame.WIDTH
+            self.y %= AsteroidGame.HEIGHT
 
         def draw(self):
-            # Draw circle by setting multiple pixels
             for degree in range(0, 360, 10):
                 rad = math.radians(degree)
-                px = int((self.x + math.cos(rad) * self.size) % WIDTH)
-                py = int((self.y + math.sin(rad) * self.size) % HEIGHT)
-                display.set_pixel(px, py, *WHITE)
+                px = int((self.x + math.cos(rad) * self.size) % AsteroidGame.WIDTH)
+                py = int((self.y + math.sin(rad) * self.size) % AsteroidGame.HEIGHT)
+                display.set_pixel(px, py, *AsteroidGame.WHITE)
 
     class Ship:
         def __init__(self):
-            self.x = WIDTH / 2
-            self.y = HEIGHT / 2
+            self.x = AsteroidGame.WIDTH / 2
+            self.y = AsteroidGame.HEIGHT / 2
             self.angle = 0
             self.speed = 0
             self.max_speed = 2
@@ -1437,137 +1335,108 @@ class AsteroidGame:
             self.cooldown = 0
 
         def update(self, direction):
-            # Rotation based on input
             if direction == JOYSTICK_LEFT:
                 self.angle = (self.angle + 5) % 360
             elif direction == JOYSTICK_RIGHT:
                 self.angle = (self.angle - 5) % 360
 
-            # Forward movement
             if direction == JOYSTICK_UP:
                 self.speed = min(self.speed + 0.1, self.max_speed)
             else:
                 self.speed = max(self.speed - 0.05, 0)
 
-            # Update position
             self.x += math.cos(math.radians(self.angle)) * self.speed
             self.y -= math.sin(math.radians(self.angle)) * self.speed
+            self.x %= AsteroidGame.WIDTH
+            self.y %= AsteroidGame.HEIGHT
 
-            # Wrap around edges
-            self.x %= WIDTH
-            self.y %= HEIGHT
-
-            # Cooldown for shooting
             if self.cooldown > 0:
                 self.cooldown -= 1
 
         def draw(self):
-            # Dreieck als Raumschiff
             points = [
                 (self.x + math.cos(math.radians(self.angle)) * self.size,
-                self.y - math.sin(math.radians(self.angle)) * self.size),
+                 self.y - math.sin(math.radians(self.angle)) * self.size),
                 (self.x + math.cos(math.radians(self.angle + 120)) * self.size,
-                self.y - math.sin(math.radians(self.angle + 120)) * self.size),
+                 self.y - math.sin(math.radians(self.angle + 120)) * self.size),
                 (self.x + math.cos(math.radians(self.angle - 120)) * self.size,
-                self.y - math.sin(math.radians(self.angle - 120)) * self.size),
+                 self.y - math.sin(math.radians(self.angle - 120)) * self.size),
             ]
-            # Linien zwischen den Punkten zeichnen
-            if self.speed > 0:
-                self.draw_line(points[1], points[2], RED) # hinten - rot wenn das Raumschiff sich bewegt
-                
-            self.draw_line(points[0], points[1], WHITE) # links - Backbord
-            self.draw_line(points[2], points[0], WHITE) # rechts - Steuerbord
+
+            self.draw_line(points[1], points[2], AsteroidGame.RED if self.speed > 0 else AsteroidGame.WHITE)
+            self.draw_line(points[0], points[1], AsteroidGame.WHITE)
+            self.draw_line(points[2], points[0], AsteroidGame.WHITE)
 
         def draw_line(self, start, end, color):
-            # Bresenham's Linie-Algorithmus
             x0, y0 = int(start[0]), int(start[1])
             x1, y1 = int(end[0]), int(end[1])
             dx = abs(x1 - x0)
             dy = abs(y1 - y0)
-            x, y = x0, y0
             sx = -1 if x0 > x1 else 1
             sy = -1 if y0 > y1 else 1
             if dx > dy:
                 err = dx / 2.0
-                while x != x1:
-                    display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                while x0 != x1:
+                    display.set_pixel(x0 % AsteroidGame.WIDTH, y0 % AsteroidGame.HEIGHT, *color)
                     err -= dy
                     if err < 0:
-                        y += sy
+                        y0 += sy
                         err += dx
-                    x += sx
+                    x0 += sx
             else:
                 err = dy / 2.0
-                while y != y1:
-                    display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                while y0 != y1:
+                    display.set_pixel(x0 % AsteroidGame.WIDTH, y0 % AsteroidGame.HEIGHT, *color)
                     err -= dx
                     if err < 0:
-                        x += sx
+                        x0 += sx
                         err += dy
-                    y += sy
-            display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                    y0 += sy
+            display.set_pixel(x0 % AsteroidGame.WIDTH, y0 % AsteroidGame.HEIGHT, *color)
 
         def shoot(self):
             if self.cooldown == 0:
-                self.cooldown = SHIP_COOLDOWN
+                self.cooldown = AsteroidGame.SHIP_COOLDOWN
                 bullet_speed = 4
                 bullet_x = self.x + math.cos(math.radians(self.angle)) * self.size
                 bullet_y = self.y - math.sin(math.radians(self.angle)) * self.size
-                return Projectile(bullet_x, bullet_y, self.angle, bullet_speed)
+                return AsteroidGame.Projectile(bullet_x, bullet_y, self.angle, bullet_speed)
             return None
 
     def check_collisions(self):
-        # Kollisionen zwischen Projektilen und Asteroiden
         for projectile in self.projectiles[:]:
             for asteroid in self.asteroids[:]:
-                distance = hypot(projectile.x - asteroid.x, projectile.y - asteroid.y)
-                if distance < asteroid.size:
+                if hypot(projectile.x - asteroid.x, projectile.y - asteroid.y) < asteroid.size:
                     self.projectiles.remove(projectile)
                     self.asteroids.remove(asteroid)
                     self.score += 10
-                    # Zerlege den Asteroiden, wenn er groß genug ist
                     if asteroid.size > 3:
                         for _ in range(2):
                             new_size = asteroid.size // 2
                             self.asteroids.append(self.Asteroid(asteroid.x, asteroid.y, new_size))
                     break
 
-        # Kollisionen zwischen Schiff und Asteroiden
         for asteroid in self.asteroids:
-            distance = hypot(self.ship.x - asteroid.x, self.ship.y - asteroid.y)
-            if distance < asteroid.size + self.ship.size:
+            if hypot(self.ship.x - asteroid.x, self.ship.y - asteroid.y) < asteroid.size + self.ship.size:
                 self.running = False
-                self.score = max(self.score, self.score)  # Optional: Halte den höchsten Score
                 break
 
     def main_loop(self, joystick):
-        """
-        Hauptspiel-Schleife für das Asteroid-Spiel.
-
-        Args:
-            joystick: Das Joystick-Objekt zur Steuerung.
-        """
         self.running = True
-        self.score = 0
         while self.running:
             start_time = time.ticks_ms()
 
             c_button, z_button = joystick.nunchuck.buttons()
-            if c_button:  # C-Taste beendet das Spiel
+            if c_button:
                 self.running = False
 
             direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            if direction:
-                self.ship.update(direction)
-            else:
-                self.ship.update(None)
+            self.ship.update(direction)
 
             if z_button:
                 projectile = self.ship.shoot()
                 if projectile:
                     self.projectiles.append(projectile)
-
-            self.ship.update(direction)
 
             for asteroid in self.asteroids:
                 asteroid.update()
@@ -1579,29 +1448,42 @@ class AsteroidGame:
 
             self.check_collisions()
 
-            self.display.clear()
+            display.clear()
 
-            # Zeichnen aller Objekte
             self.ship.draw()
             for asteroid in self.asteroids:
                 asteroid.draw()
             for projectile in self.projectiles:
                 projectile.draw()
 
-            # Spielstand anzeigen
             display_score_and_time(self.score)
 
-            # Framerate kontrollieren
             elapsed = time.ticks_diff(time.ticks_ms(), start_time)
-            frame_duration = 10 // FPS
-            sleep_time = frame_duration - elapsed
-            if sleep_time > 0:
-                sleep_ms(sleep_time)
+            frame_duration = 1000 // self.FPS
+            if frame_duration - elapsed > 0:
+                sleep_ms(frame_duration - elapsed)
+
+
 
 class QixGame:
     """
     Class representing the Qix game.
     """
+
+    # Class-level constants for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
+    BORDER_COLOR = (0, 0, 255)
+    PLAYER_COLOR = (0, 255, 0)
+    OPPONENT_COLOR = (255, 0, 0)
+    TRAIL_COLOR = (0, 255, 0)
+    FILL_COLOR = (0, 0, 255)
+
+    # Grid values
+    WALL = 1
+    FILLED = 2
+    OPPONENT = 3
+    TRAIL = 4
 
     def __init__(self):
         """
@@ -1614,59 +1496,78 @@ class QixGame:
         self.opponent_dx = 1
         self.opponent_dy = 1
         self.occupied_percentage = 0
-        self.height = HEIGHT - 7  # Adjust for score display area
-        self.width = WIDTH
-
-        # Previous player position type (grid value)
-        self.prev_player_pos = 1
+        self.prev_player_pos = self.WALL
+        self.grid = bytearray(self.WIDTH * self.HEIGHT // 2)  # Reduced memory usage
 
     def initialize_game(self):
         """
-        Initialize the game by setting up the grid and placing the player and opponent.
+        Set up the initial state of the game.
         """
         display.clear()
-        initialize_grid()
+        self.initialize_grid()
         self.draw_frame()
         self.place_player()
         self.place_opponent()
+
+    def initialize_grid(self):
+        """
+        Initialize the grid to be empty.
+        """
+        self.grid = bytearray(self.WIDTH * self.HEIGHT // 2)
+
+    def get_grid_value(self, x, y):
+        """
+        Get the value at position (x, y) in the grid.
+        """
+        index = y * self.WIDTH + x
+        return (self.grid[index // 2] >> ((index % 2) * 4)) & 0x0F
+
+    def set_grid_value(self, x, y, value):
+        """
+        Set the value at position (x, y) in the grid.
+        """
+        index = y * self.WIDTH + x
+        half_index = index // 2
+        shift = (index % 2) * 4
+        self.grid[half_index] = (self.grid[half_index] & ~(0x0F << shift)) | ((value & 0x0F) << shift)
 
     def draw_frame(self):
         """
         Draw a frame around the play area.
         """
-        for x in range(self.width):
-            set_grid_value(x, 0, 1)
-            set_grid_value(x, self.height - 1, 1)
-            display.set_pixel(x, 0, 0, 0, 255)
-            display.set_pixel(x, self.height - 1, 0, 0, 255)
+        for x in range(self.WIDTH):
+            self.set_grid_value(x, 0, self.WALL)
+            self.set_grid_value(x, self.HEIGHT - 1, self.WALL)
+            display.set_pixel(x, 0, *self.BORDER_COLOR)
+            display.set_pixel(x, self.HEIGHT - 1, *self.BORDER_COLOR)
 
-        for y in range(self.height):
-            set_grid_value(0, y, 1)
-            set_grid_value(self.width - 1, y, 1)
-            display.set_pixel(0, y, 0, 0, 255)
-            display.set_pixel(self.width - 1, y, 0, 0, 255)
+        for y in range(self.HEIGHT):
+            self.set_grid_value(0, y, self.WALL)
+            self.set_grid_value(self.WIDTH - 1, y, self.WALL)
+            display.set_pixel(0, y, *self.BORDER_COLOR)
+            display.set_pixel(self.WIDTH - 1, y, *self.BORDER_COLOR)
 
     def place_player(self):
         """
         Place the player at a random position on the edge.
         """
         edge_positions = (
-            [(x, 0) for x in range(self.width)]
-            + [(x, self.height - 1) for x in range(self.width)]
-            + [(0, y) for y in range(self.height)]
-            + [(self.width - 1, y) for y in range(self.height)]
+            [(x, 0) for x in range(self.WIDTH)] +
+            [(x, self.HEIGHT - 1) for x in range(self.WIDTH)] +
+            [(0, y) for y in range(self.HEIGHT)] +
+            [(self.WIDTH - 1, y) for y in range(self.HEIGHT)]
         )
         self.player_x, self.player_y = random.choice(edge_positions)
-        display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
+        display.set_pixel(self.player_x, self.player_y, *self.PLAYER_COLOR)
 
     def place_opponent(self):
         """
         Place the opponent at a random position inside the playfield.
         """
-        self.opponent_x = random.randint(1, self.width - 2)
-        self.opponent_y = random.randint(1, self.height - 2)
-        set_grid_value(self.opponent_x, self.opponent_y, 3)
-        display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
+        self.opponent_x = random.randint(1, self.WIDTH - 2)
+        self.opponent_y = random.randint(1, self.HEIGHT - 2)
+        self.set_grid_value(self.opponent_x, self.opponent_y, self.OPPONENT)
+        display.set_pixel(self.opponent_x, self.opponent_y, *self.OPPONENT_COLOR)
 
     def move_opponent(self):
         """
@@ -1676,40 +1577,28 @@ class QixGame:
         next_x = self.opponent_x + self.opponent_dx
         next_y = self.opponent_y + self.opponent_dy
 
-        # Check for collision in the x direction
-        if get_grid_value(next_x, self.opponent_y) in (1, 2):
+        if self.get_grid_value(next_x, self.opponent_y) in (self.WALL, self.TRAIL):
             self.opponent_dx = -self.opponent_dx
 
-        # Check for collision in the y direction
-        if get_grid_value(self.opponent_x, next_y) in (1, 2):
+        if self.get_grid_value(self.opponent_x, next_y) in (self.WALL, self.TRAIL):
             self.opponent_dy = -self.opponent_dy
 
-        # Check for collision with player or trail
-        if get_grid_value(next_x, next_y) == 4 or (
-            next_x == self.player_x and next_y == self.player_y
-        ):
+        if self.get_grid_value(next_x, next_y) == self.TRAIL or (next_x == self.player_x and next_y == self.player_y):
             game_over = True
             return
 
-        # Clear current position
-        set_grid_value(self.opponent_x, self.opponent_y, 0)
-        display.set_pixel(self.opponent_x, self.opponent_y, 0, 0, 0)
+        self.set_grid_value(self.opponent_x, self.opponent_y, 0)
+        display.set_pixel(self.opponent_x, self.opponent_y, *self.CLEAR_COLOR)
 
-        # Update position
         self.opponent_x += self.opponent_dx
         self.opponent_y += self.opponent_dy
-        display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
+        display.set_pixel(self.opponent_x, self.opponent_y, *self.OPPONENT_COLOR)
 
     def move_player(self, joystick):
         """
         Move the player based on joystick input.
-
-        Args:
-            joystick (Joystick): The joystick object.
         """
-        direction = joystick.read_direction(
-            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-        )
+        direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if direction:
             new_x, new_y = self.player_x, self.player_y
             if direction == JOYSTICK_UP:
@@ -1721,85 +1610,63 @@ class QixGame:
             elif direction == JOYSTICK_RIGHT:
                 new_x += 1
 
-            if 0 <= new_x < self.width and 0 <= new_y < self.height:
-                if get_grid_value(new_x, new_y) == 0:
-                    set_grid_value(new_x, new_y, 4)
-                    display.set_pixel(new_x, new_y, 0, 255, 0)
+            if 0 <= new_x < self.WIDTH and 0 <= new_y < self.HEIGHT:
+                grid_value = self.get_grid_value(new_x, new_y)
+                if grid_value == 0:
+                    self.set_grid_value(new_x, new_y, self.TRAIL)
+                    display.set_pixel(new_x, new_y, *self.TRAIL_COLOR)
                     self.prev_player_pos = 0
-                elif get_grid_value(new_x, new_y) == 1:
+                elif grid_value == self.WALL:
                     if self.prev_player_pos == 0:
                         self.close_area(new_x, new_y)
-                    self.prev_player_pos = 1
+                    self.prev_player_pos = self.WALL
 
                 self.player_x, self.player_y = new_x, new_y
-                display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
+                display.set_pixel(self.player_x, self.player_y, *self.PLAYER_COLOR)
 
     def close_area(self, x, y):
         """
         Close an area when the player reconnects with a border or trail.
-
-        Args:
-            x (int): X-coordinate of the connection point.
-            y (int): Y-coordinate of the connection point.
         """
-        # Finalize the trail
-        set_grid_value(x, y, 1)
-        display.set_pixel(x, y, 0, 0, 255)
-
-        # Flood fill from the opponent's position
+        self.set_grid_value(x, y, self.WALL)
+        display.set_pixel(x, y, *self.BORDER_COLOR)
         self.flood_fill(self.opponent_x, self.opponent_y)
 
-        # Fill the non-accessible area
-        for i in range(self.width):
-            for j in range(self.height):
-                grid_value = get_grid_value(i, j)
+        for i in range(self.WIDTH):
+            for j in range(self.HEIGHT):
+                grid_value = self.get_grid_value(i, j)
                 if grid_value == 0:
-                    set_grid_value(i, j, 2)  # Mark as player's area
-                    display.set_pixel(i, j, 0, 0, 255)
-                elif grid_value == 3:
-                    set_grid_value(i, j, 0)
-                elif grid_value in (1, 4):
-                    set_grid_value(i, j, 1)
-                    display.set_pixel(i, j, 0, 55, 100)
+                    self.set_grid_value(i, j, self.FILLED)
+                    display.set_pixel(i, j, *self.FILL_COLOR)
+                elif grid_value == self.OPPONENT:
+                    self.set_grid_value(i, j, 0)
 
-        # Recalculate occupied percentage
         self.calculate_occupied_percentage()
 
     def flood_fill(self, x, y):
         """
         Perform flood fill from the opponent's position.
-
-        Args:
-            x (int): X-coordinate to start flood fill.
-            y (int): Y-coordinate to start flood fill.
         """
-        flood_fill(
-            x, y, accessible_mark=3, non_accessible_mark=2, red=255, green=0, blue=0
-        )
+        flood_fill(x, y, accessible_mark=self.OPPONENT, non_accessible_mark=self.FILLED, 
+                   red=self.OPPONENT_COLOR[0], green=self.OPPONENT_COLOR[1], blue=self.OPPONENT_COLOR[2])
 
     def calculate_occupied_percentage(self):
         """
         Calculate the percentage of the playfield occupied by the player.
         """
-        occupied_pixels = sum(1 for value in grid if value == 2)
-        self.occupied_percentage = (occupied_pixels / (self.width * self.height)) * 100
+        occupied_pixels = sum(1 for value in self.grid if value == self.FILLED)
+        self.occupied_percentage = (occupied_pixels / (self.WIDTH * self.HEIGHT)) * 100
         display_score_and_time(int(self.occupied_percentage))
 
     def check_win_condition(self):
         """
         Check if the player has won the game.
-
-        Returns:
-            bool: True if the player has won, False otherwise.
         """
         return self.occupied_percentage > 75
 
     def main_loop(self, joystick):
         """
         Main game loop for the Qix game.
-
-        Args:
-            joystick (Joystick): The joystick object.
         """
         global game_over
         game_over = False
@@ -1807,39 +1674,17 @@ class QixGame:
 
         while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-button ends the game
+            if c_button:
                 game_over = True
 
             self.move_player(joystick)
             self.move_opponent()
             if self.check_win_condition():
-                draw_text(
-                    self.width // 2 - 20, self.height // 2 - 10, "YOU WIN", 0, 255, 0
-                )
+                draw_text(self.WIDTH // 2 - 20, self.HEIGHT // 2 - 10, "YOU WIN", *self.PLAYER_COLOR)
                 sleep_ms(2000)
                 break
 
             sleep_ms(50)
-
-class Tetrimino:
-    """
-    Class representing a Tetrimino piece in Tetris.
-    """
-
-    def __init__(self):
-        """
-        Initialize a new Tetrimino with random shape and color.
-        """
-        self.shape = random.choice(TETRIMINOS)
-        self.color = random.choice(TETRIS_COLORS)
-        self.x = GRID_WIDTH // 2 - len(self.shape[0]) // 2
-        self.y = 0
-
-    def rotate(self):
-        """
-        Rotate the Tetrimino shape clockwise.
-        """
-        self.shape = [list(row) for row in zip(*self.shape[::-1])]
 
 
 class TetrisGame:
@@ -1847,9 +1692,11 @@ class TetrisGame:
     Class representing the Tetris game.
     """
 
-    # Color definitions for Tetris
+    # Class-level constants
+    GRID_WIDTH = 10
+    GRID_HEIGHT = 20
+    BLOCK_SIZE = 4  # Each block occupies 4x4 pixels
     TETRIS_BLACK = (0, 0, 0)
-    TETRIS_WHITE = (255, 255, 255)
     TETRIS_COLORS = [
         (0, 255, 255),    # Cyan
         (255, 0, 0),      # Red
@@ -1860,12 +1707,7 @@ class TetrisGame:
         (128, 0, 128),    # Purple
     ]
 
-    # Game field size for Tetris (16x13 blocks)
-    GRID_WIDTH = 16
-    GRID_HEIGHT = 13
-    BLOCK_SIZE = 4  # Each block is 4x4 pixels
-
-    # Tetrimino shapes for Tetris
+    # Tetrimino shapes
     TETRIMINOS = [
         [[1, 1, 1, 1]],                    # I shape
         [[1, 1, 1], [0, 1, 0]],            # T shape
@@ -1876,59 +1718,41 @@ class TetrisGame:
         [[1, 1, 1], [0, 0, 1]],            # J shape
     ]
 
-    class Tetrimino:
-        """
-        Class representing a Tetrimino piece in Tetris.
-        """
-
-        def __init__(self):
-            """
-            Initialize a new Tetrimino with random shape and color.
-            """
-            self.shape = random.choice(self.TETRIMINOS)
-            self.color = random.choice(self.TETRIS_COLORS)
-            self.x = self.GRID_WIDTH // 2 - len(self.shape[0]) // 2
-            self.y = 0
-
-        def rotate(self):
-            """
-            Rotate the Tetrimino shape clockwise.
-            """
-            self.shape = [list(row) for row in zip(*self.shape[::-1])]
-
-
     def __init__(self):
         """
         Initialize the Tetris game variables.
         """
         self.locked_positions = {}
-        self.grid = self.create_grid(self.locked_positions)
-        self.change_piece = False
-        self.current_piece = Tetrimino()
+        self.grid = self.create_grid()
+        self.current_piece = self.create_new_piece()
         self.fall_time = 0
-        self.text = ""
-        self.last_input_time = 0
-        self.input_cooldown = 60
+        self.score = 0
+        self.change_piece = False
 
-    def create_grid(self, locked_positions=None):
+    def create_grid(self):
         """
         Create the game grid with locked positions.
-
-        Args:
-            locked_positions (dict): Dictionary of locked positions.
 
         Returns:
             list: The game grid.
         """
-        if locked_positions is None:
-            locked_positions = {}
         grid = [[self.TETRIS_BLACK for _ in range(self.GRID_WIDTH)] for _ in range(self.GRID_HEIGHT)]
-        for y in range(self.GRID_HEIGHT):
-            for x in range(self.GRID_WIDTH):
-                if (x, y) in locked_positions:
-                    color = locked_positions[(x, y)]
-                    grid[y][x] = color
+        for (x, y), color in self.locked_positions.items():
+            grid[y][x] = color
         return grid
+
+    def create_new_piece(self):
+        """
+        Create a new random Tetrimino.
+
+        Returns:
+            dict: A dictionary containing the shape, color, and position of the Tetrimino.
+        """
+        shape = random.choice(self.TETRIMINOS)
+        color = random.choice(self.TETRIS_COLORS)
+        x = self.GRID_WIDTH // 2 - len(shape[0]) // 2
+        y = 0
+        return {"shape": shape, "color": color, "x": x, "y": y}
 
     def valid_move(self, shape, grid, offset):
         """
@@ -1949,38 +1773,27 @@ class TetrisGame:
                     new_x = x + off_x
                     new_y = y + off_y
                     if (
-                        new_x < 0
-                        or new_x >= self.GRID_WIDTH
-                        or new_y >= self.GRID_HEIGHT
-                        or grid[new_y][new_x] != self.TETRIS_BLACK
+                        new_x < 0 or
+                        new_x >= self.GRID_WIDTH or
+                        new_y >= self.GRID_HEIGHT or
+                        (new_y >= 0 and grid[new_y][new_x] != self.TETRIS_BLACK)
                     ):
                         return False
         return True
 
-    def clear_rows(self, grid, locked_positions):
+    def clear_rows(self):
         """
         Clear completed rows from the grid.
-
-        Args:
-            grid (list): The game grid.
-            locked_positions (dict): Dictionary of locked positions.
 
         Returns:
             int: Number of rows cleared.
         """
-        cleared_rows = 0
-        for y in range(self.GRID_HEIGHT - 1, -1, -1):
-            row = grid[y]
-            if self.TETRIS_BLACK not in row:
-                cleared_rows += 1
-                for x in range(self.GRID_WIDTH):
-                    del locked_positions[(x, y)]
-                for k in range(y, 0, -1):
-                    for x in range(self.GRID_WIDTH):
-                        locked_positions[(x, k)] = locked_positions.get(
-                            (x, k - 1), self.TETRIS_BLACK
-                        )
-        return cleared_rows
+        rows_to_clear = [y for y, row in enumerate(self.grid) if self.TETRIS_BLACK not in row]
+        for y in rows_to_clear:
+            del self.grid[y]
+            self.grid.insert(0, [self.TETRIS_BLACK] * self.GRID_WIDTH)
+            self.locked_positions = {(x, y): self.locked_positions.get((x, y - 1), self.TETRIS_BLACK) for x in range(self.GRID_WIDTH) for y in range(self.GRID_HEIGHT)}
+        return len(rows_to_clear)
 
     def draw_grid(self):
         """
@@ -1989,14 +1802,13 @@ class TetrisGame:
         for y in range(self.GRID_HEIGHT):
             for x in range(self.GRID_WIDTH):
                 color = self.grid[y][x]
-                if color != self.TETRIS_BLACK:
-                    draw_rectangle(
-                        x * self.BLOCK_SIZE,
-                        y * self.BLOCK_SIZE,
-                        (x + 1) * self.BLOCK_SIZE - 1,
-                        (y + 1) * self.BLOCK_SIZE - 1,
-                        *color,
-                    )
+                draw_rectangle(
+                    x * self.BLOCK_SIZE,
+                    y * self.BLOCK_SIZE,
+                    (x + 1) * self.BLOCK_SIZE - 1,
+                    (y + 1) * self.BLOCK_SIZE - 1,
+                    *color,
+                )
 
     def erase_piece(self, piece_positions):
         """
@@ -2033,9 +1845,21 @@ class TetrisGame:
                     *color,
                 )
 
+    def rotate_piece(self, shape):
+        """
+        Rotate the Tetrimino shape clockwise.
+
+        Args:
+            shape (list): The shape of the Tetrimino.
+
+        Returns:
+            list: The rotated shape.
+        """
+        return [list(row) for row in zip(*shape[::-1])]
+
     def handle_input(self, joystick):
         """
-        Handle joystick input with cooldown.
+        Handle joystick input.
 
         Args:
             joystick (Joystick): The joystick object.
@@ -2043,10 +1867,6 @@ class TetrisGame:
         Returns:
             str: Direction input from the joystick.
         """
-        current_time = time.ticks_ms()
-        if current_time - self.last_input_time < self.input_cooldown:
-            return None
-        self.last_input_time = current_time
         return joystick.read_direction(
             [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP], debounce=False
         )
@@ -2061,152 +1881,106 @@ class TetrisGame:
         global game_over
         game_over = False
         display.clear()
-        clock = time.ticks_ms()
+        clock = time.time()
+        fall_speed = 500  # Fall speed in milliseconds
+
         while not game_over:
-            c_button, _ = joystick.nunchuck.buttons()
-            if c_button:  # C-button ends the game
-                game_over = True
-
-            self.grid = self.create_grid(self.locked_positions)
-            fall_speed = 500  # in milliseconds
-            current_time = time.ticks_ms()
-            self.fall_time += time.ticks_diff(current_time, clock)
-            clock = current_time
-
-            redraw_needed = False
-
-            if self.fall_time >= fall_speed:
+            elapsed_time = time.time() - clock
+            if elapsed_time >= fall_speed / 1000:
                 self.fall_time = 0
-                old_piece_positions = [
-                    (self.current_piece.x + x, self.current_piece.y + y)
-                    for y, row in enumerate(self.current_piece.shape)
-                    for x, cell in enumerate(row)
-                    if cell
-                ]
-                self.erase_piece(old_piece_positions)
-
-                self.current_piece.y += 1
-                if not self.valid_move(
-                    self.current_piece.shape,
-                    self.grid,
-                    (self.current_piece.x, self.current_piece.y),
-                ):
-                    self.current_piece.y -= 1
-                    self.change_piece = True
-
-                redraw_needed = True
+                self.move_piece_down()
+                clock = time.time()
 
             direction = self.handle_input(joystick)
-            if direction == JOYSTICK_LEFT:
-                self.erase_piece(
-                    [
-                        (self.current_piece.x + x, self.current_piece.y + y)
-                        for y, row in enumerate(self.current_piece.shape)
-                        for x, cell in enumerate(row)
-                        if cell
-                    ]
-                )
-                self.current_piece.x -= 1
-                if not self.valid_move(
-                    self.current_piece.shape,
-                    self.grid,
-                    (self.current_piece.x, self.current_piece.y),
-                ):
-                    self.current_piece.x += 1
-                else:
-                    redraw_needed = True
-            elif direction == JOYSTICK_RIGHT:
-                self.erase_piece(
-                    [
-                        (self.current_piece.x + x, self.current_piece.y + y)
-                        for y, row in enumerate(self.current_piece.shape)
-                        for x, cell in enumerate(row)
-                        if cell
-                    ]
-                )
-                self.current_piece.x += 1
-                if not self.valid_move(
-                    self.current_piece.shape,
-                    self.grid,
-                    (self.current_piece.x, self.current_piece.y),
-                ):
-                    self.current_piece.x -= 1
-                else:
-                    redraw_needed = True
-            elif direction == JOYSTICK_DOWN:
-                self.erase_piece(
-                    [
-                        (self.current_piece.x + x, self.current_piece.y + y)
-                        for y, row in enumerate(self.current_piece.shape)
-                        for x, cell in enumerate(row)
-                        if cell
-                    ]
-                )
-                self.current_piece.y += 1
-                if not self.valid_move(
-                    self.current_piece.shape,
-                    self.grid,
-                    (self.current_piece.x, self.current_piece.y),
-                ):
-                    self.current_piece.y -= 1
-                else:
-                    redraw_needed = True
-            elif direction == JOYSTICK_UP:
-                self.erase_piece(
-                    [
-                        (self.current_piece.x + x, self.current_piece.y + y)
-                        for y, row in enumerate(self.current_piece.shape)
-                        for x, cell in enumerate(row)
-                        if cell
-                    ]
-                )
-                self.current_piece.rotate()
-                if not self.valid_move(
-                    self.current_piece.shape,
-                    self.grid,
-                    (self.current_piece.x, self.current_piece.y),
-                ):
-                    # Rotate back if move is invalid
-                    for _ in range(3):
-                        self.current_piece.rotate()
-                else:
-                    redraw_needed = True
-
-            if redraw_needed:
-                new_piece_positions = [
-                    (self.current_piece.x + x, self.current_piece.y + y)
-                    for y, row in enumerate(self.current_piece.shape)
-                    for x, cell in enumerate(row)
-                    if cell
-                ]
-                self.draw_piece(new_piece_positions, self.current_piece.color)
+            self.move_piece(direction)
 
             if self.change_piece:
-                for pos in new_piece_positions:
-                    self.locked_positions[(pos[0], pos[1])] = self.current_piece.color
-
-                cleared_rows = self.clear_rows(self.grid, self.locked_positions)
-
-                if cleared_rows > 0:
-                    display.clear()
-                    self.grid = self.create_grid(self.locked_positions)
-                    self.draw_grid()
-                else:
-                    self.draw_piece(new_piece_positions, self.current_piece.color)
-
-                self.current_piece = Tetrimino()
+                self.lock_piece()
+                self.score += self.clear_rows() * 100
+                self.current_piece = self.create_new_piece()
                 self.change_piece = False
 
-            display_score_and_time(len(self.locked_positions))
+            self.draw_grid()
+            display_score_and_time(self.score)
 
-            # Check for game over condition
-            if any(y < 1 for x, y in self.locked_positions):
+            if self.check_game_over():
                 game_over = True
-                self.__init__()  # Reset the game
                 break
 
-        display.clear()
-        return
+    def move_piece_down(self):
+        """
+        Move the current piece down by one row.
+        """
+        self.erase_piece(self.get_piece_positions())
+        self.current_piece["y"] += 1
+        if not self.valid_move(
+            self.current_piece["shape"],
+            self.grid,
+            (self.current_piece["x"], self.current_piece["y"]),
+        ):
+            self.current_piece["y"] -= 1
+            self.change_piece = True
+        self.draw_piece(self.get_piece_positions(), self.current_piece["color"])
+
+    def move_piece(self, direction):
+        """
+        Move the current piece based on the direction input.
+        """
+        if direction in [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP]:
+            self.erase_piece(self.get_piece_positions())
+
+        if direction == JOYSTICK_LEFT:
+            self.current_piece["x"] -= 1
+        elif direction == JOYSTICK_RIGHT:
+            self.current_piece["x"] += 1
+        elif direction == JOYSTICK_DOWN:
+            self.current_piece["y"] += 1
+        elif direction == JOYSTICK_UP:
+            rotated_shape = self.rotate_piece(self.current_piece["shape"])
+            if self.valid_move(rotated_shape, self.grid, (self.current_piece["x"], self.current_piece["y"])):
+                self.current_piece["shape"] = rotated_shape
+
+        if not self.valid_move(self.current_piece["shape"], self.grid, (self.current_piece["x"], self.current_piece["y"])):
+            if direction == JOYSTICK_LEFT:
+                self.current_piece["x"] += 1
+            elif direction == JOYSTICK_RIGHT:
+                self.current_piece["x"] -= 1
+            elif direction == JOYSTICK_DOWN:
+                self.current_piece["y"] -= 1
+            elif direction == JOYSTICK_UP:
+                for _ in range(3):  # Rotate back
+                    self.current_piece["shape"] = self.rotate_piece(self.current_piece["shape"])
+
+        self.draw_piece(self.get_piece_positions(), self.current_piece["color"])
+
+    def lock_piece(self):
+        """
+        Lock the current piece in place on the grid.
+        """
+        for x, y in self.get_piece_positions():
+            self.locked_positions[(x, y)] = self.current_piece["color"]
+
+    def get_piece_positions(self):
+        """
+        Get the positions occupied by the current piece.
+
+        Returns:
+            list: List of (x, y) positions.
+        """
+        return [
+            (self.current_piece["x"] + x, self.current_piece["y"] + y)
+            for y, row in enumerate(self.current_piece["shape"])
+            for x, cell in enumerate(row) if cell
+        ]
+
+    def check_game_over(self):
+        """
+        Check if the game is over.
+
+        Returns:
+            bool: True if game over, False otherwise.
+        """
+        return any(y < 0 for x, y in self.locked_positions)
 
 
 class MazeGame:
@@ -2215,64 +1989,103 @@ class MazeGame:
     collects gems, and shoots enemies.
     """
 
-    # Constants for grid values
+    # Class-level constants for memory efficiency
+    WIDTH = 64
+    HEIGHT = 64
     WALL = 0
     PATH = 1
     PLAYER = 2
     GEM = 3
     ENEMY = 4
     PROJECTILE = 5
-
-    MazeWaySize = 3
-    BORDER = 2
+    PLAYER_COLOR = (0, 255, 0)
+    GEM_COLOR = (255, 215, 0)
+    ENEMY_COLOR = (255, 0, 0)
+    PROJECTILE_COLOR = (255, 255, 0)
+    PATH_COLOR = (255, 255, 255)
 
     def __init__(self):
         """
         Initialize the Maze game variables.
         """
+        self.grid = bytearray(self.WIDTH * self.HEIGHT // 2)
+        self.player_x = 0
+        self.player_y = 0
+        self.player_direction = None
+        self.gems = []
+        self.enemies = []
         self.projectiles = []
         self.score = 0
-        self.player_direction = JOYSTICK_UP
+
+    def initialize_game(self):
+        """
+        Set up the game environment by generating the maze, placing the player, gems, and enemies.
+        """
+        display.clear()
+        self.initialize_grid()
+        self.generate_maze()
+        self.place_player()
+        self.place_gems()
+        self.place_enemies()
+
+    def initialize_grid(self):
+        """
+        Initialize the grid to be empty.
+        """
+        self.grid = bytearray(self.WIDTH * self.HEIGHT // 2)
+
+    def get_grid_value(self, x, y):
+        """
+        Get the value at position (x, y) in the grid.
+        """
+        index = y * self.WIDTH + x
+        return (self.grid[index // 2] >> ((index % 2) * 4)) & 0x0F
+
+    def set_grid_value(self, x, y, value):
+        """
+        Set the value at position (x, y) in the grid.
+        """
+        index = y * self.WIDTH + x
+        half_index = index // 2
+        shift = (index % 2) * 4
+        self.grid[half_index] = (self.grid[half_index] & ~(0x0F << shift)) | ((value & 0x0F) << shift)
 
     def generate_maze(self):
+        """
+        Generate a random maze using depth-first search algorithm.
+        """
         stack = []
         visited = set()
 
-        start_x = random.randint(self.BORDER // 2, WIDTH - self.BORDER // 2)
-        start_y = random.randint(self.BORDER // 2, HEIGHT - self.BORDER // 2)
-
+        start_x = random.randint(1, self.WIDTH - 2)
+        start_y = random.randint(1, self.HEIGHT - 2)
         stack.append((start_x, start_y))
         visited.add((start_x, start_y))
 
-        directions = [(0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0)]
+        directions = [(0, 2), (0, -2), (2, 0), (-2, 0)]
 
         while stack:
             x, y = stack[-1]
 
+            # Mischen der Richtungen
             mixed_directions = directions[:]  # Kopie der Richtungen
             for i in range(len(mixed_directions) - 1, 0, -1):
                 j = random.randint(0, i)
                 mixed_directions[i], mixed_directions[j] = mixed_directions[j], mixed_directions[i]
+                
+            found_unvisited = False
 
-            found_unvisited_neighbor = False
-
-            for dx, dy in mixed_directions:
+            for dx, dy in directions:
                 nx, ny = x + dx, y + dy
-                if 0 < nx < WIDTH and 0 < ny < HEIGHT and (nx, ny) not in visited:
-                    for i in range(self.MazeWaySize):
-                        cell_x = x + (dx // self.MazeWaySize) * i
-                        cell_y = y + (dy // self.MazeWaySize) * i
-                        set_grid_value(cell_x, cell_y, self.PATH)
-
+                if 0 < nx < self.WIDTH and 0 < ny < self.HEIGHT and (nx, ny) not in visited:
+                    self.set_grid_value(x + dx // 2, y + dy // 2, self.PATH)
+                    self.set_grid_value(nx, ny, self.PATH)
                     stack.append((nx, ny))
                     visited.add((nx, ny))
-
-                    set_grid_value(nx, ny, self.PATH)
-
-                    found_unvisited_neighbor = True
+                    found_unvisited = True
                     break
 
-            if not found_unvisited_neighbor:
+            if not found_unvisited:
                 stack.pop()
 
     def place_player(self):
@@ -2280,40 +2093,38 @@ class MazeGame:
         Place the player at a random position in the maze.
         """
         while True:
-            self.player_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
-            self.player_y = random.randint(self.BORDER, HEIGHT - self.BORDER - 1)
-            if get_grid_value(self.player_x, self.player_y) == self.PATH:
-                set_grid_value(self.player_x, self.player_y, self.PLAYER)
+            self.player_x = random.randint(1, self.WIDTH - 2)
+            self.player_y = random.randint(1, self.HEIGHT - 2)
+            if self.get_grid_value(self.player_x, self.player_y) == self.PATH:
+                self.set_grid_value(self.player_x, self.player_y, self.PLAYER)
                 break
 
     def place_gems(self):
         """
-        Place gems in the maze at random positions.
+        Place gems randomly in the maze.
         """
         self.gems = []
-        num_gems = 10
-        for _ in range(num_gems):
+        for _ in range(10):
             while True:
-                gem_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
-                gem_y = random.randint(self.BORDER, HEIGHT - self.BORDER - 1)
-                if get_grid_value(gem_x, gem_y) == self.PATH:
-                    set_grid_value(gem_x, gem_y, self.GEM)
-                    self.gems.append({'x': gem_x, 'y': gem_y})
+                gem_x = random.randint(1, self.WIDTH - 2)
+                gem_y = random.randint(1, self.HEIGHT - 2)
+                if self.get_grid_value(gem_x, gem_y) == self.PATH:
+                    self.set_grid_value(gem_x, gem_y, self.GEM)
+                    self.gems.append((gem_x, gem_y))
                     break
 
     def place_enemies(self):
         """
-        Place enemies in the maze at random positions.
+        Place enemies randomly in the maze.
         """
         self.enemies = []
-        num_enemies = 3
-        for _ in range(num_enemies):
+        for _ in range(3):
             while True:
-                enemy_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
-                enemy_y = random.randint(self.BORDER, HEIGHT - self.BORDER - 1)
-                if get_grid_value(enemy_x, enemy_y) == self.PATH:
-                    set_grid_value(enemy_x, enemy_y, self.ENEMY)
-                    self.enemies.append({'x': enemy_x, 'y': enemy_y})
+                enemy_x = random.randint(1, self.WIDTH - 2)
+                enemy_y = random.randint(1, self.HEIGHT - 2)
+                if self.get_grid_value(enemy_x, enemy_y) == self.PATH:
+                    self.set_grid_value(enemy_x, enemy_y, self.ENEMY)
+                    self.enemies.append((enemy_x, enemy_y))
                     break
 
     def get_visible_cells(self):
@@ -2330,8 +2141,8 @@ class MazeGame:
             while True:
                 nx += dx
                 ny += dy
-                if 0 <= nx < WIDTH and 0 <= ny < HEIGHT:
-                    cell_value = get_grid_value(nx, ny)
+                if 0 <= nx < self.WIDTH and 0 <= ny < self.HEIGHT:
+                    cell_value = self.get_grid_value(nx, ny)
                     if cell_value == self.WALL:
                         break
                     visible_cells.add((nx, ny))
@@ -2347,27 +2158,22 @@ class MazeGame:
         """
         display.clear()
         visible_cells = self.get_visible_cells()
-
         for x, y in visible_cells:
-            cell_value = get_grid_value(x, y)
-            if cell_value == self.PATH:
-                display.set_pixel(x, y, 255, 255, 255)  # Maze path color (white)
-            elif cell_value == self.PLAYER:
-                display.set_pixel(x, y, 0, 255, 0)  # Player color (green)
-            elif cell_value == self.GEM:
-                display.set_pixel(x, y, 255, 215, 0)  # Gold color for gems
-            elif cell_value == self.ENEMY:
-                display.set_pixel(x, y, 255, 0, 0)  # Enemy color (red)
-            elif cell_value == self.PROJECTILE:
-                display.set_pixel(x, y, 255, 255, 0)  # Projectile color (yellow)
+            cell_value = self.get_grid_value(x, y)
+            color = {
+                self.PATH: self.PATH_COLOR,
+                self.PLAYER: self.PLAYER_COLOR,
+                self.GEM: self.GEM_COLOR,
+                self.ENEMY: self.ENEMY_COLOR,
+                self.PROJECTILE: self.PROJECTILE_COLOR
+            }.get(cell_value, self.PATH_COLOR)
+            display.set_pixel(x, y, *color)
 
     def move_player(self, joystick):
         """
         Handle player movement based on joystick input.
         """
-        direction = joystick.read_direction(
-            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-        )
+        direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if direction:
             new_x, new_y = self.player_x, self.player_y
             if direction == JOYSTICK_UP:
@@ -2379,32 +2185,21 @@ class MazeGame:
             elif direction == JOYSTICK_RIGHT:
                 new_x += 1
 
-            if 0 <= new_x < WIDTH and 0 <= new_y < HEIGHT:
-                cell_value = get_grid_value(new_x, new_y)
-                if cell_value in [self.PATH, self.GEM]:
-                    # Update player position
-                    set_grid_value(self.player_x, self.player_y, self.PATH)  # Reset old position
+            if 0 <= new_x < self.WIDTH and 0 <= new_y < self.HEIGHT and self.get_grid_value(new_x, new_y) in [self.PATH, self.GEM]:
+                self.set_grid_value(self.player_x, self.player_y, self.PATH)  # Clear old position
+                self.player_x, self.player_y = new_x, new_y
+                self.set_grid_value(self.player_x, self.player_y, self.PLAYER)
+                self.player_direction = direction
+                if self.get_grid_value(new_x, new_y) == self.GEM:
+                    self.collect_gem(new_x, new_y)
 
-                    self.player_x, self.player_y = new_x, new_y
-
-                    set_grid_value(self.player_x, self.player_y, self.PLAYER)  # Mark as player
-
-                    self.player_direction = direction
-
-                    # Check for gem collection
-                    if cell_value == self.GEM:
-                        self.check_gem_collection()
-
-    def check_gem_collection(self):
+    def collect_gem(self, x, y):
         """
-        Check if the player has collected a gem.
+        Handle the collection of a gem.
         """
-        set_grid_value(self.player_x, self.player_y, self.PLAYER)
-        for gem in self.gems:
-            if gem['x'] == self.player_x and gem['y'] == self.player_y:
-                self.gems.remove(gem)
-                self.score += 10
-                break
+        self.set_grid_value(x, y, self.PLAYER)
+        self.gems.remove((x, y))
+        self.score += 10
 
     def move_enemies(self):
         """
@@ -2412,59 +2207,28 @@ class MazeGame:
         """
         for enemy in self.enemies:
             possible_moves = []
-            directions = [("UP", 0, -1), ("DOWN", 0, 1), ("LEFT", -1, 0), ("RIGHT", 1, 0)]
-            for dir_name, dx, dy in directions:
-                new_x = enemy['x'] + dx
-                new_y = enemy['y'] + dy
-                if 0 <= new_x < WIDTH and 0 <= new_y < HEIGHT:
-                    cell_value = get_grid_value(new_x, new_y)
-                    if cell_value == self.PATH:
-                        possible_moves.append((new_x, new_y))
+            directions = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+            for dx, dy in directions:
+                nx, ny = enemy[0] + dx, enemy[1] + dy
+                if 0 <= nx < self.WIDTH and 0 <= ny < self.HEIGHT and self.get_grid_value(nx, ny) == self.PATH:
+                    possible_moves.append((nx, ny))
 
             if possible_moves:
-                # Update enemy position in grid
-                set_grid_value(enemy['x'], enemy['y'], self.PATH)
-
-                # Choose a random move
-                new_x, new_y = random.choice(possible_moves)
-                enemy['x'], enemy['y'] = new_x, new_y
-
-                set_grid_value(enemy['x'], enemy['y'], self.ENEMY)  # Mark as enemy
+                new_position = random.choice(possible_moves)
+                self.set_grid_value(enemy[0], enemy[1], self.PATH)  # Clear old position
+                self.enemies.remove(enemy)
+                self.enemies.append(new_position)
+                self.set_grid_value(new_position[0], new_position[1], self.ENEMY)
 
     def handle_shooting(self, joystick):
         """
         Handle shooting when player presses the fire button.
         """
-        c_button, z_button = joystick.nunchuck.buttons()
+        _, z_button = joystick.nunchuck.buttons()
         if z_button:
-            # Create a new projectile
-            projectile = {
-                'x': self.player_x,
-                'y': self.player_y,
-                'dx': 0,
-                'dy': 0,
-                'lifetime': 10
-            }
-            # Determine the direction of shooting based on player direction
-            if self.player_direction == JOYSTICK_UP:
-                projectile['dx'] = 0
-                projectile['dy'] = -1
-            elif self.player_direction == JOYSTICK_DOWN:
-                projectile['dx'] = 0
-                projectile['dy'] = 1
-            elif self.player_direction == JOYSTICK_LEFT:
-                projectile['dx'] = -1
-                projectile['dy'] = 0
-            elif self.player_direction == JOYSTICK_RIGHT:
-                projectile['dx'] = 1
-                projectile['dy'] = 0
-            else:
-                # Default to shooting upwards if no direction
-                projectile['dx'] = 0
-                projectile['dy'] = -1
-
-            # Place the projectile in the grid
-            set_grid_value(projectile['x'], projectile['y'], self.PROJECTILE)
+            dx, dy = {"UP": (0, -1), "DOWN": (0, 1), "LEFT": (-1, 0), "RIGHT": (1, 0)}.get(self.player_direction, (0, -1))
+            projectile = {"x": self.player_x, "y": self.player_y, "dx": dx, "dy": dy, "lifetime": 10}
+            self.set_grid_value(projectile["x"], projectile["y"], self.PROJECTILE)
             self.projectiles.append(projectile)
 
     def update_projectiles(self):
@@ -2472,64 +2236,40 @@ class MazeGame:
         Update the positions of projectiles and handle collisions.
         """
         for projectile in self.projectiles[:]:
-            # Erase the projectile's previous position
-            set_grid_value(projectile['x'], projectile['y'], self.PATH)
+            self.set_grid_value(projectile["x"], projectile["y"], self.PATH)  # Clear old position
+            projectile["x"] += projectile["dx"]
+            projectile["y"] += projectile["dy"]
 
-            # Update position
-            projectile['x'] += projectile['dx']
-            projectile['y'] += projectile['dy']
-
-            # Check if projectile is out of bounds or hit a wall
-            if (0 <= projectile['x'] < WIDTH and 0 <= projectile['y'] < HEIGHT):
-                cell_value = get_grid_value(projectile['x'], projectile['y'])
+            if 0 <= projectile["x"] < self.WIDTH and 0 <= projectile["y"] < self.HEIGHT:
+                cell_value = self.get_grid_value(projectile["x"], projectile["y"])
                 if cell_value == self.WALL:
-                    # Projectile hit a wall
                     self.projectiles.remove(projectile)
-                    continue
                 elif cell_value == self.ENEMY:
-                    # Projectile hit an enemy
-                    # Remove the enemy
-                    for enemy in self.enemies:
-                        if enemy['x'] == projectile['x'] and enemy['y'] == projectile['y']:
-                            self.enemies.remove(enemy)
-                            break
-                    set_grid_value(projectile['x'], projectile['y'], self.PATH)
-                    # Remove the projectile
+                    self.enemies = [e for e in self.enemies if e != (projectile["x"], projectile["y"])]
+                    self.set_grid_value(projectile["x"], projectile["y"], self.PATH)
                     self.projectiles.remove(projectile)
-                    # Increase score
                     self.score += 20
-                    continue
                 else:
-                    # Move the projectile
-                    set_grid_value(projectile['x'], projectile['y'], self.PROJECTILE)
-                    projectile['lifetime'] -= 1
-                    if projectile['lifetime'] <= 0:
-                        set_grid_value(projectile['x'], projectile['y'], self.PATH)
+                    projectile["lifetime"] -= 1
+                    if projectile["lifetime"] > 0:
+                        self.set_grid_value(projectile["x"], projectile["y"], self.PROJECTILE)
+                    else:
                         self.projectiles.remove(projectile)
             else:
-                # Projectile out of bounds
                 self.projectiles.remove(projectile)
-                continue
 
     def main_loop(self, joystick):
         """
         Main game loop for the Maze game.
         """
-        initialize_grid()
-        self.generate_maze()
-        self.place_player()
-        self.place_gems()
-        self.place_enemies()
-
-        self.running = True
-
         global game_over
         game_over = False
+        self.initialize_game()
 
-        while self.running:
+        while not game_over:
             c_button, _ = joystick.nunchuck.buttons()
             if c_button:
-                self.running = False  # Exit game
+                game_over = True
 
             self.move_player(joystick)
             self.handle_shooting(joystick)
@@ -2537,19 +2277,13 @@ class MazeGame:
             self.move_enemies()
 
             self.render()
+            display_score_and_time(self.score)
 
-            # Check for game over (no enemies and no gems left)
             if not self.enemies and not self.gems:
-                # Player wins
-                self.running = False
-                # Display winning message
                 display.clear()
                 draw_text(10, 10, "YOU WIN", 0, 255, 0)
                 sleep_ms(2000)
                 break
-
-            # Update score display
-            display_score_and_time(self.score)
 
             sleep_ms(100)
 
@@ -2564,8 +2298,8 @@ class GameSelect:
         """
         Initialize the game selector with available games.
         """
-        self.joystick = None  # Joystick will be initialized on demand
-        self.games = {}  # Game instances, initialized only when needed
+        self.joystick = None  # Joystick will be initialized only when needed
+        self.game_instances = {}  # Dictionary to store game instances temporarily
         self.game_classes = {
             "SNAKE": SnakeGame,
             "SIMON": SimonGame,
@@ -2576,11 +2310,13 @@ class GameSelect:
             "QIX": QixGame,
             "TETRIS": TetrisGame,
         }
-        # Sort games alphabetically
         self.sorted_games = sorted(self.game_classes.keys())
         self.selected_game = None
 
     def initialize_joystick(self):
+        """
+        Initialize the joystick if it hasn't been initialized yet.
+        """
         if not self.joystick:
             self.joystick = Joystick()
 
@@ -2588,41 +2324,67 @@ class GameSelect:
         """
         Main loop to run the game selector and handle game execution.
         """
+        # Ensure joystick is initialized before starting the main loop
+        self.initialize_joystick()
+        
         while True:
             if self.selected_game is None:
                 self.run_game_selector()
             else:
-                selected_game_name = self.selected_game
-                self.selected_game = None
+                self.run_selected_game()
+                # Run the game over menu after the game finishes
+                GameOverMenu().run_game_over_menu()
 
-                if selected_game_name == "EXIT":
-                    break
-                elif selected_game_name == "MENU":
-                    return
-                else:
-                    # Initialize the selected game only when needed
-                    if selected_game_name not in self.games:
-                        self.games[selected_game_name] = self.game_classes[selected_game_name]()
-                    # Initialize joystick if not already initialized
-                    self.initialize_joystick()
-                    # Run the selected game
-                    self.games[selected_game_name].main_loop(self.joystick)
+    def run_selected_game(self):
+        """
+        Run the selected game based on user choice.
+        """
+        game_name = self.selected_game
+        self.selected_game = None  # Reset selection
 
-                    # Delete the game instance after it's finished to free memory
-                    del self.games[selected_game_name]
+        if game_name == "EXIT":
+            return
+        elif game_name == "MENU":
+            return
+        else:
+            # Create and run the game instance
+            game_instance = self.create_game_instance(game_name)
+            game_instance.main_loop(self.joystick)
+            # Clean up the game instance after it's finished
+            self.delete_game_instance(game_name)
 
-                    # Run the game over menu
-                    GameOverMenu().run_game_over_menu()
+    def create_game_instance(self, game_name):
+        """
+        Create a new game instance if it doesn't exist in the dictionary.
+
+        Args:
+            game_name (str): The name of the game to create an instance for.
+
+        Returns:
+            object: The initialized game instance.
+        """
+        if game_name not in self.game_instances:
+            self.game_instances[game_name] = self.game_classes[game_name]()
+        return self.game_instances[game_name]
+
+    def delete_game_instance(self, game_name):
+        """
+        Delete the game instance to free up memory.
+
+        Args:
+            game_name (str): The name of the game to delete the instance for.
+        """
+        if game_name in self.game_instances:
+            del self.game_instances[game_name]
 
     def run_game_selector(self):
         """
         Display the game selection menu and handle user input.
         """
-        games_list = self.sorted_games
         selected_index = 0
-        previous_selected = None
         top_index = 0
-        display_size = 4
+        display_size = 4  # Number of games to display at once
+        previous_selected = None
         last_move_time = time.time()
         debounce_delay = 0.05
 
@@ -2631,39 +2393,62 @@ class GameSelect:
 
             if selected_index != previous_selected:
                 previous_selected = selected_index
-                display.clear()
-                for i in range(display_size):
-                    game_idx = top_index + i
-                    if game_idx < len(games_list):
-                        color = (
-                            (255, 255, 255)
-                            if game_idx == selected_index
-                            else (111, 111, 111)
-                        )
-                        draw_text(8, 5 + i * 15, games_list[game_idx], *color)
+                self.display_game_options(top_index, selected_index, display_size)
 
             if current_time - last_move_time > debounce_delay:
                 direction = self.joystick.read_direction(
                     [JOYSTICK_UP, JOYSTICK_DOWN], debounce=False
                 )
-                if direction == JOYSTICK_UP and selected_index > 0:
-                    selected_index -= 1
-                    if selected_index < top_index:
-                        top_index -= 1
-                    last_move_time = current_time
-                elif (
-                    direction == JOYSTICK_DOWN and selected_index < len(games_list) - 1
-                ):
-                    selected_index += 1
-                    if selected_index > top_index + display_size - 1:
-                        top_index += 1
-                    last_move_time = current_time
+                selected_index, top_index = self.update_selection(direction, selected_index, top_index, display_size)
+                last_move_time = current_time
 
-            if self.joystick.is_pressed():
-                self.selected_game = games_list[selected_index]
+            # Ensure joystick is initialized before checking if it's pressed
+            if self.joystick and self.joystick.is_pressed():
+                self.selected_game = self.sorted_games[selected_index]
                 break
 
             sleep_ms(40)
+
+    def display_game_options(self, top_index, selected_index, display_size):
+        """
+        Display the list of game options on the screen.
+
+        Args:
+            top_index (int): The index of the first game to display.
+            selected_index (int): The currently selected game index.
+            display_size (int): The number of games to display at once.
+        """
+        display.clear()
+        for i in range(display_size):
+            game_idx = top_index + i
+            if game_idx < len(self.sorted_games):
+                color = (255, 255, 255) if game_idx == selected_index else (111, 111, 111)
+                draw_text(8, 5 + i * 15, self.sorted_games[game_idx], *color)
+
+    def update_selection(self, direction, selected_index, top_index, display_size):
+        """
+        Update the selected game index based on joystick input.
+
+        Args:
+            direction (str): The direction read from the joystick.
+            selected_index (int): The current selected index.
+            top_index (int): The top index of the displayed list.
+            display_size (int): The number of games displayed.
+
+        Returns:
+            tuple: Updated (selected_index, top_index).
+        """
+        if direction == JOYSTICK_UP and selected_index > 0:
+            selected_index -= 1
+            if selected_index < top_index:
+                top_index -= 1
+        elif direction == JOYSTICK_DOWN and selected_index < len(self.sorted_games) - 1:
+            selected_index += 1
+            if selected_index > top_index + display_size - 1:
+                top_index += 1
+
+        return selected_index, top_index
+
 
 class GameOverMenu:
     """
@@ -2753,3 +2538,4 @@ if __name__ == "__main__":
     display.start()
     
     main()
+
