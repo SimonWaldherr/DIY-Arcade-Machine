@@ -2390,12 +2390,350 @@ class TetrisGame:
         display.clear()
         return
 
-# Game Over Menu
 
-# class GameOverMenu:
+class MazeGame:
+    """
+    Class representing the Maze game where the player moves in a maze,
+    collects gems, and shoots enemies.
+    """
 
+    # Constants for grid values
+    WALL = 0
+    PATH = 1
+    PLAYER = 2
+    GEM = 3
+    ENEMY = 4
+    PROJECTILE = 5
 
-# Game Selector Class
+    MazeWaySize = 3
+    BORDER = 2
+
+    def __init__(self):
+        """
+        Initialize the Maze game variables.
+        """
+        self.projectiles = []
+        self.score = 0
+        self.player_direction = JOYSTICK_UP
+
+    def generate_maze(self):
+        stack = []
+        visited = set()
+
+        start_x = random.randint(self.BORDER // 2, WIDTH - self.BORDER // 2)
+        start_y = random.randint(self.BORDER // 2, HEIGHT - self.BORDER // 2)
+
+        stack.append((start_x, start_y))
+        visited.add((start_x, start_y))
+
+        directions = [(0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0)]
+
+        while stack:
+            x, y = stack[-1]
+
+            mixed_directions = directions[:]  # Kopie der Richtungen
+            for i in range(len(mixed_directions) - 1, 0, -1):
+                j = random.randint(0, i)
+                mixed_directions[i], mixed_directions[j] = mixed_directions[j], mixed_directions[i]
+
+            found_unvisited_neighbor = False
+
+            for dx, dy in mixed_directions:
+                nx, ny = x + dx, y + dy
+                if 0 < nx < WIDTH and 0 < ny < HEIGHT and (nx, ny) not in visited:
+                    for i in range(self.MazeWaySize):
+                        cell_x = x + (dx // self.MazeWaySize) * i
+                        cell_y = y + (dy // self.MazeWaySize) * i
+                        set_grid_value(cell_x, cell_y, self.PATH)
+
+                    stack.append((nx, ny))
+                    visited.add((nx, ny))
+
+                    set_grid_value(nx, ny, self.PATH)
+
+                    found_unvisited_neighbor = True
+                    break
+
+            if not found_unvisited_neighbor:
+                stack.pop()
+
+    def place_player(self):
+        """
+        Place the player at a random position in the maze.
+        """
+        while True:
+            self.player_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
+            self.player_y = random.randint(self.BORDER, HEIGHT - self.BORDER - 1)
+            if get_grid_value(self.player_x, self.player_y) == self.PATH:
+                set_grid_value(self.player_x, self.player_y, self.PLAYER)
+                break
+
+    def place_gems(self):
+        """
+        Place gems in the maze at random positions.
+        """
+        self.gems = []
+        num_gems = 10
+        for _ in range(num_gems):
+            while True:
+                gem_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
+                gem_y = random.randint(self.BORDER, HEIGHT - self.BORDER - 1)
+                if get_grid_value(gem_x, gem_y) == self.PATH:
+                    set_grid_value(gem_x, gem_y, self.GEM)
+                    self.gems.append({'x': gem_x, 'y': gem_y})
+                    break
+
+    def place_enemies(self):
+        """
+        Place enemies in the maze at random positions.
+        """
+        self.enemies = []
+        num_enemies = 3
+        for _ in range(num_enemies):
+            while True:
+                enemy_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
+                enemy_y = random.randint(self.BORDER, HEIGHT - self.BORDER - 1)
+                if get_grid_value(enemy_x, enemy_y) == self.PATH:
+                    set_grid_value(enemy_x, enemy_y, self.ENEMY)
+                    self.enemies.append({'x': enemy_x, 'y': enemy_y})
+                    break
+
+    def get_visible_cells(self):
+        """
+        Compute the cells visible to the player along the corridors.
+        """
+        visible_cells = set()
+        x, y = self.player_x, self.player_y
+        visible_cells.add((x, y))
+
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        for dx, dy in directions:
+            nx, ny = x, y
+            while True:
+                nx += dx
+                ny += dy
+                if 0 <= nx < WIDTH and 0 <= ny < HEIGHT:
+                    cell_value = get_grid_value(nx, ny)
+                    if cell_value == self.WALL:
+                        break
+                    visible_cells.add((nx, ny))
+                    if cell_value == self.ENEMY:
+                        break
+                else:
+                    break
+        return visible_cells
+
+    def render(self):
+        """
+        Render the visible part of the maze.
+        """
+        display.clear()
+        visible_cells = self.get_visible_cells()
+
+        for x, y in visible_cells:
+            cell_value = get_grid_value(x, y)
+            if cell_value == self.PATH:
+                display.set_pixel(x, y, 255, 255, 255)  # Maze path color (white)
+            elif cell_value == self.PLAYER:
+                display.set_pixel(x, y, 0, 255, 0)  # Player color (green)
+            elif cell_value == self.GEM:
+                display.set_pixel(x, y, 255, 215, 0)  # Gold color for gems
+            elif cell_value == self.ENEMY:
+                display.set_pixel(x, y, 255, 0, 0)  # Enemy color (red)
+            elif cell_value == self.PROJECTILE:
+                display.set_pixel(x, y, 255, 255, 0)  # Projectile color (yellow)
+
+    def move_player(self, joystick):
+        """
+        Handle player movement based on joystick input.
+        """
+        direction = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
+        if direction:
+            new_x, new_y = self.player_x, self.player_y
+            if direction == JOYSTICK_UP:
+                new_y -= 1
+            elif direction == JOYSTICK_DOWN:
+                new_y += 1
+            elif direction == JOYSTICK_LEFT:
+                new_x -= 1
+            elif direction == JOYSTICK_RIGHT:
+                new_x += 1
+
+            if 0 <= new_x < WIDTH and 0 <= new_y < HEIGHT:
+                cell_value = get_grid_value(new_x, new_y)
+                if cell_value in [self.PATH, self.GEM]:
+                    # Update player position
+                    set_grid_value(self.player_x, self.player_y, self.PATH)  # Reset old position
+
+                    self.player_x, self.player_y = new_x, new_y
+
+                    set_grid_value(self.player_x, self.player_y, self.PLAYER)  # Mark as player
+
+                    self.player_direction = direction
+
+                    # Check for gem collection
+                    if cell_value == self.GEM:
+                        self.check_gem_collection()
+
+    def check_gem_collection(self):
+        """
+        Check if the player has collected a gem.
+        """
+        set_grid_value(self.player_x, self.player_y, self.PLAYER)
+        for gem in self.gems:
+            if gem['x'] == self.player_x and gem['y'] == self.player_y:
+                self.gems.remove(gem)
+                self.score += 10
+                break
+
+    def move_enemies(self):
+        """
+        Move enemies in the maze.
+        """
+        for enemy in self.enemies:
+            possible_moves = []
+            directions = [("UP", 0, -1), ("DOWN", 0, 1), ("LEFT", -1, 0), ("RIGHT", 1, 0)]
+            for dir_name, dx, dy in directions:
+                new_x = enemy['x'] + dx
+                new_y = enemy['y'] + dy
+                if 0 <= new_x < WIDTH and 0 <= new_y < HEIGHT:
+                    cell_value = get_grid_value(new_x, new_y)
+                    if cell_value == self.PATH:
+                        possible_moves.append((new_x, new_y))
+
+            if possible_moves:
+                # Update enemy position in grid
+                set_grid_value(enemy['x'], enemy['y'], self.PATH)
+
+                # Choose a random move
+                new_x, new_y = random.choice(possible_moves)
+                enemy['x'], enemy['y'] = new_x, new_y
+
+                set_grid_value(enemy['x'], enemy['y'], self.ENEMY)  # Mark as enemy
+
+    def handle_shooting(self, joystick):
+        """
+        Handle shooting when player presses the fire button.
+        """
+        c_button, z_button = joystick.nunchuck.buttons()
+        if z_button:
+            # Create a new projectile
+            projectile = {
+                'x': self.player_x,
+                'y': self.player_y,
+                'dx': 0,
+                'dy': 0,
+                'lifetime': 10
+            }
+            # Determine the direction of shooting based on player direction
+            if self.player_direction == JOYSTICK_UP:
+                projectile['dx'] = 0
+                projectile['dy'] = -1
+            elif self.player_direction == JOYSTICK_DOWN:
+                projectile['dx'] = 0
+                projectile['dy'] = 1
+            elif self.player_direction == JOYSTICK_LEFT:
+                projectile['dx'] = -1
+                projectile['dy'] = 0
+            elif self.player_direction == JOYSTICK_RIGHT:
+                projectile['dx'] = 1
+                projectile['dy'] = 0
+            else:
+                # Default to shooting upwards if no direction
+                projectile['dx'] = 0
+                projectile['dy'] = -1
+
+            # Place the projectile in the grid
+            set_grid_value(projectile['x'], projectile['y'], self.PROJECTILE)
+            self.projectiles.append(projectile)
+
+    def update_projectiles(self):
+        """
+        Update the positions of projectiles and handle collisions.
+        """
+        for projectile in self.projectiles[:]:
+            # Erase the projectile's previous position
+            set_grid_value(projectile['x'], projectile['y'], self.PATH)
+
+            # Update position
+            projectile['x'] += projectile['dx']
+            projectile['y'] += projectile['dy']
+
+            # Check if projectile is out of bounds or hit a wall
+            if (0 <= projectile['x'] < WIDTH and 0 <= projectile['y'] < HEIGHT):
+                cell_value = get_grid_value(projectile['x'], projectile['y'])
+                if cell_value == self.WALL:
+                    # Projectile hit a wall
+                    self.projectiles.remove(projectile)
+                    continue
+                elif cell_value == self.ENEMY:
+                    # Projectile hit an enemy
+                    # Remove the enemy
+                    for enemy in self.enemies:
+                        if enemy['x'] == projectile['x'] and enemy['y'] == projectile['y']:
+                            self.enemies.remove(enemy)
+                            break
+                    set_grid_value(projectile['x'], projectile['y'], self.PATH)
+                    # Remove the projectile
+                    self.projectiles.remove(projectile)
+                    # Increase score
+                    self.score += 20
+                    continue
+                else:
+                    # Move the projectile
+                    set_grid_value(projectile['x'], projectile['y'], self.PROJECTILE)
+                    projectile['lifetime'] -= 1
+                    if projectile['lifetime'] <= 0:
+                        set_grid_value(projectile['x'], projectile['y'], self.PATH)
+                        self.projectiles.remove(projectile)
+            else:
+                # Projectile out of bounds
+                self.projectiles.remove(projectile)
+                continue
+
+    def main_loop(self, joystick):
+        """
+        Main game loop for the Maze game.
+        """
+        initialize_grid()
+        self.generate_maze()
+        self.place_player()
+        self.place_gems()
+        self.place_enemies()
+
+        self.running = True
+
+        global game_over
+        game_over = False
+
+        while self.running:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:
+                self.running = False  # Exit game
+
+            self.move_player(joystick)
+            self.handle_shooting(joystick)
+            self.update_projectiles()
+            self.move_enemies()
+
+            self.render()
+
+            # Check for game over (no enemies and no gems left)
+            if not self.enemies and not self.gems:
+                # Player wins
+                self.running = False
+                # Display winning message
+                display.clear()
+                draw_text(10, 10, "YOU WIN", 0, 255, 0)
+                sleep_ms(2000)
+                break
+
+            # Update score display
+            display_score_and_time(self.score)
+
+            sleep_ms(100)
 
 
 class GameSelect:
@@ -2414,6 +2752,7 @@ class GameSelect:
             "SIMON": SimonGame(),
             "BRKOUT": BreakoutGame(),
             "ASTRD": AsteroidGame(),
+            "MAZE": MazeGame(),
             "PONG": PongGame(),
             "QIX": QixGame(),
             "TETRIS": TetrisGame(),
