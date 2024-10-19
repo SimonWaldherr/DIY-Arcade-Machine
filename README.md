@@ -31,11 +31,9 @@ Don’t have the hardware yet? You can still try out the games by running the [P
 - **64x64 Pixel RGB LED Matrix with Hub75 connector**  
   - [Amazon link](https://amzn.to/3Yadyhh)
 - **Joystick options**  
-  - [KY-023 Joystick Module](https://www.az-delivery.de/products/joystick-modul) or  
   - [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) + [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71)
 - **Wiring and Power Supply**
 - **Optional 3D-printed enclosures**  
-  - [Joystick Case](https://www.thingiverse.com/thing:700346) if you use the KY-023  
   - [LED Matrix Case](https://www.thingiverse.com/thing:6751325) or [the tilted version](https://www.thingiverse.com/thing:6781604)
 - **Optional Mesh and Diffuser**  
   - [Mesh](https://www.thingiverse.com/thing:6751323)  
@@ -53,7 +51,7 @@ Don’t have the hardware yet? You can still try out the games by running the [P
 
 ### 2. Connect the Hardware
 - Connect the Interstate 75 to the RGB LED Matrix using the Hub75 connector.
-- Connect the KY-023 Joystick Module (or Nunchuck) to the GPIO pins on the microcontroller.
+- Connect the Nunchuck to the microcontroller.
 
 ### 3. Upload the Code
 - Use Thonny (or another compatible tool) to copy the provided Python script to your microcontroller.
@@ -105,6 +103,9 @@ Claim territory while avoiding enemies. Move strategically to win.
 ### Tetris
 Stack blocks to form complete lines and score points.
 - **Controls**: Use the joystick to move and rotate the blocks. Speed them up by moving them down.
+
+### Maze
+A simple maze game
 
 ## Fun
 
