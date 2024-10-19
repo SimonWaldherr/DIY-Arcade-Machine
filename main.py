@@ -137,28 +137,6 @@ CHAR_DICT = {
     ":": "0030000000300000",
     "(": "0c18303030180c00",
     ")": "6030180c18306000",
-    "[": "78c0c0c0c0c07800",
-    "]": "c06060606060c000",
-    "{": "0c18306030180c00",
-    "}": "6030180c18306000",
-    "<": "0c18306030180c00",
-    ">": "6030180c18306000",
-    "=": "0000fc0000fc0000",
-    "+": "0000187e18180000",
-    "-": "0000007e00000000",
-    "*": "c66c3810386cc600",
-    "/": "0000060c18306000",
-    "\\": "00006030180c0c00",
-    "_": "00000000000000fe",
-    "|": "1818181818181818",
-    ";": "0000003018003000",
-    ",": "0000000000303000",
-    "'": "3030300000000000",
-    '"': "cccc000000000000",
-    "`": "0c18300000000000",
-    "@": "3c66dececec07e00",
-    "^": "183c666600000000",
-    "█": "ffffffffffffffff",
 }
 
 NUMS = {
@@ -175,12 +153,6 @@ NUMS = {
     " ": ["00000", "00000", "00000", "00000", "00000"],
     ".": ["00000", "00000", "00000", "00000", "00001"],
     ":": ["00000", "00100", "00000", "00100", "00000"],
-    "/": ["00001", "00010", "00100", "01000", "10000"],
-    "|": ["00100", "00100", "00100", "00100", "00100"],
-    "-": ["00000", "00000", "11111", "00000", "00000"],
-    "=": ["00000", "11111", "00000", "11111", "00000"],
-    "+": ["00000", "00100", "01110", "00100", "00000"],
-    "*": ["00000", "10101", "01110", "10101", "00000"],
     "(": ["00010", "00100", "00100", "00100", "00010"],
     ")": ["00100", "00010", "00010", "00010", "00100"],
 }
@@ -1478,6 +1450,7 @@ class QixGame:
     OPPONENT_COLOR = (255, 0, 0)
     TRAIL_COLOR = (0, 255, 0)
     FILL_COLOR = (0, 0, 255)
+    CLEAR_COLOR = (0, 0, 0)
 
     # Grid values
     WALL = 1
@@ -2299,7 +2272,7 @@ class GameSelect:
         Initialize the game selector with available games.
         """
         self.joystick = None  # Joystick will be initialized only when needed
-        self.game_instances = {}  # Dictionary to store game instances temporarily
+        self.game_instances = None  # Game instances stored only temporarily
         self.game_classes = {
             "SNAKE": SnakeGame,
             "SIMON": SimonGame,
@@ -2310,7 +2283,7 @@ class GameSelect:
             "QIX": QixGame,
             "TETRIS": TetrisGame,
         }
-        self.sorted_games = sorted(self.game_classes.keys())
+        self.sorted_games = list(self.game_classes.keys())
         self.selected_game = None
 
     def initialize_joystick(self):
@@ -2351,7 +2324,7 @@ class GameSelect:
             game_instance = self.create_game_instance(game_name)
             game_instance.main_loop(self.joystick)
             # Clean up the game instance after it's finished
-            self.delete_game_instance(game_name)
+            self.delete_game_instance()
 
     def create_game_instance(self, game_name):
         """
@@ -2363,19 +2336,18 @@ class GameSelect:
         Returns:
             object: The initialized game instance.
         """
-        if game_name not in self.game_instances:
-            self.game_instances[game_name] = self.game_classes[game_name]()
-        return self.game_instances[game_name]
+        # Initialize only the required game instance to save memory
+        self.game_instances = self.game_classes[game_name]()
+        return self.game_instances
 
-    def delete_game_instance(self, game_name):
+    def delete_game_instance(self):
         """
         Delete the game instance to free up memory.
-
-        Args:
-            game_name (str): The name of the game to delete the instance for.
         """
-        if game_name in self.game_instances:
-            del self.game_instances[game_name]
+        if self.game_instances:
+            del self.game_instances
+            self.game_instances = None
+            gc.collect()  # Force garbage collection to free memory
 
     def run_game_selector(self):
         """
@@ -2402,7 +2374,6 @@ class GameSelect:
                 selected_index, top_index = self.update_selection(direction, selected_index, top_index, display_size)
                 last_move_time = current_time
 
-            # Ensure joystick is initialized before checking if it's pressed
             if self.joystick and self.joystick.is_pressed():
                 self.selected_game = self.sorted_games[selected_index]
                 break
