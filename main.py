@@ -3,8 +3,6 @@ import random
 import time
 import machine
 import math
-import gc
-from machine import ADC
 
 # Constants for display dimensions
 HEIGHT = 64
@@ -12,11 +10,6 @@ WIDTH = 64
 
 # Initialize the display
 display = hub75.Hub75(WIDTH, HEIGHT)
-
-# Initialize ADC for joystick inputs
-adc0 = ADC(0)
-adc1 = ADC(1)
-adc2 = ADC(2)
 
 # Global variables for game state
 global_score = 0
@@ -31,34 +24,6 @@ COLORS_BRIGHT = [
     (255, 255, 0),  # Yellow
 ]
 
-# Color definitions for Tetris
-TETRIS_BLACK = (0, 0, 0)
-TETRIS_WHITE = (255, 255, 255)
-TETRIS_COLORS = [
-    (0, 255, 255),    # Cyan
-    (255, 0, 0),      # Red
-    (0, 255, 0),      # Green
-    (0, 0, 255),      # Blue
-    (255, 255, 0),    # Yellow
-    (255, 165, 0),    # Orange
-    (128, 0, 128),    # Purple
-]
-
-# Game field size for Tetris (16x13 blocks)
-GRID_WIDTH = 16
-GRID_HEIGHT = 13
-BLOCK_SIZE = 4  # Each block is 4x4 pixels
-
-# Tetrimino shapes for Tetris
-TETRIMINOS = [
-    [[1, 1, 1, 1]],                    # I shape
-    [[1, 1, 1], [0, 1, 0]],            # T shape
-    [[1, 1, 0], [0, 1, 1]],            # S shape
-    [[0, 1, 1], [1, 1, 0]],            # Z shape
-    [[1, 1], [1, 1]],                  # O shape
-    [[1, 1, 1], [1, 0, 0]],            # L shape
-    [[1, 1, 1], [0, 0, 1]],            # J shape
-]
 
 # Adjusted color shades for inactive states
 colors = [(int(r * 0.5), int(g * 0.5), int(b * 0.5)) for r, g, b in COLORS_BRIGHT]
@@ -298,27 +263,31 @@ def display_score_and_time(score):
     draw_text_small(score_x, score_y, score_str, 255, 255, 255)
     draw_text_small(time_x, time_y, time_str, 255, 255, 255)
 
-# Global variable for the grid
-grid = bytearray(WIDTH * HEIGHT)
+# Optimized Grid Management
+grid = bytearray(WIDTH * HEIGHT // 2)  # Reduced grid size to save memory
 
 def initialize_grid():
     """
     Initialize the grid to be empty.
     """
     global grid
-    grid = bytearray(WIDTH * HEIGHT)
+    grid = bytearray(WIDTH * HEIGHT // 2)
 
 def get_grid_value(x, y):
     """
     Get the value at position (x, y) in the grid.
     """
-    return grid[y * WIDTH + x]
+    index = y * WIDTH + x
+    return (grid[index // 2] >> ((index % 2) * 4)) & 0x0F
 
 def set_grid_value(x, y, value):
     """
     Set the value at position (x, y) in the grid.
     """
-    grid[y * WIDTH + x] = value
+    index = y * WIDTH + x
+    half_index = index // 2
+    shift = (index % 2) * 4
+    grid[half_index] = (grid[half_index] & ~(0x0F << shift)) | ((value & 0x0F) << shift)
 
 def flood_fill(
     x, y, accessible_mark, non_accessible_mark, red, green, blue, max_steps=8000
@@ -491,21 +460,12 @@ class Joystick:
     Class to handle joystick inputs, either via analog inputs or I2C (Nunchuk).
     """
 
-    def __init__(self, adc_x, adc_y, adc_button):
-        # Choose the joystick mode: 'analog' or 'i2c'
+    def __init__(self):
         self.joystick_mode = "i2c"
-        # self.joystick_mode = "analog"  # Uncomment to use analog mode
 
         if self.joystick_mode == "i2c":
             self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
             self.nunchuck = Nunchuck(self.i2c)
-        elif self.joystick_mode == "analog":
-            self.adc_x = adc_x
-            self.adc_y = adc_y
-            self.adc_button = adc_button
-            self.last_direction = None
-            self.last_read_time = 0
-            self.debounce_interval = 150
 
     def read_direction(self, possible_directions, debounce=True):
         """
@@ -532,54 +492,7 @@ class Joystick:
                 return JOYSTICK_UP
             else:
                 return None
-
-        current_time = time.ticks_ms()
-
-        if debounce and current_time - self.last_read_time < self.debounce_interval:
-            return self.last_direction
-
-        value_x = self.adc_x.read_u16() - 30039
-        value_y = self.adc_y.read_u16() - 28919
-
-        threshold = 15000  # Threshold for detecting direction
-        direction = None
-        if (
-            value_y < -threshold
-            and value_x < -threshold
-            and JOYSTICK_DOWN_LEFT in possible_directions
-        ):
-            direction = JOYSTICK_DOWN_LEFT
-        elif (
-            value_y < -threshold
-            and value_x > threshold
-            and JOYSTICK_UP_LEFT in possible_directions
-        ):
-            direction = JOYSTICK_UP_LEFT
-        elif (
-            value_y > threshold
-            and value_x < -threshold
-            and JOYSTICK_DOWN_RIGHT in possible_directions
-        ):
-            direction = JOYSTICK_DOWN_RIGHT
-        elif (
-            value_y > threshold
-            and value_x > threshold
-            and JOYSTICK_UP_RIGHT in possible_directions
-        ):
-            direction = JOYSTICK_UP_RIGHT
-        elif value_y < -threshold and JOYSTICK_LEFT in possible_directions:
-            direction = JOYSTICK_LEFT
-        elif value_y > threshold and JOYSTICK_RIGHT in possible_directions:
-            direction = JOYSTICK_RIGHT
-        elif value_x < -threshold and JOYSTICK_DOWN in possible_directions:
-            direction = JOYSTICK_DOWN
-        elif value_x > threshold and JOYSTICK_UP in possible_directions:
-            direction = JOYSTICK_UP
-
-        if debounce:
-            self.last_read_time = current_time
-
-        return direction
+        return None
 
     def is_pressed(self):
         """
@@ -588,20 +501,9 @@ class Joystick:
         if self.joystick_mode == "i2c":
             _, z = self.nunchuck.buttons()
             return z
-        return self.adc_button.read_u16() < 100
+        return False
 
 def hsb_to_rgb(hue, saturation, brightness):
-    """
-    Convert HSB (Hue, Saturation, Brightness) color space to RGB.
-
-    Args:
-        hue (float): Hue angle in degrees (0-360).
-        saturation (float): Saturation (0-1).
-        brightness (float): Brightness (0-1).
-
-    Returns:
-        tuple: Corresponding RGB values as integers (0-255).
-    """
     hue_normalized = (hue % 360) / 60
     hue_index = int(hue_normalized)
     hue_fraction = hue_normalized - hue_index
@@ -1065,141 +967,6 @@ class SnakeGame:
                 game_over = True
                 return
 
-class LangtonsAnt:
-    """
-    Class representing Langton's Ant.
-    """
-    def __init__(self, x, y):
-        """
-        Initialize the ant's position and direction.
-
-        Args:
-            x (int): Initial x-coordinate.
-            y (int): Initial y-coordinate.
-        """
-        self.x = x
-        self.y = y
-        self.direction = 0  # 0: UP, 1: RIGHT, 2: DOWN, 3: LEFT
-
-    def turn_right(self):
-        """
-        Turn the ant 90 degrees to the right.
-        """
-        self.direction = (self.direction + 1) % 4
-
-    def turn_left(self):
-        """
-        Turn the ant 90 degrees to the left.
-        """
-        self.direction = (self.direction - 1) % 4
-
-    def move_forward(self):
-        """
-        Move the ant one unit forward in the current direction.
-        Wrap around if the ant reaches the edge of the grid.
-        """
-        if self.direction == 0:
-            self.y -= 1
-        elif self.direction == 1:
-            self.x += 1
-        elif self.direction == 2:
-            self.y += 1
-        elif self.direction == 3:
-            self.x -= 1
-
-        self.x %= WIDTH
-        self.y %= HEIGHT
-
-class LangtonsAntZeroPlayerGame:
-    """
-    Class representing Langton's Ant game.
-    """
-    def __init__(self):
-        """
-        Initialize the Langton's Ant game variables.
-        """
-        self.grid = [[0 for _ in range(HEIGHT)] for _ in range(WIDTH)]
-        self.ant = LangtonsAnt(WIDTH // 2, HEIGHT // 2)
-        self.steps = 0
-        self.speed = 0  # Milliseconds between steps
-
-    def restart_game(self):
-        """
-        Restart the game by resetting the grid and ant's position.
-        """
-        self.grid = [[0 for _ in range(HEIGHT)] for _ in range(WIDTH)]
-        self.ant = LangtonsAnt(WIDTH // 2, HEIGHT // 2)
-        self.steps = 0
-        display.clear()
-
-    def update_ant(self):
-        """
-        Apply Langton's Ant rules to update the grid and ant's direction.
-        """
-        x, y = self.ant.x, self.ant.y
-        if self.grid[x][y] == 0:
-            self.ant.turn_right()
-            self.grid[x][y] = 1
-        else:
-            self.ant.turn_left()
-            self.grid[x][y] = 0
-        self.ant.move_forward()
-        self.steps += 1
-
-    def draw_ant(self):
-        """
-        Draw the ant on the display.
-        """
-        # Draw the ant
-        display.set_pixel(self.ant.x, self.ant.y, 255, 0, 0)
-
-    def clear_ant_previous_position(self, prev_x, prev_y):
-        """
-        Clear the ant's previous position on the display.
-
-        Args:
-            prev_x (int): Previous x-coordinate of the ant.
-            prev_y (int): Previous y-coordinate of the ant.
-        """
-        color = TETRIS_WHITE if self.grid[prev_x][prev_y] == 0 else TETRIS_BLACK
-        display.set_pixel(prev_x, prev_y, *color)
-
-    def draw_grid_cell(self, x, y):
-        """
-        Draw a single cell on the grid based on its state.
-
-        Args:
-            x (int): x-coordinate of the cell.
-            y (int): y-coordinate of the cell.
-        """
-        color = TETRIS_WHITE if self.grid[x][y] == 0 else TETRIS_BLACK
-        display.set_pixel(x, y, *color)
-
-    def main_loop(self, joystick, mode="zero"):
-        """
-        Main game loop for Langton's Ant.
-        """
-        self.restart_game()
-
-        while True:
-            _, _ = joystick.nunchuck.buttons()
-
-            # Apply Langton's Ant rules
-            prev_x, prev_y = self.ant.x, self.ant.y
-            self.update_ant()
-
-            # Clear the ant's previous position
-            self.clear_ant_previous_position(prev_x, prev_y)
-
-            # Draw the ant at the new position
-            self.draw_ant()
-
-            # Optionally, display steps or other information
-            #display_score_and_time(self.steps)
-
-            # Control the speed of the animation
-            sleep_ms(self.speed)
-            gc.collect()
 
 class PongGame:
     """
@@ -1554,180 +1321,6 @@ class BreakoutGame:
                 game_over = True
                 return
 
-class Projectile:
-    def __init__(self, x, y, angle, speed):
-        self.x = x
-        self.y = y
-        self.angle = angle
-        self.speed = speed
-        self.lifetime = 10  # Frames
-
-    def update(self):
-        self.x += math.cos(math.radians(self.angle)) * self.speed
-        self.y -= math.sin(math.radians(self.angle)) * self.speed
-        self.x %= WIDTH
-        self.y %= HEIGHT
-        self.lifetime -= 1
-
-    def is_alive(self):
-        return self.lifetime > 0
-    
-    def draw(self):
-        # Draw the projectile as a single pixel
-        px = int(self.x) % WIDTH
-        py = int(self.y) % HEIGHT
-        self.draw_line((self.x, self.y), (self.x + math.cos(math.radians(self.angle)), self.y - math.sin(math.radians(self.angle))), (255, 0, 0))
-
-    def draw_line(self, start, end, color):
-        # Bresenham's Line Algorithm
-        x0, y0 = int(start[0]), int(start[1])
-        x1, y1 = int(end[0]), int(end[1])
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        x, y = x0, y0
-        sx = -1 if x0 > x1 else 1
-        sy = -1 if y0 > y1 else 1
-        if dx > dy:
-            err = dx / 2.0
-            while x != x1:
-                display.set_pixel(x % WIDTH, y % HEIGHT, *color)
-                err -= dy
-                if err < 0:
-                    y += sy
-                    err += dx
-                x += sx
-        else:
-            err = dy / 2.0
-            while y != y1:
-                display.set_pixel(x % WIDTH, y % HEIGHT, *color)
-                err -= dx
-                if err < 0:
-                    x += sx
-                    err += dy
-                y += sy
-        display.set_pixel(x % WIDTH, y % HEIGHT, *color)
-
-class Asteroid:
-    def __init__(self, x=None, y=None, size=None, start=False):
-        self.x, self.y = 32, 32
-
-        # use values from parameter if they are not None
-        if x is not None:
-            self.x = x
-        if y is not None:
-            self.y = y
-            
-        while (start and (22 < self.x < 42 or 22 < self.y < 42)):
-            self.x = random.uniform(0, WIDTH)
-            self.y = random.uniform(0, HEIGHT)
-
-        self.angle = random.uniform(0, 360)
-        self.speed = random.uniform(0.5, 1.5)
-        self.size = size if size is not None else random.randint(4, 8)
-
-    def update(self):
-        self.x += math.cos(math.radians(self.angle)) * self.speed
-        self.y -= math.sin(math.radians(self.angle)) * self.speed
-        self.x %= WIDTH
-        self.y %= HEIGHT
-
-    def draw(self):
-        # Draw circle by setting multiple pixels
-        for degree in range(0, 360, 10):
-            rad = math.radians(degree)
-            px = int((self.x + math.cos(rad) * self.size) % WIDTH)
-            py = int((self.y + math.sin(rad) * self.size) % HEIGHT)
-            display.set_pixel(px, py, *WHITE)
-
-class Ship:
-    def __init__(self):
-        self.x = WIDTH / 2
-        self.y = HEIGHT / 2
-        self.angle = 0
-        self.speed = 0
-        self.max_speed = 2
-        self.size = 3
-        self.cooldown = 0
-
-    def update(self, direction):
-        # Rotation based on input
-        if direction == JOYSTICK_LEFT:
-            self.angle = (self.angle + 5) % 360
-        elif direction == JOYSTICK_RIGHT:
-            self.angle = (self.angle - 5) % 360
-
-        # Forward movement
-        if direction == JOYSTICK_UP:
-            self.speed = min(self.speed + 0.1, self.max_speed)
-        else:
-            self.speed = max(self.speed - 0.05, 0)
-
-        # Update position
-        self.x += math.cos(math.radians(self.angle)) * self.speed
-        self.y -= math.sin(math.radians(self.angle)) * self.speed
-
-        # Wrap around edges
-        self.x %= WIDTH
-        self.y %= HEIGHT
-
-        # Cooldown for shooting
-        if self.cooldown > 0:
-            self.cooldown -= 1
-
-    def draw(self):
-        # Dreieck als Raumschiff
-        points = [
-            (self.x + math.cos(math.radians(self.angle)) * self.size,
-             self.y - math.sin(math.radians(self.angle)) * self.size),
-            (self.x + math.cos(math.radians(self.angle + 120)) * self.size,
-             self.y - math.sin(math.radians(self.angle + 120)) * self.size),
-            (self.x + math.cos(math.radians(self.angle - 120)) * self.size,
-             self.y - math.sin(math.radians(self.angle - 120)) * self.size),
-        ]
-        # Linien zwischen den Punkten zeichnen
-        if self.speed > 0:
-            self.draw_line(points[1], points[2], RED) # hinten - rot wenn das Raumschiff sich bewegt
-            
-        self.draw_line(points[0], points[1], WHITE) # links - Backbord
-        self.draw_line(points[2], points[0], WHITE) # rechts - Steuerbord
-
-    def draw_line(self, start, end, color):
-        # Bresenham's Linie-Algorithmus
-        x0, y0 = int(start[0]), int(start[1])
-        x1, y1 = int(end[0]), int(end[1])
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        x, y = x0, y0
-        sx = -1 if x0 > x1 else 1
-        sy = -1 if y0 > y1 else 1
-        if dx > dy:
-            err = dx / 2.0
-            while x != x1:
-                display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                err -= dy
-                if err < 0:
-                    y += sy
-                    err += dx
-                x += sx
-        else:
-            err = dy / 2.0
-            while y != y1:
-                display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                err -= dx
-                if err < 0:
-                    x += sx
-                    err += dy
-                y += sy
-        display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-
-    def shoot(self):
-        if self.cooldown == 0:
-            self.cooldown = SHIP_COOLDOWN
-            bullet_speed = 4
-            bullet_x = self.x + math.cos(math.radians(self.angle)) * self.size
-            bullet_y = self.y - math.sin(math.radians(self.angle)) * self.size
-            return Projectile(bullet_x, bullet_y, self.angle, bullet_speed)
-        return None
 
 PIXEL_WIDTH, PIXEL_HEIGHT = 64, 64
 SHIP_COOLDOWN = 10  # Frames zwischen Schüssen
@@ -1742,11 +1335,186 @@ def hypot(x, y):
 class AsteroidGame:
     def __init__(self):
         self.display = display
-        self.ship = Ship()
-        self.asteroids = [Asteroid(start=True) for _ in range(3)]
+        self.ship = self.Ship()
+        self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
         self.projectiles = []
         self.running = True
         self.score = 0
+
+    class Projectile:
+        def __init__(self, x, y, angle, speed):
+            self.x = x
+            self.y = y
+            self.angle = angle
+            self.speed = speed
+            self.lifetime = 10  # Frames
+
+        def update(self):
+            self.x += math.cos(math.radians(self.angle)) * self.speed
+            self.y -= math.sin(math.radians(self.angle)) * self.speed
+            self.x %= WIDTH
+            self.y %= HEIGHT
+            self.lifetime -= 1
+
+        def is_alive(self):
+            return self.lifetime > 0
+        
+        def draw(self):
+            # Draw the projectile as a single pixel
+            px = int(self.x) % WIDTH
+            py = int(self.y) % HEIGHT
+            self.draw_line((self.x, self.y), (self.x + math.cos(math.radians(self.angle)), self.y - math.sin(math.radians(self.angle))), (255, 0, 0))
+
+        def draw_line(self, start, end, color):
+            # Bresenham's Line Algorithm
+            x0, y0 = int(start[0]), int(start[1])
+            x1, y1 = int(end[0]), int(end[1])
+            dx = abs(x1 - x0)
+            dy = abs(y1 - y0)
+            x, y = x0, y0
+            sx = -1 if x0 > x1 else 1
+            sy = -1 if y0 > y1 else 1
+            if dx > dy:
+                err = dx / 2.0
+                while x != x1:
+                    display.set_pixel(x % WIDTH, y % HEIGHT, *color)
+                    err -= dy
+                    if err < 0:
+                        y += sy
+                        err += dx
+                    x += sx
+            else:
+                err = dy / 2.0
+                while y != y1:
+                    display.set_pixel(x % WIDTH, y % HEIGHT, *color)
+                    err -= dx
+                    if err < 0:
+                        x += sx
+                        err += dy
+                    y += sy
+            display.set_pixel(x % WIDTH, y % HEIGHT, *color)
+
+    class Asteroid:
+        def __init__(self, x=None, y=None, size=None, start=False):
+            self.x, self.y = 32, 32
+
+            # use values from parameter if they are not None
+            if x is not None:
+                self.x = x
+            if y is not None:
+                self.y = y
+                
+            while (start and (22 < self.x < 42 or 22 < self.y < 42)):
+                self.x = random.uniform(0, WIDTH)
+                self.y = random.uniform(0, HEIGHT)
+
+            self.angle = random.uniform(0, 360)
+            self.speed = random.uniform(0.5, 1.5)
+            self.size = size if size is not None else random.randint(4, 8)
+
+        def update(self):
+            self.x += math.cos(math.radians(self.angle)) * self.speed
+            self.y -= math.sin(math.radians(self.angle)) * self.speed
+            self.x %= WIDTH
+            self.y %= HEIGHT
+
+        def draw(self):
+            # Draw circle by setting multiple pixels
+            for degree in range(0, 360, 10):
+                rad = math.radians(degree)
+                px = int((self.x + math.cos(rad) * self.size) % WIDTH)
+                py = int((self.y + math.sin(rad) * self.size) % HEIGHT)
+                display.set_pixel(px, py, *WHITE)
+
+    class Ship:
+        def __init__(self):
+            self.x = WIDTH / 2
+            self.y = HEIGHT / 2
+            self.angle = 0
+            self.speed = 0
+            self.max_speed = 2
+            self.size = 3
+            self.cooldown = 0
+
+        def update(self, direction):
+            # Rotation based on input
+            if direction == JOYSTICK_LEFT:
+                self.angle = (self.angle + 5) % 360
+            elif direction == JOYSTICK_RIGHT:
+                self.angle = (self.angle - 5) % 360
+
+            # Forward movement
+            if direction == JOYSTICK_UP:
+                self.speed = min(self.speed + 0.1, self.max_speed)
+            else:
+                self.speed = max(self.speed - 0.05, 0)
+
+            # Update position
+            self.x += math.cos(math.radians(self.angle)) * self.speed
+            self.y -= math.sin(math.radians(self.angle)) * self.speed
+
+            # Wrap around edges
+            self.x %= WIDTH
+            self.y %= HEIGHT
+
+            # Cooldown for shooting
+            if self.cooldown > 0:
+                self.cooldown -= 1
+
+        def draw(self):
+            # Dreieck als Raumschiff
+            points = [
+                (self.x + math.cos(math.radians(self.angle)) * self.size,
+                self.y - math.sin(math.radians(self.angle)) * self.size),
+                (self.x + math.cos(math.radians(self.angle + 120)) * self.size,
+                self.y - math.sin(math.radians(self.angle + 120)) * self.size),
+                (self.x + math.cos(math.radians(self.angle - 120)) * self.size,
+                self.y - math.sin(math.radians(self.angle - 120)) * self.size),
+            ]
+            # Linien zwischen den Punkten zeichnen
+            if self.speed > 0:
+                self.draw_line(points[1], points[2], RED) # hinten - rot wenn das Raumschiff sich bewegt
+                
+            self.draw_line(points[0], points[1], WHITE) # links - Backbord
+            self.draw_line(points[2], points[0], WHITE) # rechts - Steuerbord
+
+        def draw_line(self, start, end, color):
+            # Bresenham's Linie-Algorithmus
+            x0, y0 = int(start[0]), int(start[1])
+            x1, y1 = int(end[0]), int(end[1])
+            dx = abs(x1 - x0)
+            dy = abs(y1 - y0)
+            x, y = x0, y0
+            sx = -1 if x0 > x1 else 1
+            sy = -1 if y0 > y1 else 1
+            if dx > dy:
+                err = dx / 2.0
+                while x != x1:
+                    display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                    err -= dy
+                    if err < 0:
+                        y += sy
+                        err += dx
+                    x += sx
+            else:
+                err = dy / 2.0
+                while y != y1:
+                    display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+                    err -= dx
+                    if err < 0:
+                        x += sx
+                        err += dy
+                    y += sy
+            display.set_pixel(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+
+        def shoot(self):
+            if self.cooldown == 0:
+                self.cooldown = SHIP_COOLDOWN
+                bullet_speed = 4
+                bullet_x = self.x + math.cos(math.radians(self.angle)) * self.size
+                bullet_y = self.y - math.sin(math.radians(self.angle)) * self.size
+                return Projectile(bullet_x, bullet_y, self.angle, bullet_speed)
+            return None
 
     def check_collisions(self):
         # Kollisionen zwischen Projektilen und Asteroiden
@@ -1761,7 +1529,7 @@ class AsteroidGame:
                     if asteroid.size > 3:
                         for _ in range(2):
                             new_size = asteroid.size // 2
-                            self.asteroids.append(Asteroid(asteroid.x, asteroid.y, new_size))
+                            self.asteroids.append(self.Asteroid(asteroid.x, asteroid.y, new_size))
                     break
 
         # Kollisionen zwischen Schiff und Asteroiden
@@ -2079,6 +1847,56 @@ class TetrisGame:
     Class representing the Tetris game.
     """
 
+    # Color definitions for Tetris
+    TETRIS_BLACK = (0, 0, 0)
+    TETRIS_WHITE = (255, 255, 255)
+    TETRIS_COLORS = [
+        (0, 255, 255),    # Cyan
+        (255, 0, 0),      # Red
+        (0, 255, 0),      # Green
+        (0, 0, 255),      # Blue
+        (255, 255, 0),    # Yellow
+        (255, 165, 0),    # Orange
+        (128, 0, 128),    # Purple
+    ]
+
+    # Game field size for Tetris (16x13 blocks)
+    GRID_WIDTH = 16
+    GRID_HEIGHT = 13
+    BLOCK_SIZE = 4  # Each block is 4x4 pixels
+
+    # Tetrimino shapes for Tetris
+    TETRIMINOS = [
+        [[1, 1, 1, 1]],                    # I shape
+        [[1, 1, 1], [0, 1, 0]],            # T shape
+        [[1, 1, 0], [0, 1, 1]],            # S shape
+        [[0, 1, 1], [1, 1, 0]],            # Z shape
+        [[1, 1], [1, 1]],                  # O shape
+        [[1, 1, 1], [1, 0, 0]],            # L shape
+        [[1, 1, 1], [0, 0, 1]],            # J shape
+    ]
+
+    class Tetrimino:
+        """
+        Class representing a Tetrimino piece in Tetris.
+        """
+
+        def __init__(self):
+            """
+            Initialize a new Tetrimino with random shape and color.
+            """
+            self.shape = random.choice(self.TETRIMINOS)
+            self.color = random.choice(self.TETRIS_COLORS)
+            self.x = self.GRID_WIDTH // 2 - len(self.shape[0]) // 2
+            self.y = 0
+
+        def rotate(self):
+            """
+            Rotate the Tetrimino shape clockwise.
+            """
+            self.shape = [list(row) for row in zip(*self.shape[::-1])]
+
+
     def __init__(self):
         """
         Initialize the Tetris game variables.
@@ -2104,9 +1922,9 @@ class TetrisGame:
         """
         if locked_positions is None:
             locked_positions = {}
-        grid = [[TETRIS_BLACK for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
-        for y in range(GRID_HEIGHT):
-            for x in range(GRID_WIDTH):
+        grid = [[self.TETRIS_BLACK for _ in range(self.GRID_WIDTH)] for _ in range(self.GRID_HEIGHT)]
+        for y in range(self.GRID_HEIGHT):
+            for x in range(self.GRID_WIDTH):
                 if (x, y) in locked_positions:
                     color = locked_positions[(x, y)]
                     grid[y][x] = color
@@ -2132,9 +1950,9 @@ class TetrisGame:
                     new_y = y + off_y
                     if (
                         new_x < 0
-                        or new_x >= GRID_WIDTH
-                        or new_y >= GRID_HEIGHT
-                        or grid[new_y][new_x] != TETRIS_BLACK
+                        or new_x >= self.GRID_WIDTH
+                        or new_y >= self.GRID_HEIGHT
+                        or grid[new_y][new_x] != self.TETRIS_BLACK
                     ):
                         return False
         return True
@@ -2151,16 +1969,16 @@ class TetrisGame:
             int: Number of rows cleared.
         """
         cleared_rows = 0
-        for y in range(GRID_HEIGHT - 1, -1, -1):
+        for y in range(self.GRID_HEIGHT - 1, -1, -1):
             row = grid[y]
-            if TETRIS_BLACK not in row:
+            if self.TETRIS_BLACK not in row:
                 cleared_rows += 1
-                for x in range(GRID_WIDTH):
+                for x in range(self.GRID_WIDTH):
                     del locked_positions[(x, y)]
                 for k in range(y, 0, -1):
-                    for x in range(GRID_WIDTH):
+                    for x in range(self.GRID_WIDTH):
                         locked_positions[(x, k)] = locked_positions.get(
-                            (x, k - 1), TETRIS_BLACK
+                            (x, k - 1), self.TETRIS_BLACK
                         )
         return cleared_rows
 
@@ -2168,15 +1986,15 @@ class TetrisGame:
         """
         Draw the grid with locked positions.
         """
-        for y in range(GRID_HEIGHT):
-            for x in range(GRID_WIDTH):
+        for y in range(self.GRID_HEIGHT):
+            for x in range(self.GRID_WIDTH):
                 color = self.grid[y][x]
-                if color != TETRIS_BLACK:
+                if color != self.TETRIS_BLACK:
                     draw_rectangle(
-                        x * BLOCK_SIZE,
-                        y * BLOCK_SIZE,
-                        (x + 1) * BLOCK_SIZE - 1,
-                        (y + 1) * BLOCK_SIZE - 1,
+                        x * self.BLOCK_SIZE,
+                        y * self.BLOCK_SIZE,
+                        (x + 1) * self.BLOCK_SIZE - 1,
+                        (y + 1) * self.BLOCK_SIZE - 1,
                         *color,
                     )
 
@@ -2190,11 +2008,11 @@ class TetrisGame:
         for x, y in piece_positions:
             if y >= 0:
                 draw_rectangle(
-                    x * BLOCK_SIZE,
-                    y * BLOCK_SIZE,
-                    (x + 1) * BLOCK_SIZE - 1,
-                    (y + 1) * BLOCK_SIZE - 1,
-                    *TETRIS_BLACK,
+                    x * self.BLOCK_SIZE,
+                    y * self.BLOCK_SIZE,
+                    (x + 1) * self.BLOCK_SIZE - 1,
+                    (y + 1) * self.BLOCK_SIZE - 1,
+                    *self.TETRIS_BLACK,
                 )
 
     def draw_piece(self, piece_positions, color):
@@ -2208,10 +2026,10 @@ class TetrisGame:
         for x, y in piece_positions:
             if y >= 0:
                 draw_rectangle(
-                    x * BLOCK_SIZE,
-                    y * BLOCK_SIZE,
-                    (x + 1) * BLOCK_SIZE - 1,
-                    (y + 1) * BLOCK_SIZE - 1,
+                    x * self.BLOCK_SIZE,
+                    y * self.BLOCK_SIZE,
+                    (x + 1) * self.BLOCK_SIZE - 1,
+                    (y + 1) * self.BLOCK_SIZE - 1,
                     *color,
                 )
 
@@ -2736,6 +2554,7 @@ class MazeGame:
             sleep_ms(100)
 
 
+
 class GameSelect:
     """
     Class for selecting and running games.
@@ -2745,45 +2564,55 @@ class GameSelect:
         """
         Initialize the game selector with available games.
         """
-        print("Initializing Game Selector")
-        self.joystick = Joystick(adc0, adc1, adc2)
-        self.games = {
-            "SNAKE": SnakeGame(),
-            "SIMON": SimonGame(),
-            "BRKOUT": BreakoutGame(),
-            "ASTRD": AsteroidGame(),
-            "MAZE": MazeGame(),
-            "PONG": PongGame(),
-            "QIX": QixGame(),
-            "TETRIS": TetrisGame(),
-            "|SNAKE": SnakeGame(),
-            "|ANT": LangtonsAntZeroPlayerGame( ),
+        self.joystick = None  # Joystick will be initialized on demand
+        self.games = {}  # Game instances, initialized only when needed
+        self.game_classes = {
+            "SNAKE": SnakeGame,
+            "SIMON": SimonGame,
+            "BRKOUT": BreakoutGame,
+            "ASTRD": AsteroidGame,
+            "MAZE": MazeGame,
+            "PONG": PongGame,
+            "QIX": QixGame,
+            "TETRIS": TetrisGame,
         }
-
-        # Sort games: alphabetically for alphabetical keys, special characters at the end
-        self.sorted_games = sorted(
-            self.games.keys(), key=lambda k: (not k[0].isalpha(), k)
-        )
-
+        # Sort games alphabetically
+        self.sorted_games = sorted(self.game_classes.keys())
         self.selected_game = None
 
-    def run_game(self, game_name):
-        """
-        Run the selected game.
+    def initialize_joystick(self):
+        if not self.joystick:
+            self.joystick = Joystick()
 
-        Args:
-            game_name (str): Name of the game to run.
+    def run(self):
         """
-        global game_over
-        game_over = False
-        
-        # zero player games
-        if game_name[0] == "|":
-            print("Running zero player game: ", game_name[1:])
-            self.games[game_name].main_loop(self.joystick, mode="zero")
-        else:
-            print("Running game: ", game_name)
-            self.games[game_name].main_loop(self.joystick)
+        Main loop to run the game selector and handle game execution.
+        """
+        while True:
+            if self.selected_game is None:
+                self.run_game_selector()
+            else:
+                selected_game_name = self.selected_game
+                self.selected_game = None
+
+                if selected_game_name == "EXIT":
+                    break
+                elif selected_game_name == "MENU":
+                    return
+                else:
+                    # Initialize the selected game only when needed
+                    if selected_game_name not in self.games:
+                        self.games[selected_game_name] = self.game_classes[selected_game_name]()
+                    # Initialize joystick if not already initialized
+                    self.initialize_joystick()
+                    # Run the selected game
+                    self.games[selected_game_name].main_loop(self.joystick)
+
+                    # Delete the game instance after it's finished to free memory
+                    del self.games[selected_game_name]
+
+                    # Run the game over menu
+                    GameOverMenu().run_game_over_menu()
 
     def run_game_selector(self):
         """
@@ -2811,13 +2640,7 @@ class GameSelect:
                             if game_idx == selected_index
                             else (111, 111, 111)
                         )
-                        # if first character is a non alphabetical character, make the character red
-                        if not games_list[game_idx][0].isalpha():
-                            red = (255, 0, 0)
-                            draw_text(8, 5 + i * 15, games_list[game_idx][0], *red)
-                            draw_text(8 + 9, 5 + i * 15, games_list[game_idx][1:], *color)
-                        else:
-                            draw_text(8, 5 + i * 15, games_list[game_idx], *color)
+                        draw_text(8, 5 + i * 15, games_list[game_idx], *color)
 
             if current_time - last_move_time > debounce_delay:
                 direction = self.joystick.read_direction(
@@ -2842,35 +2665,6 @@ class GameSelect:
 
             sleep_ms(40)
 
-
-    def run(self):
-        """
-        Main loop to run the game selector and handle game execution.
-        """
-        global last_game
-        while True:
-            if self.selected_game is None:
-                self.run_game_selector()
-            else:
-                last_game = self.selected_game
-                selected_game = self.selected_game
-                self.selected_game = None
-
-                if selected_game == "EXIT":
-                    break
-                elif selected_game == "MENU":
-                    return
-                else:
-                    if selected_game[0] == "|":
-                        print("Running zero player game: ", selected_game[1:])
-                        self.games[selected_game].main_loop(self.joystick, mode="zero")
-                    else:
-                        print("Running game: ", selected_game)
-                        self.games[selected_game].main_loop(self.joystick)
-
-                #self.games[selected_game].main_loop(self.joystick)
-                GameOverMenu().run_game_over_menu()
-
 class GameOverMenu:
     """
     Class for displaying the game over menu.
@@ -2880,7 +2674,7 @@ class GameOverMenu:
         """
         Initialize the game over menu with options.
         """
-        self.joystick = Joystick(adc0, adc1, adc2)
+        self.joystick = Joystick()
         self.menu_options = ["RETRY", "MENU"]
         self.selected_option = None
 
