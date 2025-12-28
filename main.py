@@ -115,8 +115,36 @@ def display_flush():
     del _dirty_pixels[:]
 
 # override display methods to write into our buffer
-# display.set_pixel = _set_pixel_buf
-# display.clear = _clear_buf # AttributeError: 'hub75' object has no attribute 'set_pixel'
+# Apply our buffered hooks if the hardware object exposes the expected methods.
+# Some hub75 wrappers may not expose the exact same API; guard against that.
+try:
+    display.set_pixel = _set_pixel_buf
+    display.clear = _clear_buf
+except Exception:
+    # fallback: keep originals
+    pass
+
+# Helper for games: use this to push changed pixels to the hardware.
+def push_frame():
+    try:
+        display_flush()
+    except Exception:
+        pass
+
+# Shared helper for playfield-aware rectangles
+def draw_play_rect(x, y, w, h, r, g, b):
+    # clamp to play area (avoid drawing into HUD)
+    x1 = x
+    y1 = y
+    x2 = x + w - 1
+    y2 = y + h - 1
+    if y2 < 0 or y1 >= PLAY_HEIGHT:
+        return
+    if y1 < 0:
+        y1 = 0
+    if y2 >= PLAY_HEIGHT:
+        y2 = PLAY_HEIGHT - 1
+    draw_rectangle(x1, y1, x2, y2, r, g, b)
 
 
 # ---------- Global state ----------
@@ -518,6 +546,7 @@ class HighScores:
 # ======================================================================
 
 class SimonGame:
+    """Simon: memory game — repeat the color sequence shown."""
     def __init__(self):
         self.sequence = []
         self.user_input = []
@@ -598,6 +627,7 @@ class SimonGame:
             maybe_collect(120)
 
 class SnakeGame:
+    """Snake: classic snake game, collect targets and grow."""
     def __init__(self):
         self.restart_game()
 
@@ -750,6 +780,7 @@ class SnakeGame:
             maybe_collect(120)
 
 class PongGame:
+    """Pong: two-player paddle game (AI-controlled opponent)."""
     def __init__(self):
         self.paddle_height = 10
         self.paddle_speed = 2
@@ -874,6 +905,7 @@ BRICK_ROWS = const(5)
 BRICK_COLS = const(8)
 
 class BreakoutGame:
+    """Breakout: destroy bricks with a bouncing ball and paddle."""
     def __init__(self):
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = PLAY_HEIGHT - PADDLE_HEIGHT
@@ -1006,6 +1038,7 @@ PIXEL_WIDTH = WIDTH
 PIXEL_HEIGHT = PLAY_HEIGHT
 
 class AsteroidGame:
+    """Asteroids: pilot a ship, shoot asteroids and survive."""
     class Projectile:
         def __init__(self, x, y, angle, speed):
             self.x = x
@@ -1262,6 +1295,7 @@ class AsteroidGame:
 
 # ---------- Qix ----------
 class QixGame:
+    """Qix-like: draw lines to claim area while avoiding opponents."""
     def __init__(self):
         self.height = PLAY_HEIGHT
         self.width = WIDTH
@@ -1465,6 +1499,7 @@ class QixGame:
 
 # ---------- Tetris ----------
 class TetrisGame:
+    """Tetris: falling blocks puzzle with line clears and scoring."""
     GRID_WIDTH = const(16)
     GRID_HEIGHT = const(13)
     BLOCK_SIZE = const(4)
@@ -1642,6 +1677,7 @@ class TetrisGame:
 
 # ---------- Maze ----------
 class MazeGame:
+    """Maze explorer: find gems, avoid enemies, with fog-of-war."""
     WALL = 0
     PATH = 1
     PLAYER = 2
@@ -1927,6 +1963,7 @@ class MazeGame:
 
 # ---------- FLAPPY ----------
 class FlappyGame:
+    """Flappy: navigate between pipes; flap to gain altitude."""
     def __init__(self):
         self.reset()
 
@@ -2107,19 +2144,8 @@ class RTypeGame:
         self.logic_ms = 35  # ~28fps
 
     def _rect_play(self, x, y, w, h, r, g, b):
-        x1 = x
-        y1 = y
-        x2 = x + w - 1
-        y2 = y + h - 1
-        if y2 < 0 or y1 >= PLAY_HEIGHT:
-            return
-        if y1 < 0: y1 = 0
-        if y2 >= PLAY_HEIGHT: y2 = PLAY_HEIGHT - 1
-        if x2 < 0 or x1 >= WIDTH:
-            return
-        if x1 < 0: x1 = 0
-        if x2 >= WIDTH: x2 = WIDTH - 1
-        draw_rectangle(x1, y1, x2, y2, r, g, b)
+        # reuse shared helper to draw playfield rectangles
+        draw_play_rect(x, y, w, h, r, g, b)
 
     def _overlap(self, ax1, ay1, ax2, ay2, bx1, by1, bx2, by2):
         if ax2 < bx1 or bx2 < ax1:
@@ -2919,6 +2945,7 @@ class PitfallGame:
         self.jump_charging = False
 
     def _spawn_one(self, x_start):
+        
         r = random.randint(0, 99)
         kind = "PIT" if r < 45 else ("SNAKE" if r < 75 else "TREASURE")
 
@@ -3011,17 +3038,8 @@ class PitfallGame:
             self.bonus += 25
 
     def _rect_play(self, x, y, w, h, r, g, b):
-        x1 = x
-        y1 = y
-        x2 = x + w - 1
-        y2 = y + h - 1
-        if y2 < 0 or y1 >= PLAY_HEIGHT:
-            return
-        if y1 < 0:
-            y1 = 0
-        if y2 >= PLAY_HEIGHT:
-            y2 = PLAY_HEIGHT - 1
-        draw_rectangle(x1, y1, x2, y2, r, g, b)
+        # reuse shared helper to draw playfield rectangles
+        draw_play_rect(x, y, w, h, r, g, b)
 
     def _render(self):
         display.clear()
@@ -3736,295 +3754,12 @@ class UFODefenseGame:
             except RestartProgram:
                 return
 
-
-class BomberGame:
-    """
-    BOMBER MINI
-    Steuerung:
-      - Links/Rechts: Geschwindigkeit ändern
-      - Up/Down: Höhe ändern
-      - Z: Bombe
-      - C: zurück ins Menü
-    Ziel: Skyline komplett zerstören.
-    """
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.score = 0
-        self.step = 2
-        self.n = WIDTH // self.step
-        self.ground_y = PLAY_HEIGHT - 1
-
-        self.heights = self._make_skyline()
-
-        self.plane_w = 7
-        self.plane_h = 3
-        self.plane_x = -float(self.plane_w)
-        self.plane_y = 12
-        self.plane_vx = 1.4
-
-        self.bombs = []
-        self.drop_cd = 0
-        self.frame = 0
-        
-        # enemy fighters
-        self.enemies = []
-        self.last_enemy_spawn = time.ticks_ms()
-        self.enemy_spawn_ms = 3500
-
-    def _make_skyline(self):
-        h = random.randint(12, 28)
-        heights = []
-        max_h = PLAY_HEIGHT - 3
-        for _ in range(self.n):
-            h += random.randint(-6, 6)
-            if h < 6:
-                h = 6
-            if h > max_h:
-                h = max_h
-            heights.append(h)
-
-        # spikes
-        for i in range(self.n):
-            if random.randint(0, 99) < 12:
-                heights[i] = min(max_h, heights[i] + random.randint(8, 14))
-        return heights
-
-    def _lane_index(self, x):
-        if x < 0:
-            return -1
-        return int(x) // self.step
-
-    def _rect_play(self, x, y, w, h, r, g, b):
-        x1 = x
-        y1 = y
-        x2 = x + w - 1
-        y2 = y + h - 1
-        if y2 < 0 or y1 >= PLAY_HEIGHT:
-            return
-        if y1 < 0:
-            y1 = 0
-        if y2 >= PLAY_HEIGHT:
-            y2 = PLAY_HEIGHT - 1
-        draw_rectangle(x1, y1, x2, y2, r, g, b)
-
-    def _plane_collision(self):
-        px = int(self.plane_x)
-        py = int(self.plane_y)
-        pb = py + self.plane_h - 1
-        for x in range(px, px + self.plane_w):
-            if x < 0 or x >= WIDTH:
-                continue
-            idx = x // self.step
-            if 0 <= idx < self.n:
-                h = self.heights[idx]
-                if h <= 0:
-                    continue
-                top = self.ground_y - h + 1
-                if pb >= top:
-                    return True
-        return False
-
-    def _all_destroyed(self):
-        for h in self.heights:
-            if h > 0:
-                return False
-        return True
-    
-    def _spawn_enemies(self, now):
-        if time.ticks_diff(now, self.last_enemy_spawn) >= self.enemy_spawn_ms and len(self.enemies) < 2:
-            self.last_enemy_spawn = now
-            # spawn from right side, moves toward player
-            ex = WIDTH + 5
-            ey = random.randint(4, PLAY_HEIGHT // 2)
-            self.enemies.append({"x": float(ex), "y": float(ey), "vx": -1.2})
-    
-    def _update_enemies(self):
-        global game_over, global_score
-        for e in self.enemies[:]:
-            # simple AI: move toward player Y
-            if e["y"] < self.plane_y - 1:
-                e["y"] += 0.3
-            elif e["y"] > self.plane_y + 1:
-                e["y"] -= 0.3
-            e["x"] += e["vx"]
-            
-            # remove if offscreen
-            if e["x"] < -5:
-                self.enemies.remove(e)
-                continue
-            
-            # check collision with player plane
-            ex = int(e["x"])
-            ey = int(e["y"])
-            px = int(self.plane_x)
-            py = int(self.plane_y)
-            
-            if (px <= ex + 3 and ex <= px + self.plane_w - 1 and
-                py <= ey + 1 and ey <= py + self.plane_h - 1):
-                global_score = self.score
-                game_over = True
-                return
-            
-            # check collision with bombs
-            for b in self.bombs[:]:
-                bx = int(b[0])
-                by = int(b[1])
-                if ex <= bx <= ex + 3 and ey <= by <= ey + 1:
-                    if e in self.enemies:
-                        self.enemies.remove(e)
-                    if b in self.bombs:
-                        self.bombs.remove(b)
-                    self.score += 50
-                    break
-
-    def _update_bombs(self):
-        for b in self.bombs[:]:
-            b[2] += 0.35
-            b[1] += b[2]
-            x = int(b[0])
-            y = int(b[1])
-
-            if y >= self.ground_y:
-                self.bombs.remove(b)
-                continue
-
-            idx = self._lane_index(x)
-            if 0 <= idx < self.n:
-                h = self.heights[idx]
-                if h > 0:
-                    top = self.ground_y - h + 1
-                    if y >= top:
-                        dmg = 3 + int(b[2])
-                        if dmg > 10:
-                            dmg = 10
-                        new_h = h - dmg
-                        if new_h < 0:
-                            new_h = 0
-                        removed = h - new_h
-                        self.heights[idx] = new_h
-                        self.score += removed
-                        if new_h == 0:
-                            self.score += 10
-                        self.bombs.remove(b)
-
-    def _render(self):
-        display.clear()
-
-        # buildings
-        for i, h in enumerate(self.heights):
-            if h <= 0:
-                continue
-            x = i * self.step
-            top = self.ground_y - h + 1
-            self._rect_play(x, top, self.step, h, 90, 90, 90)
-
-        # plane
-        px = int(self.plane_x)
-        py = int(self.plane_y)
-        self._rect_play(px, py, self.plane_w, self.plane_h, 255, 255, 0)
-        self._rect_play(px - 1, py + 1, 1, 1, 255, 255, 0)
-        nx = px + self.plane_w
-        ny = py + 1
-        if 0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT:
-            display.set_pixel(nx, ny, 255, 255, 0)
-
-        # bombs
-        sp = display.set_pixel
-        for bx, by, _vy in self.bombs:
-            x = int(bx); y = int(by)
-            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
-                sp(x, y, 255, 0, 0)
-            if 0 <= x < WIDTH and 0 <= y + 1 < PLAY_HEIGHT:
-                sp(x, y + 1, 255, 0, 0)
-        
-        # enemy fighters
-        for e in self.enemies:
-            ex = int(e["x"])
-            ey = int(e["y"])
-            self._rect_play(ex, ey, 4, 2, 255, 0, 0)
-
-        display_score_and_time(self.score)
-
-    def main_loop(self, joystick):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-
-        frame_ms = 35
-        last_frame = time.ticks_ms()
-
-        while not game_over:
-            try:
-                c_button, z_button = joystick.nunchuck.buttons()
-                if c_button:
-                    return
-
-                now = time.ticks_ms()
-                if time.ticks_diff(now, last_frame) < frame_ms:
-                    sleep_ms(2)
-                    continue
-                last_frame = now
-                self.frame += 1
-
-                # control
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN])
-                if d == JOYSTICK_LEFT:
-                    self.plane_vx = max(0.7, self.plane_vx - 0.12)
-                elif d == JOYSTICK_RIGHT:
-                    self.plane_vx = min(2.4, self.plane_vx + 0.12)
-                elif d == JOYSTICK_UP:
-                    self.plane_y = max(2, self.plane_y - 1)
-                elif d == JOYSTICK_DOWN:
-                    self.plane_y = min(PLAY_HEIGHT - 10, self.plane_y + 1)
-
-                # move
-                self.plane_x += self.plane_vx
-                if self.plane_x > WIDTH + self.plane_w:
-                    self.plane_x = -float(self.plane_w)
-
-                # drop
-                if self.drop_cd > 0:
-                    self.drop_cd -= 1
-                if z_button and self.drop_cd == 0 and len(self.bombs) < 3:
-                    self.bombs.append([self.plane_x + self.plane_w // 2, self.plane_y + self.plane_h, 0.0])
-                    self.drop_cd = 8
-
-                self._update_bombs()
-                self._update_enemies()
-                self._spawn_enemies(now)
-
-                if self._plane_collision():
-                    global_score = self.score
-                    game_over = True
-                    return
-
-                if self._all_destroyed():
-                    global_score = self.score + 200
-                    display.clear()
-                    draw_text(6, 18, "YOU", 0, 255, 0)
-                    draw_text(6, 33, "WON", 0, 255, 0)
-                    display_score_and_time(global_score)
-                    sleep_ms(1500)
-                    return
-
-                global_score = self.score
-                self._render()
-
-                if self.frame % 45 == 0:
-                    gc.collect()
-
-            except RestartProgram:
-                return
-
 # ======================================================================
 #                              MENUS / FLOW
 # ======================================================================
 
 class GameOverMenu:
+    """Simple menu shown after losing; choose retry or return to menu."""
     def __init__(self, joystick, score, best):
         self.joystick = joystick
         self.score = score
@@ -4072,6 +3807,7 @@ class GameOverMenu:
             sleep_ms(30)
 
 class GameSelect:
+    """Main game selector menu; choose a game to play with joystick."""
     def __init__(self):
         self.joystick = Joystick()
         self.highscores = HighScores()
@@ -4091,7 +3827,6 @@ class GameSelect:
             "PITFAL": PitfallGame,
             "LANDER": LunarLanderGame,
             "UFODEF": UFODefenseGame,
-            "BOMBER": BomberGame,
         }
         self.sorted_games = sorted(self.game_classes.keys())
 
@@ -4120,7 +3855,7 @@ class GameSelect:
 
                     hs = self.highscores.best(name)
                     hs_str = str(hs)
-                    draw_text_small(WIDTH - len(hs_str) * 6, 5 + i * 15 + 8, hs_str, 120, 120, 120)
+                    draw_text_small(WIDTH - len(hs_str) * 6, 5 + i * 15 + 8, hs_str, 120, 120, 0)
 
             if ticks_diff(now, last_move) > move_delay:
                 d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
@@ -4184,10 +3919,6 @@ def main():
             continue
         except Exception as e:
             # Failsafe: show simple error marker and reset to menu
-            # output to serial for debugging
-            import sys
-            sys.print_exception(e)
-            
             display.clear()
             draw_text(1, 20, "ERR", 255, 0, 0)
             sleep_ms(800)
