@@ -41,6 +41,84 @@ def maybe_collect(period=90):
 display = hub75.Hub75(WIDTH, HEIGHT)
 rtc = machine.RTC()
 
+# ---------- Framebuffer diff / buffered drawing ----------
+# keep a software framebuffer and only push changed pixels to the hardware
+_fb_w = WIDTH
+_fb_h = HEIGHT
+_fb_size = _fb_w * _fb_h * 3
+_fb_current = bytearray(_fb_size)
+_fb_prev = bytearray(_fb_size)
+
+# dirty tracking: list of changed pixel indices and mask to avoid duplicates
+_dirty_pixels = []
+_dirty_mask = bytearray(_fb_w * _fb_h)
+
+# keep originals to actually write to the hardware
+_display_set_pixel_orig = display.set_pixel
+_display_clear_orig = getattr(display, "clear", None)
+
+def _mark_dirty_pixel(px):
+    if _dirty_mask[px] == 0:
+        _dirty_mask[px] = 1
+        _dirty_pixels.append(px)
+
+def _set_pixel_buf(x, y, r, g, b):
+    if x < 0 or x >= _fb_w or y < 0 or y >= _fb_h:
+        return
+    pix = y * _fb_w + x
+    idx = pix * 3
+    if _fb_current[idx] != r or _fb_current[idx + 1] != g or _fb_current[idx + 2] != b:
+        _fb_current[idx] = r
+        _fb_current[idx + 1] = g
+        _fb_current[idx + 2] = b
+        _mark_dirty_pixel(pix)
+
+def _clear_buf():
+    # clear current framebuffer and mark all pixels dirty
+    w = _fb_w * _fb_h
+    for i in range(w * 3):
+        if _fb_current[i] != 0:
+            _fb_current[i] = 0
+    # mark all pixels dirty so they will be pushed
+    # reset mask and append indices
+    del _dirty_pixels[:]
+    for i in range(w):
+        _dirty_mask[i] = 1
+        _dirty_pixels.append(i)
+    # also clear hardware quickly if supported
+    if _display_clear_orig:
+        try:
+            _display_clear_orig()
+        except Exception:
+            pass
+
+def display_flush():
+    # push only dirty pixels to the hardware and update prev buffer
+    if not _dirty_pixels:
+        return
+    sp = _display_set_pixel_orig
+    for pix in _dirty_pixels:
+        idx = pix * 3
+        r = _fb_current[idx]
+        g = _fb_current[idx + 1]
+        b = _fb_current[idx + 2]
+        # compare with previous
+        if _fb_prev[idx] != r or _fb_prev[idx + 1] != g or _fb_prev[idx + 2] != b:
+            try:
+                sp(pix % _fb_w, pix // _fb_w, r, g, b)
+            except Exception:
+                pass
+            _fb_prev[idx] = r
+            _fb_prev[idx + 1] = g
+            _fb_prev[idx + 2] = b
+        _dirty_mask[pix] = 0
+    del _dirty_pixels[:]
+
+# override display methods to write into our buffer
+# display.set_pixel = _set_pixel_buf
+# display.clear = _clear_buf # AttributeError: 'hub75' object has no attribute 'set_pixel'
+
+
 # ---------- Global state ----------
 global_score = 0
 game_over = False
@@ -216,6 +294,11 @@ def display_score_and_time(score, force=False):
     draw_text_small(1, PLAY_HEIGHT, score_str, 255, 255, 255)
     time_x = WIDTH - (len(_hud_time_str) * 6)
     draw_text_small(time_x, PLAY_HEIGHT, _hud_time_str, 255, 255, 255)
+    # flush buffered drawing to hardware (only changed pixels)
+    try:
+        display_flush()
+    except Exception:
+        pass
 
 # ---------- Grid (nibble-packed) for Maze/Qix ----------
 GRID_W = WIDTH
@@ -246,20 +329,36 @@ def set_grid_value(x, y, value):
         grid[bi] = (grid[bi] & 0xF0) | (value & 0x0F)
 
 def flood_fill(x, y, accessible_mark=3, max_steps=9000):
-    stack = [(x, y)]
+    # use packed integer stack to reduce tuple allocations and memory pressure
+    # pack: (y << 8) | x  -- works for WIDTH, GRID_H < 256
+    if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
+        return False
+    pack = (y << 8) | x
+    stack = [pack]
     steps = 0
     while stack and steps < max_steps:
-        x, y = stack.pop()
-        if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
+        v = stack.pop()
+        px = v & 0xFF
+        py = v >> 8
+        if px < 0 or px >= GRID_W or py < 0 or py >= GRID_H:
             continue
-        if get_grid_value(x, y) != 0:
+        if get_grid_value(px, py) != 0:
             continue
-        set_grid_value(x, y, accessible_mark)
+        set_grid_value(px, py, accessible_mark)
         steps += 1
-        stack.append((x + 1, y))
-        stack.append((x - 1, y))
-        stack.append((x, y + 1))
-        stack.append((x, y - 1))
+        # push neighbors only if they are inside bounds and empty to avoid extra pushes
+        nx = px + 1
+        if nx < GRID_W and get_grid_value(nx, py) == 0:
+            stack.append((py << 8) | nx)
+        nx = px - 1
+        if nx >= 0 and get_grid_value(nx, py) == 0:
+            stack.append((py << 8) | nx)
+        ny = py + 1
+        if ny < GRID_H and get_grid_value(px, ny) == 0:
+            stack.append((ny << 8) | px)
+        ny = py - 1
+        if ny >= 0 and get_grid_value(px, ny) == 0:
+            stack.append((ny << 8) | px)
     return bool(stack)
 
 def count_cells_with_mark(mark, width, height):
@@ -537,7 +636,6 @@ class SnakeGame:
         self.green_targets = new_list
 
     def check_self_collision(self):
-        # (Original behavior: tries to avoid immediate collision)
         global game_over, global_score
         hx, hy = self.snake[0]
         body = self.snake[1:]
@@ -569,7 +667,21 @@ class SnakeGame:
         hx %= WIDTH
         hy %= PLAY_HEIGHT
 
-        self.snake.insert(0, (hx, hy))
+        # detect self-collision: if new head would hit body, lose
+        new_head = (hx, hy)
+        # tail position (may be freed this move)
+        tail = self.snake[-1]
+        # collision if new head is in current body, except when it's exactly the tail
+        # and the snake is not growing (tail will be popped)
+        occupying = new_head in self.snake
+        tail_will_move = len(self.snake) == self.snake_length
+        if occupying and not (tail_will_move and new_head == tail):
+            global game_over, global_score
+            global_score = self.score
+            game_over = True
+            return
+
+        self.snake.insert(0, new_head)
         if len(self.snake) > self.snake_length:
             tx, ty = self.snake.pop()
             display.set_pixel(tx, ty, 0, 0, 0)
@@ -1840,7 +1952,8 @@ class FlappyGame:
         self.pipes.append({"x": x, "gy": gy, "passed": False})
 
     def flap(self):
-        self.vy = -2
+        # compatibility for Z button: give an upward velocity impulse
+        self.vy = -4
 
     def collide(self):
         # out of bounds
@@ -1874,7 +1987,7 @@ class FlappyGame:
             if bot_start < PLAY_HEIGHT - 1:
                 draw_rectangle(x, bot_start, x + self.pipe_w - 1, PLAY_HEIGHT - 1, 0, 200, 0)
 
-        # bird (2x2) — use integer y when drawing
+        # bird (2x2)
         y = int(self.by)
         draw_rectangle(self.bx, y, self.bx + 1, y + 1, 255, 255, 0)
 
@@ -1894,22 +2007,30 @@ class FlappyGame:
             if c_button:
                 return
 
-            # flap: Z or UP
-            d = joystick.read_direction([JOYSTICK_UP])
-            if z_button or d == JOYSTICK_UP:
-                self.flap()
-
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 sleep_ms(5)
                 continue
             last_frame = now
 
-            # physics (reduced gravity and cap)
-            self.vy += 0.2
+            # physics: flap impulse + gravity
+            d = joystick.read_direction([JOYSTICK_UP])
+            if z_button or d == JOYSTICK_UP:
+                self.flap()
+
+            # gravity
+            self.vy += 1
             if self.vy > 5:
                 self.vy = 5
             self.by += self.vy
+
+            # clamp vertical
+            if self.by < 0:
+                self.by = 0
+                self.vy = 0
+            if self.by > PLAY_HEIGHT - 2:
+                self.by = PLAY_HEIGHT - 2
+                self.vy = 0
 
             # move pipes
             for p in self.pipes:
@@ -1934,6 +2055,1970 @@ class FlappyGame:
             display_score_and_time(self.score)
 
             maybe_collect(140)
+
+class RTypeGame:
+    """
+    R-TYPE / GRADIUS MINI (Endlos-Side-Shooter)
+    Steuerung:
+      - Stick: bewegen (Up/Down/Left/Right)
+      - Z: schießen
+      - C: zurück ins Menü
+    """
+    # kleine Sinus-LUT (±4) für "wobble" Gegner ohne math.sin
+    _SIN = (0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+
+        # Player
+        self.pw = 5
+        self.ph = 3
+        self.px = 6
+        self.py = PLAY_HEIGHT // 2
+
+        # Projectiles
+        self.bullets = []     # [x,y]
+        self.ebullets = []    # [x,y]
+        self.fire_cd = 0
+        self.power_t = 0      # frames power-up active
+
+        # Enemies: [x, y, typ, hp, phase, cd, basey]
+        self.enemies = []
+        self.spawn_ms = 520
+        self.last_spawn = ticks_ms()
+
+        # Powerups: [x,y,ttl]
+        self.powerups = []
+
+        # tracking start time for time-based difficulty
+        self.start_ms = time.ticks_ms()
+        # Stars background
+        self.stars = []
+        for _ in range(18):
+            self.stars.append([random.randint(0, WIDTH - 1),
+                               random.randint(0, PLAY_HEIGHT - 1),
+                               random.randint(1, 3)])
+
+        self.frame = 0
+        self.last_logic = ticks_ms()
+        self.logic_ms = 35  # ~28fps
+
+    def _rect_play(self, x, y, w, h, r, g, b):
+        x1 = x
+        y1 = y
+        x2 = x + w - 1
+        y2 = y + h - 1
+        if y2 < 0 or y1 >= PLAY_HEIGHT:
+            return
+        if y1 < 0: y1 = 0
+        if y2 >= PLAY_HEIGHT: y2 = PLAY_HEIGHT - 1
+        if x2 < 0 or x1 >= WIDTH:
+            return
+        if x1 < 0: x1 = 0
+        if x2 >= WIDTH: x2 = WIDTH - 1
+        draw_rectangle(x1, y1, x2, y2, r, g, b)
+
+    def _overlap(self, ax1, ay1, ax2, ay2, bx1, by1, bx2, by2):
+        if ax2 < bx1 or bx2 < ax1:
+            return False
+        if ay2 < by1 or by2 < ay1:
+            return False
+        return True
+
+    def _spawn_enemy(self):
+        # typ 0: drone, typ 1: wobble, typ 2: shooter
+        r = random.randint(0, 99)
+        if r < 55:
+            typ = 0
+        elif r < 85:
+            typ = 1
+        else:
+            typ = 2
+
+        y = random.randint(2, PLAY_HEIGHT - 10)
+        x = WIDTH + random.randint(0, 12)
+
+        if typ == 0:
+            hp = 1
+        elif typ == 1:
+            hp = 1
+        else:
+            hp = 2
+
+        phase = random.randint(0, 15)
+        cd = random.randint(10, 40)  # shooter cooldown
+        self.enemies.append([x, y, typ, hp, phase, cd, y])
+
+    def _difficulty_update(self):
+        # schnelleres Spawning mit Score
+        # score steigt typischerweise in 10ern, das passt gut
+        s = self.score // 10
+        self.spawn_ms = 520 - s * 12
+        if self.spawn_ms < 170:
+            self.spawn_ms = 170
+
+    def _update_stars(self):
+        for st in self.stars:
+            st[0] -= st[2]
+            if st[0] < 0:
+                st[0] = WIDTH - 1
+                st[1] = random.randint(0, PLAY_HEIGHT - 1)
+                st[2] = random.randint(1, 3)
+
+    def _update_powerups(self):
+        # move left, expire
+        for p in self.powerups[:]:
+            p[0] -= 1
+            p[2] -= 1
+            if p[0] < -2 or p[2] <= 0:
+                self.powerups.remove(p)
+                continue
+
+            # collect
+            if abs(p[0] - (self.px + self.pw // 2)) <= 2 and abs(p[1] - (self.py + 1)) <= 2:
+                self.powerups.remove(p)
+                self.power_t = 240  # ~8 Sekunden
+                # kleines Bonus
+                self.score += 5
+
+    def _update_bullets(self):
+        # player bullets
+        for b in self.bullets[:]:
+            b[0] += 4
+            if b[0] >= WIDTH:
+                self.bullets.remove(b)
+
+        # enemy bullets
+        for b in self.ebullets[:]:
+            b[0] -= 3
+            if b[0] < 0:
+                self.ebullets.remove(b)
+
+    def _update_enemies(self):
+        global game_over, global_score
+
+        for e in self.enemies[:]:
+            typ = e[2]
+
+            # movement
+            if typ == 0:
+                e[0] -= 2
+            elif typ == 1:
+                e[0] -= 1
+                e[4] = (e[4] + 1) & 15
+                e[1] = e[6] + self._SIN[e[4]]
+                if e[1] < 1: e[1] = 1
+                if e[1] > PLAY_HEIGHT - 6: e[1] = PLAY_HEIGHT - 6
+            else:
+                e[0] -= 1
+                e[5] -= 1
+                if e[5] <= 0 and len(self.ebullets) < 3:
+                    # shoot
+                    self.ebullets.append([e[0], e[1] + 1])
+                    e[5] = random.randint(18, 40)
+
+            # offscreen
+            if e[0] < -10:
+                self.enemies.remove(e)
+                continue
+
+            # collision with player (rects)
+            ex1 = e[0]
+            ey1 = e[1]
+            ew = 4 if typ != 2 else 5
+            eh = 3 if typ != 2 else 4
+            ex2 = ex1 + ew - 1
+            ey2 = ey1 + eh - 1
+
+            px1 = self.px
+            py1 = self.py
+            px2 = px1 + self.pw - 1
+            py2 = py1 + self.ph - 1
+
+            if self._overlap(ex1, ey1, ex2, ey2, px1, py1, px2, py2):
+                global_score = self.score
+                game_over = True
+                return
+
+        # enemy bullets vs player
+        px1 = self.px
+        py1 = self.py
+        px2 = px1 + self.pw - 1
+        py2 = py1 + self.ph - 1
+        for b in self.ebullets[:]:
+            if px1 <= b[0] <= px2 and py1 <= b[1] <= py2:
+                global_score = self.score
+                game_over = True
+                return
+
+    def _bullet_hits(self):
+        # bullets vs enemies
+        for b in self.bullets[:]:
+            bx, by = b[0], b[1]
+            hit = None
+            for e in self.enemies:
+                typ = e[2]
+                ex1 = e[0]
+                ey1 = e[1]
+                ew = 4 if typ != 2 else 5
+                eh = 3 if typ != 2 else 4
+                ex2 = ex1 + ew - 1
+                ey2 = ey1 + eh - 1
+                if ex1 <= bx <= ex2 and ey1 <= by <= ey2:
+                    hit = e
+                    break
+
+            if hit is not None:
+                if b in self.bullets:
+                    self.bullets.remove(b)
+                hit[3] -= 1
+                if hit[3] <= 0:
+                    if hit in self.enemies:
+                        self.enemies.remove(hit)
+                    # score
+                    typ = hit[2]
+                    self.score += (10 + typ * 7)
+                    # chance for powerup
+                    if random.randint(0, 99) < 12:
+                        self.powerups.append([hit[0], hit[1], 400])
+                else:
+                    self.score += 1  # hit bonus
+
+    def _draw(self):
+        display.clear()
+        sp = display.set_pixel
+
+        # stars
+        for x, y, _s in self.stars:
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, 60, 60, 60)
+
+        # powerups
+        for p in self.powerups:
+            x = int(p[0]); y = int(p[1])
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, 0, 255, 0)
+                if x + 1 < WIDTH:
+                    sp(x + 1, y, 0, 255, 0)
+
+        # player
+        self._rect_play(self.px, self.py, self.pw, self.ph, 0, 180, 255)
+        # nose
+        nx = self.px + self.pw
+        ny = self.py + 1
+        if 0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT:
+            sp(nx, ny, 0, 180, 255)
+
+        # bullets
+        for b in self.bullets:
+            x, y = b
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, 255, 255, 255)
+        for b in self.ebullets:
+            x, y = b
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, 255, 60, 60)
+
+        # enemies
+        for e in self.enemies:
+            x = int(e[0]); y = int(e[1]); typ = e[2]
+            if typ == 0:
+                self._rect_play(x, y, 4, 3, 255, 60, 60)
+            elif typ == 1:
+                self._rect_play(x, y, 4, 3, 255, 0, 255)
+            else:
+                self._rect_play(x, y, 5, 4, 255, 140, 0)
+                # "gun"
+                gx = x
+                gy = y + 2
+                if 0 <= gx < WIDTH and 0 <= gy < PLAY_HEIGHT:
+                    sp(gx, gy, 0, 0, 0)
+
+        # HUD
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        while True:
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:
+                return
+            if game_over:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, self.last_logic) < self.logic_ms:
+                sleep_ms(2)
+                continue
+            self.last_logic = now
+            self.frame += 1
+
+            # power timer
+            if self.power_t > 0:
+                self.power_t -= 1
+
+            # input
+            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            step = 2
+            if d == JOYSTICK_UP:
+                self.py -= step
+            elif d == JOYSTICK_DOWN:
+                self.py += step
+            elif d == JOYSTICK_LEFT:
+                self.px -= step
+            elif d == JOYSTICK_RIGHT:
+                self.px += step
+
+            # bounds
+            if self.px < 0: self.px = 0
+            if self.px > WIDTH - self.pw - 1: self.px = WIDTH - self.pw - 1
+            if self.py < 0: self.py = 0
+            if self.py > PLAY_HEIGHT - self.ph: self.py = PLAY_HEIGHT - self.ph
+
+            # shoot
+            if self.fire_cd > 0:
+                self.fire_cd -= 1
+            cd_min = 4 if self.power_t > 0 else 7
+            if z_button and self.fire_cd == 0:
+                # normal bullet
+                self.bullets.append([self.px + self.pw + 1, self.py + 1])
+                # powered double-shot
+                if self.power_t > 0 and len(self.bullets) < 6:
+                    self.bullets.append([self.px + self.pw + 1, self.py])
+                self.fire_cd = cd_min
+
+            # spawn
+            self._difficulty_update()
+            if ticks_diff(now, self.last_spawn) >= self.spawn_ms and len(self.enemies) < 8:
+                self.last_spawn = now
+                self._spawn_enemy()
+
+            # update world
+            self._update_stars()
+            self._update_powerups()
+            self._update_bullets()
+            self._bullet_hits()
+            self._update_enemies()
+
+            global_score = self.score
+            self._draw()
+
+            if self.frame % 80 == 0:
+                gc.collect()
+
+
+class PacmanGame:
+    """
+    PACMAN-lite (Maze + Pellets + 2 Ghosts)
+    Steuerung:
+      - Stick: Richtung
+      - C: zurück ins Menü
+    """
+    W = 16
+    H = 14
+    CELL = 4
+    OFF_X = 0
+    OFF_Y = 1
+
+    # 16 Zeichen pro Zeile, 14 Zeilen
+    MAP = [
+        "################",
+        "#P....#....G...#",
+        "#.##.#.##.#.##.#",
+        "#o#..#....#..#o#",
+        "#....#######...#",
+        "#.##........##.#",
+        "#....#.##.#....#",
+        "#....#.##.#....#",
+        "#.##........##.#",
+        "#...#######....#",
+        "#o#..#....#..#o#",
+        "#.##.#.##.#.##.#",
+        "#...G#....#....#",
+        "################",
+    ]
+
+    # dirs: 0 U, 1 D, 2 L, 3 R
+    DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
+    OPP  = (1, 0, 3, 2)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.wall = bytearray(self.W * self.H)      # 1 if wall
+        self.pel = bytearray(self.W * self.H)       # 0 none, 1 pellet, 2 power
+        self.wall_list = []
+
+        self.px = 1
+        self.py = 1
+        self.pdir = 3  # right
+        self.want_dir = 3
+
+        self.ghosts = []  # each: [x,y,dir,home_x,home_y]
+        self.power_timer = 0  # ticks (logic steps)
+
+        self.score = 0
+        self.pellet_count = 0
+
+        # parse map
+        for y in range(self.H):
+            row = self.MAP[y]
+            for x in range(self.W):
+                ch = row[x]
+                i = y * self.W + x
+                if ch == "#":
+                    self.wall[i] = 1
+                    self.wall_list.append((x, y))
+                else:
+                    self.wall[i] = 0
+                    if ch == ".":
+                        self.pel[i] = 1
+                        self.pellet_count += 1
+                    elif ch == "o":
+                        self.pel[i] = 2
+                        self.pellet_count += 1
+                    else:
+                        self.pel[i] = 0
+
+                    if ch == "P":
+                        self.px, self.py = x, y
+                    elif ch == "G":
+                        # ghost start
+                        self.ghosts.append([x, y, random.randint(0, 3), x, y])
+
+        if len(self.ghosts) < 2:
+            # safety
+            self.ghosts.append([self.W - 2, 1, 2, self.W - 2, 1])
+
+        self.last_logic = ticks_ms()
+        self.logic_ms = 120
+        self.ghost_tick = 0
+        self._input_cd = 0
+        self.frame = 0
+        self._dirty = True
+
+    def _idx(self, x, y):
+        return y * self.W + x
+
+    def _can_move(self, x, y):
+        if x < 0 or x >= self.W or y < 0 or y >= self.H:
+            return False
+        return self.wall[self._idx(x, y)] == 0
+
+    def _eat(self):
+        i = self._idx(self.px, self.py)
+        v = self.pel[i]
+        if v:
+            self.pel[i] = 0
+            self.pellet_count -= 1
+            if v == 1:
+                self.score += 1
+            else:
+                self.score += 10
+                self.power_timer = 70  # ~8.4s bei logic_ms=120
+            self._dirty = True
+
+    def _move_player(self):
+        # attempt desired direction first
+        dx, dy = self.DIRS[self.want_dir]
+        nx = self.px + dx
+        ny = self.py + dy
+        if self._can_move(nx, ny):
+            self.pdir = self.want_dir
+        else:
+            # try current dir
+            dx, dy = self.DIRS[self.pdir]
+            nx = self.px + dx
+            ny = self.py + dy
+            if not self._can_move(nx, ny):
+                return  # stuck
+
+        self.px = nx
+        self.py = ny
+        self._dirty = True
+
+    def _ghost_moves(self, g):
+        # returns list of possible dirs
+        x, y, d, hx, hy = g
+        moves = []
+        for nd in (0, 1, 2, 3):
+            dx, dy = self.DIRS[nd]
+            nx = x + dx
+            ny = y + dy
+            if self._can_move(nx, ny):
+                moves.append(nd)
+        if len(moves) > 1 and self.OPP[d] in moves:
+            moves.remove(self.OPP[d])
+        return moves
+
+    def _ghost_pick(self, g):
+        x, y, d, hx, hy = g
+        moves = self._ghost_moves(g)
+        if not moves:
+            return d
+        if len(moves) == 1:
+            return moves[0]
+
+        # 25% randomness
+        if random.randint(0, 99) < 25:
+            return random.choice(moves)
+
+        # greedy distance
+        best = moves[0]
+        bestv = None
+
+        frightened = (self.power_timer > 0)
+        for nd in moves:
+            dx, dy = self.DIRS[nd]
+            nx = x + dx
+            ny = y + dy
+            dist = abs(nx - self.px) + abs(ny - self.py)
+
+            if frightened:
+                # maximize distance
+                if bestv is None or dist > bestv:
+                    bestv = dist
+                    best = nd
+            else:
+                # minimize distance
+                if bestv is None or dist < bestv:
+                    bestv = dist
+                    best = nd
+        return best
+
+    def _move_ghosts(self):
+        # ghost speed: every 2nd logic tick
+        self.ghost_tick = (self.ghost_tick + 1) & 1
+        if self.ghost_tick == 1:
+            return
+
+        for g in self.ghosts:
+            nd = self._ghost_pick(g)
+            g[2] = nd
+            dx, dy = self.DIRS[nd]
+            g[0] += dx
+            g[1] += dy
+            self._dirty = True
+
+    def _check_collisions(self):
+        global game_over, global_score
+        for g in self.ghosts:
+            if g[0] == self.px and g[1] == self.py:
+                if self.power_timer > 0:
+                    # eat ghost
+                    self.score += 50
+                    g[0], g[1] = g[3], g[4]
+                    g[2] = random.randint(0, 3)
+                    self._dirty = True
+                else:
+                    global_score = self.score
+                    game_over = True
+                    return True
+        return False
+
+    def _draw_cell(self, cx, cy, r, g, b):
+        x1 = self.OFF_X + cx * self.CELL
+        y1 = self.OFF_Y + cy * self.CELL
+        draw_rectangle(x1, y1, x1 + self.CELL - 1, y1 + self.CELL - 1, r, g, b)
+
+    def _draw(self):
+        display.clear()
+        sp = display.set_pixel
+
+        # walls
+        for (x, y) in self.wall_list:
+            self._draw_cell(x, y, 0, 0, 140)
+
+        # pellets
+        for y in range(self.H):
+            for x in range(self.W):
+                v = self.pel[self._idx(x, y)]
+                if v:
+                    cx = self.OFF_X + x * self.CELL + 1
+                    cy = self.OFF_Y + y * self.CELL + 1
+                    if v == 1:
+                        sp(cx, cy, 255, 255, 255)
+                    else:
+                        # power pellet 2x2
+                        draw_rectangle(cx, cy, cx + 1, cy + 1, 255, 215, 0)
+
+        # player (3x3 yellow)
+        px = self.OFF_X + self.px * self.CELL
+        py = self.OFF_Y + self.py * self.CELL
+        draw_rectangle(px, py, px + 2, py + 2, 255, 255, 0)
+
+        # ghosts
+        frightened = (self.power_timer > 0)
+        for gi, g in enumerate(self.ghosts):
+            gx = self.OFF_X + g[0] * self.CELL
+            gy = self.OFF_Y + g[1] * self.CELL
+            if frightened:
+                col = (80, 80, 255)
+            else:
+                col = (255, 60, 60) if gi == 0 else (255, 0, 255)
+            draw_rectangle(gx, gy, gx + 2, gy + 2, *col)
+
+        display_score_and_time(self.score)
+        self._dirty = False
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        while True:
+            c_button, _z = joystick.nunchuck.buttons()
+            if c_button:
+                return
+            if game_over:
+                return
+
+            now = ticks_ms()
+
+            # read input often
+            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if d == JOYSTICK_UP:
+                self.want_dir = 0
+            elif d == JOYSTICK_DOWN:
+                self.want_dir = 1
+            elif d == JOYSTICK_LEFT:
+                self.want_dir = 2
+            elif d == JOYSTICK_RIGHT:
+                self.want_dir = 3
+
+            if ticks_diff(now, self.last_logic) >= self.logic_ms:
+                self.last_logic = now
+                self.frame += 1
+
+                if self.power_timer > 0:
+                    self.power_timer -= 1
+
+                self._move_player()
+                self._eat()
+                self._move_ghosts()
+
+                if self._check_collisions():
+                    global_score = self.score
+                    return
+
+                # win?
+                if self.pellet_count <= 0:
+                    global_score = self.score
+                    display.clear()
+                    draw_text(6, 18, "YOU", 0, 255, 0)
+                    draw_text(6, 33, "WON", 0, 255, 0)
+                    display_score_and_time(global_score)
+                    sleep_ms(1300)
+                    return
+
+                global_score = self.score
+
+                if self.frame % 90 == 0:
+                    gc.collect()
+
+                self._dirty = True
+
+            if self._dirty:
+                self._draw()
+            else:
+                sleep_ms(8)
+
+class CaveFlyGame:
+    """
+    CAVE FLYER (wie Flappy in Höhle)
+    Steuerung:
+      - Z oder Stick UP: Schub nach oben
+      - C: zurück ins Menü
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.bx = 12
+        self.by = PLAY_HEIGHT // 2
+        self.vy = 0
+
+        self.gap = 18
+        self.center = PLAY_HEIGHT // 2
+        self.speed = 1
+
+        # Ringbuffer für ceiling/floor
+        self.head = 0
+        self.ceiling = bytearray(WIDTH)
+        self.floor = bytearray(WIDTH)
+
+        # Initiale Höhle
+        for x in range(WIDTH):
+            self._gen_column_at((self.head + x) % WIDTH)
+
+        self.score = 0
+        self.frame = 0
+
+    def _clamp(self, v, lo, hi):
+        if v < lo: return lo
+        if v > hi: return hi
+        return v
+
+    def _gen_column_at(self, idx):
+        # Center drift
+        self.center += random.randint(-2, 2)
+        self.center = self._clamp(self.center, self.gap // 2 + 3, PLAY_HEIGHT - self.gap // 2 - 4)
+
+        top_end = self.center - self.gap // 2
+        bot_start = self.center + self.gap // 2
+
+        self.ceiling[idx] = self._clamp(top_end, 1, PLAY_HEIGHT - 2)
+        self.floor[idx] = self._clamp(bot_start, 2, PLAY_HEIGHT - 2)
+
+    def _idx(self, x):
+        return (self.head + x) % WIDTH
+
+    def _step_scroll(self):
+        # “links scrollen” = head eins weiter
+        self.head = (self.head + 1) % WIDTH
+        # neue rechte Spalte generieren
+        self._gen_column_at(self._idx(WIDTH - 1))
+
+    def _collide(self):
+        # bird 2x2
+        y = self.by
+        # check 2 columns for safety (bx and bx+1)
+        for xx in (self.bx, self.bx + 1):
+            if xx < 0 or xx >= WIDTH:
+                continue
+            ci = self._idx(xx)
+            top = int(self.ceiling[ci])
+            bot = int(self.floor[ci])
+            # obere Wand
+            if y <= top:
+                return True
+            # untere Wand
+            if (y + 1) >= bot:
+                return True
+        return False
+
+    def _draw(self):
+        display.clear()
+        sp = display.set_pixel
+
+        # Höhlenlinien zeichnen
+        for x in range(WIDTH):
+            i = self._idx(x)
+            top = int(self.ceiling[i])
+            bot = int(self.floor[i])
+
+            # outline (2px dick)
+            if 0 <= top < PLAY_HEIGHT:
+                sp(x, top, 0, 180, 255)
+                if top + 1 < PLAY_HEIGHT:
+                    sp(x, top + 1, 0, 120, 200)
+            if 0 <= bot < PLAY_HEIGHT:
+                sp(x, bot, 0, 180, 255)
+                if bot - 1 >= 0:
+                    sp(x, bot - 1, 0, 120, 200)
+
+        # Bird 2x2
+        draw_rectangle(self.bx, self.by, self.bx + 1, self.by + 1, 255, 255, 0)
+
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0, force=True)
+        
+        # 2 second preview of cave
+        self._draw()
+        sleep_ms(2000)
+
+        frame_ms = 33
+        last = ticks_ms()
+
+        while True:
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, last) < frame_ms:
+                sleep_ms(2)
+                continue
+            last = now
+            self.frame += 1
+
+            # Direct control (no gravity): joystick UP/DOWN or Z moves the bird
+            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
+            step = 2
+            if z_button or d == JOYSTICK_UP:
+                self.by = max(self.by - step, 0)
+            elif d == JOYSTICK_DOWN:
+                self.by = min(self.by + step, PLAY_HEIGHT - 2)
+
+            # scroll cave
+            self._step_scroll()
+
+            # scoring
+            self.score += 1
+            global_score = self.score
+
+            if self._collide():
+                game_over = True
+                return
+
+            self._draw()
+
+            maybe_collect(140)
+
+
+class PitfallGame:
+    """
+    PITFALL MINI (Endlos-Runner)
+    Steuerung:
+      - Links/Rechts: laufen
+      - Z oder Stick UP: springen
+      - C: zurück ins Menü
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.ground_y = PLAY_HEIGHT - 4
+        self.pw = 3
+        self.ph = 5
+        self.px = 10
+        self.py = float(self.ground_y - self.ph + 1)
+        self.vy = 0.0
+        self.on_ground = True
+
+        self.speed = 0.9
+        self.distance = 0.0
+        self.bonus = 0
+        self.score = 0
+
+        self.obstacles = []
+        self.jump_cd = 0
+        self.last_spawn_kind = None
+        self.frame = 0
+        self.jump_start_frame = 0
+        self.jump_charging = False
+
+    def _spawn_one(self, x_start):
+        r = random.randint(0, 99)
+        kind = "PIT" if r < 45 else ("SNAKE" if r < 75 else "TREASURE")
+
+        # nicht zu viele pits hintereinander
+        if kind == "PIT" and self.last_spawn_kind == "PIT" and random.randint(0, 99) < 55:
+            kind = "SNAKE"
+
+        if kind == "PIT":
+            w = random.randint(8, 16)
+            self.obstacles.append({"kind": "PIT", "x": float(x_start), "w": w})
+        elif kind == "SNAKE":
+            w = random.randint(5, 8)
+            self.obstacles.append({"kind": "SNAKE", "x": float(x_start), "w": w})
+        else:
+            ty = self.ground_y - random.choice([12, 16, 20])
+            self.obstacles.append({"kind": "TREASURE", "x": float(x_start), "y": ty, "w": 2, "h": 2, "got": False})
+
+        self.last_spawn_kind = kind
+
+    def _ensure_obstacles(self):
+        max_right = -999
+        for o in self.obstacles:
+            w = o.get("w", 1)
+            xr = o["x"] + w
+            if xr > max_right:
+                max_right = xr
+
+        while max_right < WIDTH + 20:
+            gap = random.randint(14, 28)
+            spawn_x = max_right + gap
+            self._spawn_one(spawn_x)
+            max_right = spawn_x + self.obstacles[-1].get("w", 1)
+
+    def _player_in_pit(self):
+        foot = self.px + (self.pw // 2)
+        for o in self.obstacles:
+            if o["kind"] == "PIT":
+                if o["x"] <= foot <= (o["x"] + o["w"] - 1):
+                    return True
+        return False
+
+    def _check_snake_collision(self):
+        # nur gefährlich, wenn Spieler nahe am Boden ist
+        player_bottom = int(self.py) + self.ph - 1
+        if player_bottom < (self.ground_y - 2):
+            return False
+
+        px1 = self.px
+        px2 = self.px + self.pw - 1
+        py1 = int(self.py)
+        py2 = py1 + self.ph - 1
+
+        sy1 = self.ground_y - 2
+        sy2 = self.ground_y - 1
+
+        for o in self.obstacles:
+            if o["kind"] != "SNAKE":
+                continue
+            sx1 = int(o["x"])
+            sx2 = sx1 + o["w"] - 1
+
+            if sx2 < px1 or px2 < sx1:
+                continue
+            if sy2 < py1 or py2 < sy1:
+                continue
+            return True
+        return False
+
+    def _check_treasure(self):
+        px1 = self.px
+        px2 = self.px + self.pw - 1
+        py1 = int(self.py)
+        py2 = py1 + self.ph - 1
+
+        for o in self.obstacles:
+            if o["kind"] != "TREASURE" or o.get("got"):
+                continue
+
+            tx1 = int(o["x"])
+            ty1 = int(o["y"])
+            tx2 = tx1 + o["w"] - 1
+            ty2 = ty1 + o["h"] - 1
+
+            if tx2 < px1 or px2 < tx1:
+                continue
+            if ty2 < py1 or py2 < ty1:
+                continue
+
+            o["got"] = True
+            self.bonus += 25
+
+    def _rect_play(self, x, y, w, h, r, g, b):
+        x1 = x
+        y1 = y
+        x2 = x + w - 1
+        y2 = y + h - 1
+        if y2 < 0 or y1 >= PLAY_HEIGHT:
+            return
+        if y1 < 0:
+            y1 = 0
+        if y2 >= PLAY_HEIGHT:
+            y2 = PLAY_HEIGHT - 1
+        draw_rectangle(x1, y1, x2, y2, r, g, b)
+
+    def _render(self):
+        display.clear()
+
+        # Boden-Band
+        self._rect_play(0, self.ground_y, WIDTH, PLAY_HEIGHT - self.ground_y, 40, 90, 40)
+
+        # Pits (Löcher)
+        for o in self.obstacles:
+            if o["kind"] == "PIT":
+                x = int(o["x"])
+                self._rect_play(x, self.ground_y, o["w"], PLAY_HEIGHT - self.ground_y, 0, 0, 0)
+
+        # Schlangen
+        for o in self.obstacles:
+            if o["kind"] == "SNAKE":
+                x = int(o["x"])
+                self._rect_play(x, self.ground_y - 2, o["w"], 2, 255, 40, 40)
+                ey = self.ground_y - 2
+                if 0 <= ey < PLAY_HEIGHT:
+                    if 0 <= x + 1 < WIDTH:
+                        display.set_pixel(x + 1, ey, 0, 0, 0)
+                    if 0 <= x + o["w"] - 2 < WIDTH:
+                        display.set_pixel(x + o["w"] - 2, ey, 0, 0, 0)
+
+        # Treasure
+        for o in self.obstacles:
+            if o["kind"] == "TREASURE" and not o.get("got"):
+                tx = int(o["x"])
+                ty = int(o["y"])
+                self._rect_play(tx, ty, o["w"], o["h"], 255, 215, 0)
+
+        # Spieler
+        self._rect_play(self.px, int(self.py), self.pw, self.ph, 230, 230, 230)
+        hx = self.px + 1
+        hy = int(self.py)
+        if 0 <= hx < WIDTH and 0 <= hy < PLAY_HEIGHT:
+            display.set_pixel(hx, hy, 0, 0, 0)
+
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        self._ensure_obstacles()
+
+        frame_ms = 33
+        last_frame = time.ticks_ms()
+
+        while not game_over:
+            try:
+                c_button, z_button = joystick.nunchuck.buttons()
+                if c_button:
+                    return
+
+                now = time.ticks_ms()
+                if time.ticks_diff(now, last_frame) < frame_ms:
+                    sleep_ms(2)
+                    continue
+                last_frame = now
+                self.frame += 1
+
+                # difficulty
+                self.speed = 1.2 + (self.distance / 800.0)
+                if self.speed > 2.6:
+                    self.speed = 2.6
+
+                # scroll obstacles
+                for o in self.obstacles:
+                    o["x"] -= self.speed
+
+                # cleanup
+                self.obstacles = [o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2]
+                self._ensure_obstacles()
+
+                # move
+                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                if d == JOYSTICK_LEFT:
+                    self.px = max(0, self.px - 2)
+                elif d == JOYSTICK_RIGHT:
+                    self.px = min(WIDTH - self.pw, self.px + 2)
+
+                # jump with variable height
+                if self.jump_cd > 0:
+                    self.jump_cd -= 1
+                
+                jump_pressed = (z_button or d == JOYSTICK_UP)
+                if jump_pressed and self.on_ground and self.jump_cd == 0:
+                    if not self.jump_charging:
+                        self.jump_charging = True
+                        self.jump_start_frame = self.frame
+                elif not jump_pressed and self.jump_charging:
+                    # release: jump with height based on hold duration
+                    hold_frames = self.frame - self.jump_start_frame
+                    jump_power = min(-3.2 - (hold_frames * 0.5), -6.5)
+                    self.vy = jump_power
+                    self.on_ground = False
+                    self.jump_cd = 10
+                    self.jump_charging = False
+
+                # physics
+                in_pit = self._player_in_pit()
+                self.vy += 0.45
+                self.py += self.vy
+
+                if not in_pit:
+                    if (self.py + self.ph - 1) >= self.ground_y:
+                        self.py = float(self.ground_y - self.ph + 1)
+                        self.vy = 0.0
+                        self.on_ground = True
+                    else:
+                        self.on_ground = False
+                else:
+                    self.on_ground = False
+
+                # collect
+                self._check_treasure()
+
+                # lose
+                if self._check_snake_collision() or self.py > PLAY_HEIGHT + 2:
+                    global_score = self.score
+                    game_over = True
+                    return
+
+                # score
+                self.distance += self.speed
+                self.score = int(self.distance / 6) + self.bonus
+                global_score = self.score
+
+                self._render()
+
+                if self.frame % 40 == 0:
+                    gc.collect()
+
+            except RestartProgram:
+                return
+
+
+class LunarLanderGame:
+    """
+    LUNAR LANDER MINI
+    Steuerung:
+      - Links/Rechts: drehen
+      - Z oder Stick UP: Schub
+      - C: zurück ins Menü
+    Ziel: weich & gerade auf dem grünen Pad landen.
+    """
+    _STEP = 5
+    _LUT = [(int(math.cos(math.radians(a)) * 256), int(math.sin(math.radians(a)) * 256))
+            for a in range(0, 360, _STEP)]
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.terrain = self._make_terrain()
+
+        self.pad_w = 10
+        self.pad_x = random.randint(6, WIDTH - self.pad_w - 6)
+        self.pad_y = self.terrain[self.pad_x]
+        for x in range(self.pad_x, self.pad_x + self.pad_w):
+            self.terrain[x] = self.pad_y
+
+        self.x = float(WIDTH // 2)
+        self.y = 8.0
+        self.vx = 0.0
+        self.vy = 0.0
+        self.angle = 90
+
+        self.fuel_max = 700
+        self.fuel = self.fuel_max
+
+        self.g = 0.10
+        self.thrust = 0.22
+
+        self.points = 0
+        self.last_points_ms = time.ticks_ms()
+        self.frame = 0
+
+    def _make_terrain(self):
+        t = [0] * WIDTH
+        y = random.randint(PLAY_HEIGHT - 18, PLAY_HEIGHT - 10)
+        lo = PLAY_HEIGHT - 24
+        hi = PLAY_HEIGHT - 4
+
+        for x in range(WIDTH):
+            y += random.randint(-2, 2)
+            if y < lo:
+                y = lo
+            if y > hi:
+                y = hi
+            t[x] = y
+
+        # smooth
+        for _ in range(2):
+            for x in range(1, WIDTH - 1):
+                t[x] = (t[x - 1] + t[x] + t[x + 1]) // 3
+        return t
+
+    def _cos_sin256(self, angle_deg):
+        angle_deg %= 360
+        idx = (angle_deg // self._STEP) % (360 // self._STEP)
+        return self._LUT[idx]
+
+    def _angle_diff(self, a, b):
+        d = (a - b + 180) % 360 - 180
+        return abs(d)
+
+    def _line(self, x0, y0, x1, y1, r, g, b):
+        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        sp = display.set_pixel
+
+        while True:
+            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
+                sp(x0, y0, r, g, b)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
+                err += dx
+                y0 += sy
+
+    def _draw_ship(self, thrust_on=False):
+        size = 4
+        cx, cy = self.x, self.y
+
+        c, s = self._cos_sin256(self.angle)
+        dx = (c * size) / 256.0
+        dy = (-s * size) / 256.0  # y nach unten -> -sin
+
+        nx = cx + dx
+        ny = cy + dy
+
+        c1, s1 = self._cos_sin256(self.angle + 140)
+        lx = cx + (c1 * size) / 256.0
+        ly = cy + (-s1 * size) / 256.0
+
+        c2, s2 = self._cos_sin256(self.angle - 140)
+        rx = cx + (c2 * size) / 256.0
+        ry = cy + (-s2 * size) / 256.0
+
+        self._line(nx, ny, lx, ly, 255, 255, 255)
+        self._line(nx, ny, rx, ry, 255, 255, 255)
+        self._line(lx, ly, rx, ry, 255, 255, 255)
+
+        if thrust_on and self.fuel > 0:
+            fx0 = cx - dx * 0.4
+            fy0 = cy - dy * 0.4
+            fx1 = cx - dx * 1.4
+            fy1 = cy - dy * 1.4
+            self._line(fx0, fy0, fx1, fy1, 255, 80, 0)
+
+    def _draw_terrain(self):
+        sp = display.set_pixel
+        for x in range(WIDTH):
+            ty = self.terrain[x]
+            for y in range(ty, PLAY_HEIGHT):
+                sp(x, y, 0, 0, 120)
+
+        # pad highlight
+        for x in range(self.pad_x, self.pad_x + self.pad_w):
+            y = self.pad_y
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, 0, 255, 0)
+                if y + 1 < PLAY_HEIGHT:
+                    sp(x, y + 1, 0, 200, 0)
+
+    def _draw_fuel_bar(self):
+        bar_w = 22
+        filled = int((self.fuel / float(self.fuel_max)) * bar_w)
+        if filled < 0:
+            filled = 0
+        if filled > bar_w:
+            filled = bar_w
+
+        draw_rectangle(0, 0, bar_w, 1, 40, 40, 40)
+        if filled > 0:
+            draw_rectangle(0, 0, filled - 1, 1, 255, 255, 0)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+
+        frame_ms = 35
+        last_frame = time.ticks_ms()
+
+        while not game_over:
+            try:
+                c_button, z_button = joystick.nunchuck.buttons()
+                if c_button:
+                    return
+
+                now = time.ticks_ms()
+                if time.ticks_diff(now, last_frame) < frame_ms:
+                    sleep_ms(2)
+                    continue
+                last_frame = now
+                self.frame += 1
+
+                # points over time
+                if time.ticks_diff(now, self.last_points_ms) >= 500:
+                    self.last_points_ms = now
+                    self.points += 1
+
+                # input
+                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                if d == JOYSTICK_LEFT:
+                    self.angle = (self.angle + 5) % 360
+                elif d == JOYSTICK_RIGHT:
+                    self.angle = (self.angle - 5) % 360
+
+                thrust_on = (z_button or d == JOYSTICK_UP) and (self.fuel > 0)
+
+                ax = 0.0
+                ay = self.g
+                if thrust_on:
+                    c, s = self._cos_sin256(self.angle)
+                    ax += (c / 256.0) * self.thrust
+                    ay += (-s / 256.0) * self.thrust
+                    self.fuel -= 1
+
+                # physics
+                self.vx += ax
+                self.vy += ay
+
+                # clamp velocity
+                if self.vx > 2.2: self.vx = 2.2
+                if self.vx < -2.2: self.vx = -2.2
+                if self.vy > 3.0: self.vy = 3.0
+                if self.vy < -3.0: self.vy = -3.0
+
+                self.x += self.vx
+                self.y += self.vy
+
+                # bounds
+                if self.x < 0:
+                    self.x = 0
+                    self.vx = 0
+                elif self.x > WIDTH - 1:
+                    self.x = WIDTH - 1
+                    self.vx = 0
+
+                if self.y < 0:
+                    self.y = 0
+                    self.vy = 0
+
+                # landing/crash
+                ix = int(self.x)
+                gy = self.terrain[ix]
+                if self.y >= gy - 1:
+                    on_pad = (self.pad_x <= ix <= (self.pad_x + self.pad_w - 1))
+                    soft = (abs(self.vx) < 0.65 and abs(self.vy) < 1.2)
+                    upright = (self._angle_diff(self.angle, 90) <= 25)
+
+                    if on_pad and soft and upright:
+                        final = self.points + int(self.fuel) + 200
+                        global_score = final
+                        display.clear()
+                        draw_text(4, 18, "LANDED", 0, 255, 0)
+                        display_score_and_time(global_score)
+                        sleep_ms(1500)
+                        return
+                    else:
+                        global_score = self.points
+                        game_over = True
+                        return
+
+                # render
+                display.clear()
+                self._draw_terrain()
+                self._draw_ship(thrust_on=thrust_on)
+                self._draw_fuel_bar()
+                display_score_and_time(self.points)
+                global_score = self.points
+
+                if self.frame % 45 == 0:
+                    gc.collect()
+
+            except RestartProgram:
+                return
+
+
+class UFODefenseGame:
+    """
+    UFO DEFENSE / Missile Command Mini
+    Steuerung:
+      - Stick: Fadenkreuz bewegen
+      - Z: Rakete starten
+      - C: zurück ins Menü
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+
+        self.base_x = WIDTH // 2
+        self.base_y = PLAY_HEIGHT - 2
+
+        self.cx = WIDTH // 2
+        self.cy = PLAY_HEIGHT // 3
+
+        self.player_missiles = []
+        self.enemy_missiles = []
+        self.explosions = []
+
+        self.shot_cd = 0
+
+        xs = [6, 16, 26, 38, 48, 58]
+        self.cities = [{"x": x, "alive": True} for x in xs]
+
+        self.spawn_ms = 850
+        self.min_spawn_ms = 260
+        self.last_spawn = time.ticks_ms()
+        self.enemy_speed = 0.4
+        self.level = 0
+        self.frame = 0
+        # crosshair movement smoothing: ms between pixel moves (tweakable)
+        self.cross_move_ms = 45
+        self._last_cross_move = time.ticks_ms()
+
+    def _line(self, x0, y0, x1, y1, col):
+        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        sp = display.set_pixel
+        r, g, b = col
+
+        while True:
+            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
+                sp(x0, y0, r, g, b)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
+                err += dx
+                y0 += sy
+
+    def _cities_alive(self):
+        for c in self.cities:
+            if c["alive"]:
+                return True
+        return False
+
+    def _damage_city_at(self, x):
+        for c in self.cities:
+            if c["alive"] and abs(c["x"] - x) <= 3:
+                c["alive"] = False
+                break
+
+    def _spawn_enemy(self):
+        alive = [c for c in self.cities if c["alive"]]
+        tgt = random.choice(alive)["x"] if alive else self.base_x
+
+        sx = random.randint(0, WIDTH - 1)
+        sy = 0
+        tx = tgt
+        ty = self.base_y + 1
+
+        dx = tx - sx
+        dy = ty - sy
+        dist = math.sqrt(dx * dx + dy * dy) + 1e-6
+        spd = self.enemy_speed
+        vx = dx / dist * spd
+        vy = dy / dist * spd
+
+        self.enemy_missiles.append({
+            "x": float(sx), "y": float(sy),
+            "px": float(sx), "py": float(sy),
+            "tx": float(tx), "ty": float(ty),
+            "vx": vx, "vy": vy
+        })
+
+    def _enemy_cap(self, now):
+        # time-based caps: 0-60s -> 2, 60-180s -> 4, 180-300s -> 6, afterwards 6
+        elapsed = time.ticks_diff(now, getattr(self, 'start_ms', now))
+        if elapsed < 60_000:
+            return 2
+        if elapsed < 180_000:
+            return 4
+        return 6
+
+    def _fire_player(self):
+        sx = self.base_x
+        sy = self.base_y
+        tx = self.cx
+        ty = self.cy
+
+        dx = tx - sx
+        dy = ty - sy
+        dist = math.sqrt(dx * dx + dy * dy) + 1e-6
+        spd = 2.7
+        vx = dx / dist * spd
+        vy = dy / dist * spd
+
+        self.player_missiles.append({
+            "x": float(sx), "y": float(sy),
+            "px": float(sx), "py": float(sy),
+            "tx": float(tx), "ty": float(ty),
+            "vx": vx, "vy": vy
+        })
+
+    def _add_explosion(self, x, y, max_r, color):
+        self.explosions.append({"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color})
+
+    def _draw_explosion(self, ex):
+        r = ex["r"]
+        if r <= 0:
+            return
+        x0 = ex["x"]; y0 = ex["y"]
+        col = ex["col"]
+        sp = display.set_pixel
+
+        for deg in range(0, 360, 18):
+            a = math.radians(deg)
+            x = int(x0 + math.cos(a) * r)
+            y = int(y0 + math.sin(a) * r)
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, col[0], col[1], col[2])
+
+    def _update_explosions_and_hits(self):
+        for ex in self.explosions[:]:
+            ex["r"] += ex["dr"]
+            if ex["r"] >= ex["max"]:
+                ex["dr"] = -1
+            if ex["r"] <= 0 and ex["dr"] < 0:
+                self.explosions.remove(ex)
+                continue
+
+            r2 = (ex["r"] + 1) * (ex["r"] + 1)
+            exx = ex["x"]; exy = ex["y"]
+
+            for em in self.enemy_missiles[:]:
+                dx = em["x"] - exx
+                dy = em["y"] - exy
+                if dx * dx + dy * dy <= r2:
+                    self.enemy_missiles.remove(em)
+                    self.score += 10
+
+    def _update_missiles(self):
+        global game_over, global_score
+
+        # player
+        for m in self.player_missiles[:]:
+            m["px"], m["py"] = m["x"], m["y"]
+            m["x"] += m["vx"]
+            m["y"] += m["vy"]
+            dx = m["x"] - m["tx"]
+            dy = m["y"] - m["ty"]
+            if dx * dx + dy * dy <= 7.0:
+                self.player_missiles.remove(m)
+                self._add_explosion(m["tx"], m["ty"], 6, (255, 180, 0))
+            elif m["y"] < 0 or m["y"] >= PLAY_HEIGHT:
+                self.player_missiles.remove(m)
+
+        # enemy
+        for m in self.enemy_missiles[:]:
+            m["px"], m["py"] = m["x"], m["y"]
+            m["x"] += m["vx"]
+            m["y"] += m["vy"]
+            if m["y"] >= m["ty"] or m["y"] >= PLAY_HEIGHT - 1:
+                self.enemy_missiles.remove(m)
+                ix = int(m["x"])
+                iy = int(m["y"])
+                self._add_explosion(ix, iy, 5, (255, 60, 60))
+
+                if abs(ix - self.base_x) <= 3:
+                    global_score = self.score
+                    game_over = True
+                    return
+
+                self._damage_city_at(ix)
+                if not self._cities_alive():
+                    global_score = self.score
+                    game_over = True
+                    return
+
+    def _draw_world(self):
+        display.clear()
+        sp = display.set_pixel
+
+        # cities
+        city_y = PLAY_HEIGHT - 4
+        for c in self.cities:
+            if c["alive"]:
+                x = c["x"]
+                draw_rectangle(x - 1, city_y, x + 1, city_y + 1, 0, 255, 0)
+
+        # base
+        bx = self.base_x
+        by = self.base_y
+        for dx in (-1, 0, 1):
+            x = bx + dx
+            if 0 <= x < WIDTH and 0 <= by < PLAY_HEIGHT:
+                sp(x, by, 120, 120, 255)
+        if 0 <= bx < WIDTH and 0 <= (by - 1) < PLAY_HEIGHT:
+            sp(bx, by - 1, 120, 120, 255)
+
+        # crosshair
+        x = self.cx
+        y = self.cy
+        for dx in (-2, -1, 0, 1, 2):
+            xx = x + dx
+            if 0 <= xx < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(xx, y, 255, 255, 255)
+        for dy in (-2, -1, 0, 1, 2):
+            yy = y + dy
+            if 0 <= x < WIDTH and 0 <= yy < PLAY_HEIGHT:
+                sp(x, yy, 255, 255, 255)
+
+        # missiles
+        for m in self.player_missiles:
+            self._line(m["px"], m["py"], m["x"], m["y"], (255, 255, 255))
+        for m in self.enemy_missiles:
+            self._line(m["px"], m["py"], m["x"], m["y"], (255, 0, 0))
+
+        # explosions
+        for ex in self.explosions:
+            self._draw_explosion(ex)
+
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+
+        frame_ms = 35
+        last_frame = time.ticks_ms()
+
+        while not game_over:
+            try:
+                c_button, z_button = joystick.nunchuck.buttons()
+                if c_button:
+                    return
+
+                now = time.ticks_ms()
+
+                # crosshair move: move one pixel only when enough ms passed
+                d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                step = 1
+                if d and time.ticks_diff(now, self._last_cross_move) >= self.cross_move_ms:
+                    if d == JOYSTICK_LEFT:
+                        self.cx = max(0, self.cx - step)
+                    elif d == JOYSTICK_RIGHT:
+                        self.cx = min(WIDTH - 1, self.cx + step)
+                    elif d == JOYSTICK_UP:
+                        self.cy = max(0, self.cy - step)
+                    elif d == JOYSTICK_DOWN:
+                        self.cy = min(PLAY_HEIGHT - 8, self.cy + step)
+                    self._last_cross_move = now
+
+                # shoot
+                if self.shot_cd > 0:
+                    self.shot_cd -= 1
+                if z_button and self.shot_cd == 0 and len(self.player_missiles) < 3:
+                    self._fire_player()
+                    self.shot_cd = 8
+
+                # spawn enemies with time-based caps
+                if time.ticks_diff(now, self.last_spawn) >= self.spawn_ms:
+                    self.last_spawn = now
+                    cap = self._enemy_cap(now)
+                    # only spawn if below current cap
+                    if len(self.enemy_missiles) < cap:
+                        self._spawn_enemy()
+                    self.level += 1
+                    self.spawn_ms = max(self.min_spawn_ms, 850 - self.level * 10)
+                    self.enemy_speed = min(2.0, 1.0 + self.level * 0.01)
+
+                # frame pacing
+                if time.ticks_diff(now, last_frame) < frame_ms:
+                    sleep_ms(2)
+                    continue
+                last_frame = now
+                self.frame += 1
+
+                self._update_missiles()
+                if game_over:
+                    global_score = self.score
+                    return
+
+                self._update_explosions_and_hits()
+                self._draw_world()
+                global_score = self.score
+
+                if self.frame % 45 == 0:
+                    gc.collect()
+
+            except RestartProgram:
+                return
+
+
+class BomberGame:
+    """
+    BOMBER MINI
+    Steuerung:
+      - Links/Rechts: Geschwindigkeit ändern
+      - Up/Down: Höhe ändern
+      - Z: Bombe
+      - C: zurück ins Menü
+    Ziel: Skyline komplett zerstören.
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+        self.step = 2
+        self.n = WIDTH // self.step
+        self.ground_y = PLAY_HEIGHT - 1
+
+        self.heights = self._make_skyline()
+
+        self.plane_w = 7
+        self.plane_h = 3
+        self.plane_x = -float(self.plane_w)
+        self.plane_y = 12
+        self.plane_vx = 1.4
+
+        self.bombs = []
+        self.drop_cd = 0
+        self.frame = 0
+        
+        # enemy fighters
+        self.enemies = []
+        self.last_enemy_spawn = time.ticks_ms()
+        self.enemy_spawn_ms = 3500
+
+    def _make_skyline(self):
+        h = random.randint(12, 28)
+        heights = []
+        max_h = PLAY_HEIGHT - 3
+        for _ in range(self.n):
+            h += random.randint(-6, 6)
+            if h < 6:
+                h = 6
+            if h > max_h:
+                h = max_h
+            heights.append(h)
+
+        # spikes
+        for i in range(self.n):
+            if random.randint(0, 99) < 12:
+                heights[i] = min(max_h, heights[i] + random.randint(8, 14))
+        return heights
+
+    def _lane_index(self, x):
+        if x < 0:
+            return -1
+        return int(x) // self.step
+
+    def _rect_play(self, x, y, w, h, r, g, b):
+        x1 = x
+        y1 = y
+        x2 = x + w - 1
+        y2 = y + h - 1
+        if y2 < 0 or y1 >= PLAY_HEIGHT:
+            return
+        if y1 < 0:
+            y1 = 0
+        if y2 >= PLAY_HEIGHT:
+            y2 = PLAY_HEIGHT - 1
+        draw_rectangle(x1, y1, x2, y2, r, g, b)
+
+    def _plane_collision(self):
+        px = int(self.plane_x)
+        py = int(self.plane_y)
+        pb = py + self.plane_h - 1
+        for x in range(px, px + self.plane_w):
+            if x < 0 or x >= WIDTH:
+                continue
+            idx = x // self.step
+            if 0 <= idx < self.n:
+                h = self.heights[idx]
+                if h <= 0:
+                    continue
+                top = self.ground_y - h + 1
+                if pb >= top:
+                    return True
+        return False
+
+    def _all_destroyed(self):
+        for h in self.heights:
+            if h > 0:
+                return False
+        return True
+    
+    def _spawn_enemies(self, now):
+        if time.ticks_diff(now, self.last_enemy_spawn) >= self.enemy_spawn_ms and len(self.enemies) < 2:
+            self.last_enemy_spawn = now
+            # spawn from right side, moves toward player
+            ex = WIDTH + 5
+            ey = random.randint(4, PLAY_HEIGHT // 2)
+            self.enemies.append({"x": float(ex), "y": float(ey), "vx": -1.2})
+    
+    def _update_enemies(self):
+        global game_over, global_score
+        for e in self.enemies[:]:
+            # simple AI: move toward player Y
+            if e["y"] < self.plane_y - 1:
+                e["y"] += 0.3
+            elif e["y"] > self.plane_y + 1:
+                e["y"] -= 0.3
+            e["x"] += e["vx"]
+            
+            # remove if offscreen
+            if e["x"] < -5:
+                self.enemies.remove(e)
+                continue
+            
+            # check collision with player plane
+            ex = int(e["x"])
+            ey = int(e["y"])
+            px = int(self.plane_x)
+            py = int(self.plane_y)
+            
+            if (px <= ex + 3 and ex <= px + self.plane_w - 1 and
+                py <= ey + 1 and ey <= py + self.plane_h - 1):
+                global_score = self.score
+                game_over = True
+                return
+            
+            # check collision with bombs
+            for b in self.bombs[:]:
+                bx = int(b[0])
+                by = int(b[1])
+                if ex <= bx <= ex + 3 and ey <= by <= ey + 1:
+                    if e in self.enemies:
+                        self.enemies.remove(e)
+                    if b in self.bombs:
+                        self.bombs.remove(b)
+                    self.score += 50
+                    break
+
+    def _update_bombs(self):
+        for b in self.bombs[:]:
+            b[2] += 0.35
+            b[1] += b[2]
+            x = int(b[0])
+            y = int(b[1])
+
+            if y >= self.ground_y:
+                self.bombs.remove(b)
+                continue
+
+            idx = self._lane_index(x)
+            if 0 <= idx < self.n:
+                h = self.heights[idx]
+                if h > 0:
+                    top = self.ground_y - h + 1
+                    if y >= top:
+                        dmg = 3 + int(b[2])
+                        if dmg > 10:
+                            dmg = 10
+                        new_h = h - dmg
+                        if new_h < 0:
+                            new_h = 0
+                        removed = h - new_h
+                        self.heights[idx] = new_h
+                        self.score += removed
+                        if new_h == 0:
+                            self.score += 10
+                        self.bombs.remove(b)
+
+    def _render(self):
+        display.clear()
+
+        # buildings
+        for i, h in enumerate(self.heights):
+            if h <= 0:
+                continue
+            x = i * self.step
+            top = self.ground_y - h + 1
+            self._rect_play(x, top, self.step, h, 90, 90, 90)
+
+        # plane
+        px = int(self.plane_x)
+        py = int(self.plane_y)
+        self._rect_play(px, py, self.plane_w, self.plane_h, 255, 255, 0)
+        self._rect_play(px - 1, py + 1, 1, 1, 255, 255, 0)
+        nx = px + self.plane_w
+        ny = py + 1
+        if 0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT:
+            display.set_pixel(nx, ny, 255, 255, 0)
+
+        # bombs
+        sp = display.set_pixel
+        for bx, by, _vy in self.bombs:
+            x = int(bx); y = int(by)
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                sp(x, y, 255, 0, 0)
+            if 0 <= x < WIDTH and 0 <= y + 1 < PLAY_HEIGHT:
+                sp(x, y + 1, 255, 0, 0)
+        
+        # enemy fighters
+        for e in self.enemies:
+            ex = int(e["x"])
+            ey = int(e["y"])
+            self._rect_play(ex, ey, 4, 2, 255, 0, 0)
+
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+
+        frame_ms = 35
+        last_frame = time.ticks_ms()
+
+        while not game_over:
+            try:
+                c_button, z_button = joystick.nunchuck.buttons()
+                if c_button:
+                    return
+
+                now = time.ticks_ms()
+                if time.ticks_diff(now, last_frame) < frame_ms:
+                    sleep_ms(2)
+                    continue
+                last_frame = now
+                self.frame += 1
+
+                # control
+                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN])
+                if d == JOYSTICK_LEFT:
+                    self.plane_vx = max(0.7, self.plane_vx - 0.12)
+                elif d == JOYSTICK_RIGHT:
+                    self.plane_vx = min(2.4, self.plane_vx + 0.12)
+                elif d == JOYSTICK_UP:
+                    self.plane_y = max(2, self.plane_y - 1)
+                elif d == JOYSTICK_DOWN:
+                    self.plane_y = min(PLAY_HEIGHT - 10, self.plane_y + 1)
+
+                # move
+                self.plane_x += self.plane_vx
+                if self.plane_x > WIDTH + self.plane_w:
+                    self.plane_x = -float(self.plane_w)
+
+                # drop
+                if self.drop_cd > 0:
+                    self.drop_cd -= 1
+                if z_button and self.drop_cd == 0 and len(self.bombs) < 3:
+                    self.bombs.append([self.plane_x + self.plane_w // 2, self.plane_y + self.plane_h, 0.0])
+                    self.drop_cd = 8
+
+                self._update_bombs()
+                self._update_enemies()
+                self._spawn_enemies(now)
+
+                if self._plane_collision():
+                    global_score = self.score
+                    game_over = True
+                    return
+
+                if self._all_destroyed():
+                    global_score = self.score + 200
+                    display.clear()
+                    draw_text(6, 18, "YOU", 0, 255, 0)
+                    draw_text(6, 33, "WON", 0, 255, 0)
+                    display_score_and_time(global_score)
+                    sleep_ms(1500)
+                    return
+
+                global_score = self.score
+                self._render()
+
+                if self.frame % 45 == 0:
+                    gc.collect()
+
+            except RestartProgram:
+                return
 
 # ======================================================================
 #                              MENUS / FLOW
@@ -1993,13 +4078,20 @@ class GameSelect:
         self.game_classes = {
             "ASTRD": AsteroidGame,
             "BRKOUT": BreakoutGame,
-            "FLAPPY": FlappyGame,   # <- NEW
+            "FLAPPY": FlappyGame,
             "MAZE": MazeGame,
             "PONG": PongGame,
             "QIX": QixGame,
             "SIMON": SimonGame,
             "SNAKE": SnakeGame,
             "TETRIS": TetrisGame,
+            "RTYPE": RTypeGame,
+            "PACMAN": PacmanGame,
+            "CAVEFL": CaveFlyGame,
+            "PITFAL": PitfallGame,
+            "LANDER": LunarLanderGame,
+            "UFODEF": UFODefenseGame,
+            "BOMBER": BomberGame,
         }
         self.sorted_games = sorted(self.game_classes.keys())
 
@@ -2092,6 +4184,10 @@ def main():
             continue
         except Exception as e:
             # Failsafe: show simple error marker and reset to menu
+            # output to serial for debugging
+            import sys
+            sys.print_exception(e)
+            
             display.clear()
             draw_text(1, 20, "ERR", 255, 0, 0)
             sleep_ms(800)
@@ -2100,3 +4196,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
