@@ -1,9 +1,28 @@
-import hub75
 import random
 import time
-import machine
 import math
 import gc
+import sys
+
+def _shuffle_in_place(seq):
+    # Fisher-Yates; avoids relying on random.shuffle (not present on some MicroPython builds)
+    n = len(seq)
+    for i in range(n - 1, 0, -1):
+        j = random.randint(0, i)
+        seq[i], seq[j] = seq[j], seq[i]
+
+# ---------- Runtime detection ----------
+try:
+    IS_MICROPYTHON = (sys.implementation.name == "micropython")
+except Exception:
+    IS_MICROPYTHON = False
+
+if IS_MICROPYTHON:
+    import hub75
+    import machine
+else:
+    hub75 = None
+    machine = None
 
 # ---------- Const / Timing ----------
 try:
@@ -18,13 +37,30 @@ HUD_HEIGHT  = const(6)
 PLAY_HEIGHT = const(HEIGHT - HUD_HEIGHT)  # 58
 
 def sleep_ms(ms):
+    try:
+        # Try to present pending pixel updates before sleeping.
+        # This keeps both HUB75 and the desktop emulator responsive.
+        display_flush()
+    except Exception:
+        pass
     if hasattr(time, "sleep_ms"):
         time.sleep_ms(ms)
     else:
         time.sleep(ms / 1000)
 
 def ticks_ms():
-    return time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
+    now = time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
+    # Desktop: auto-present at ~60 Hz even if the game loop doesn't sleep
+    # after drawing (many loops use ticks_ms/ticks_diff for pacing).
+    if not IS_MICROPYTHON:
+        try:
+            last = getattr(ticks_ms, "_last_flush", 0)
+            if (now - last) >= 16:
+                setattr(ticks_ms, "_last_flush", now)
+                display_flush()
+        except Exception:
+            pass
+    return now
 
 def ticks_diff(a, b):
     return time.ticks_diff(a, b) if hasattr(time, "ticks_diff") else (a - b)
@@ -38,8 +74,70 @@ def maybe_collect(period=90):
         gc.collect()
 
 # ---------- Display ----------
-display = hub75.Hub75(WIDTH, HEIGHT)
-rtc = machine.RTC()
+if IS_MICROPYTHON:
+    display = hub75.Hub75(WIDTH, HEIGHT)
+    rtc = machine.RTC()
+else:
+    # Desktop (CPython) runtime: emulate HUB75 via PyGame.
+    class _DesktopRTC:
+        def datetime(self):
+            # machine.RTC().datetime() layout: (year, month, day, weekday, hour, minute, second, subseconds)
+            lt = time.localtime()
+            # weekday: MicroPython usually uses 0=Mon..6=Sun
+            return (lt[0], lt[1], lt[2], lt[6], lt[3], lt[4], lt[5], 0)
+
+    class _PyGameDisplay:
+        def __init__(self, w, h, scale=10):
+            self.w = int(w)
+            self.h = int(h)
+            self.scale = int(scale)
+            self._pg = None
+            self._screen = None
+            self._surface = None
+            self._inited = False
+
+        def start(self):
+            if self._inited:
+                return
+            try:
+                import pygame  # type: ignore
+            except Exception as e:
+                raise RuntimeError("PyGame not installed. Install with: pip install pygame") from e
+            self._pg = pygame
+            pygame.init()
+            pygame.display.set_caption("DIY Arcade Machine (Desktop)")
+            self._screen = pygame.display.set_mode((self.w * self.scale, self.h * self.scale))
+            self._surface = pygame.Surface((self.w, self.h))
+            self.clear()
+            self.show()
+            self._inited = True
+
+        def set_pixel(self, x, y, r, g, b):
+            if not self._surface:
+                return
+            if 0 <= x < self.w and 0 <= y < self.h:
+                self._surface.set_at((int(x), int(y)), (int(r) & 255, int(g) & 255, int(b) & 255))
+
+        def clear(self):
+            if self._surface:
+                self._surface.fill((0, 0, 0))
+
+        def show(self):
+            if not self._pg or not self._screen or not self._surface:
+                return
+            # keep window responsive
+            self._pg.event.pump()
+            scaled = self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale))
+            self._screen.blit(scaled, (0, 0))
+            self._pg.display.flip()
+
+    display = _PyGameDisplay(WIDTH, HEIGHT, scale=10)
+    rtc = _DesktopRTC()
+
+# Use the software framebuffer diff layer only on MicroPython/HUB75.
+# On desktop, drawing directly to the PyGame surface is simpler and avoids
+# subtle corruption when the menu redraws rapidly.
+USE_BUFFERED_DISPLAY = IS_MICROPYTHON
 
 # ---------- Framebuffer diff / buffered drawing ----------
 # keep a software framebuffer and only push changed pixels to the hardware
@@ -93,6 +191,13 @@ def _clear_buf():
             pass
 
 def display_flush():
+    if not USE_BUFFERED_DISPLAY:
+        try:
+            if hasattr(display, "show"):
+                display.show()
+        except Exception:
+            pass
+        return
     # push only dirty pixels to the hardware and update prev buffer
     if not _dirty_pixels:
         return
@@ -113,16 +218,23 @@ def display_flush():
             _fb_prev[idx + 2] = b
         _dirty_mask[pix] = 0
     del _dirty_pixels[:]
+    # Desktop display needs an explicit present; HUB75 hardware does not.
+    try:
+        if hasattr(display, "show"):
+            display.show()
+    except Exception:
+        pass
 
-# override display methods to write into our buffer
-# Apply our buffered hooks if the hardware object exposes the expected methods.
-# Some hub75 wrappers may not expose the exact same API; guard against that.
-try:
-    display.set_pixel = _set_pixel_buf
-    display.clear = _clear_buf
-except Exception:
-    # fallback: keep originals
-    pass
+# override display methods to write into our buffer (MicroPython/HUB75 only)
+if USE_BUFFERED_DISPLAY:
+    # Apply our buffered hooks if the hardware object exposes the expected methods.
+    # Some hub75 wrappers may not expose the exact same API; guard against that.
+    try:
+        display.set_pixel = _set_pixel_buf
+        display.clear = _clear_buf
+    except Exception:
+        # fallback: keep originals
+        pass
 
 # Helper for games: use this to push changed pixels to the hardware.
 def push_frame():
@@ -408,69 +520,217 @@ def count_cells_with_mark(mark, width, height):
 class RestartProgram(Exception):
     pass
 
-# ---------- Nunchuk / Joystick ----------
-class Nunchuck:
-    def __init__(self, i2c, poll=True, poll_interval=50):
-        self.i2c = i2c
-        self.address = 0x52
-        self.buffer = bytearray(6)
-        self.i2c.writeto(self.address, b"\xf0\x55")
-        self.i2c.writeto(self.address, b"\xfb\x00")
-        self.last_poll = ticks_ms()
-        self.polling_threshold = poll_interval if poll else -1
+ # ---------- Nunchuk / Joystick ----------
+NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
 
-    def update(self):
-        self.i2c.writeto(self.address, b"\x00")
-        self.i2c.readfrom_into(self.address, self.buffer)
+if IS_MICROPYTHON:
+    class Nunchuck:
+        def __init__(self, i2c, poll=True, poll_interval=50):
+            self.i2c = i2c
+            self.address = 0x52
+            self.is_new_controller = False
+            self.read_len = 6
+            self.buffer = bytearray(self.read_len)
+            self.i2c.writeto(self.address, b"\xf0\x55")
+            self.i2c.writeto(self.address, b"\xfb\x00")
 
-    def __poll(self):
-        if self.polling_threshold > 0 and ticks_diff(ticks_ms(), self.last_poll) > self.polling_threshold:
-            self.update()
+            # Auto-detect new controller: first 8-byte read matches fixed signature
+            # Signature given by user: "A0 20 10 00 FF FF 00 00"
+            try:
+                self.i2c.writeto(self.address, b"\x00")
+                sig = self.i2c.readfrom(self.address, 8)
+                if sig == NEW_CONTROLLER_SIGNATURE:
+                    self.is_new_controller = True
+                    self.read_len = 8
+                    self.buffer = bytearray(8)
+                    self.buffer[:] = sig
+            except Exception:
+                # fall back to old controller behavior
+                self.is_new_controller = False
+                self.read_len = 6
+                self.buffer = bytearray(6)
+
             self.last_poll = ticks_ms()
+            self.polling_threshold = poll_interval if poll else -1
 
-    def buttons(self):
-        self.__poll()
-        c_button = not (self.buffer[5] & 0x02)
-        z_button = not (self.buffer[5] & 0x01)
-        if c_button and z_button:
-            raise RestartProgram()
-        return c_button, z_button
+        def update(self):
+            self.i2c.writeto(self.address, b"\x00")
+            self.i2c.readfrom_into(self.address, self.buffer)
 
-    def joystick(self):
-        self.__poll()
-        return (self.buffer[0], self.buffer[1])
+        def _new_decode(self):
+            # New controller mapping derived from captured packets.
+            # Active-low bitfields:
+            # byte4: right(bit7), down(bit6), select(bit4), start(bit2)
+            # byte5: up(bit0), left(bit1), A(bit4), B(bit6)
+            b4 = self.buffer[4]
+            b5 = self.buffer[5]
+            up = not (b5 & 0x01)
+            left = not (b5 & 0x02)
+            a_btn = not (b5 & 0x10)
+            b_btn = not (b5 & 0x40)
 
-class Joystick:
-    def __init__(self):
-        self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
-        self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=50)
+            right = not (b4 & 0x80)
+            down = not (b4 & 0x40)
+            select = not (b4 & 0x10)
+            start = not (b4 & 0x04)
+            return up, down, left, right, a_btn, b_btn, start, select
 
-    def read_direction(self, possible_directions, debounce=True):
-        x, y = self.nunchuck.joystick()
+        def __poll(self):
+            if self.polling_threshold > 0 and ticks_diff(ticks_ms(), self.last_poll) > self.polling_threshold:
+                self.update()
+                self.last_poll = ticks_ms()
 
-        # diagonals first
-        if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
-            return JOYSTICK_DOWN_LEFT
-        if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
-            return JOYSTICK_DOWN_RIGHT
-        if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
-            return JOYSTICK_UP_LEFT
-        if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
-            return JOYSTICK_UP_RIGHT
+        def buttons(self):
+            self.__poll()
+            if not self.is_new_controller:
+                c_button = not (self.buffer[5] & 0x02)
+                z_button = not (self.buffer[5] & 0x01)
+                if c_button and z_button:
+                    raise RestartProgram()
+                return c_button, z_button
 
-        if x < 100 and JOYSTICK_LEFT in possible_directions:
-            return JOYSTICK_LEFT
-        if x > 150 and JOYSTICK_RIGHT in possible_directions:
-            return JOYSTICK_RIGHT
-        if y < 100 and JOYSTICK_DOWN in possible_directions:
-            return JOYSTICK_DOWN
-        if y > 150 and JOYSTICK_UP in possible_directions:
-            return JOYSTICK_UP
-        return None
+            up, down, left, right, a_btn, b_btn, start, select = self._new_decode()
+            # Map to existing API:
+            # - z_button: primary action (A)
+            # - c_button: secondary/back (B)
+            c_button = bool(b_btn)
+            z_button = bool(a_btn)
+            # Restart combo on new controller: START + SELECT
+            if start and select:
+                raise RestartProgram()
+            return c_button, z_button
 
-    def is_pressed(self):
-        _, z = self.nunchuck.buttons()
-        return z
+        def joystick(self):
+            self.__poll()
+            if not self.is_new_controller:
+                return (self.buffer[0], self.buffer[1])
+
+            # New controller does not provide analog joystick in the same way.
+            # Synthesize analog-like values from the D-pad so the existing
+            # read_direction() threshold logic keeps working.
+            up, down, left, right, a_btn, b_btn, start, select = self._new_decode()
+            x = 128
+            y = 128
+            if left and not right:
+                x = 0
+            elif right and not left:
+                x = 255
+            if up and not down:
+                y = 255
+            elif down and not up:
+                y = 0
+            return (x, y)
+
+    class Joystick:
+        def __init__(self):
+            self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
+            self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=50)
+
+        def read_direction(self, possible_directions, debounce=True):
+            x, y = self.nunchuck.joystick()
+
+            # diagonals first
+            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
+                return JOYSTICK_DOWN_LEFT
+            if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
+                return JOYSTICK_DOWN_RIGHT
+            if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
+                return JOYSTICK_UP_LEFT
+            if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
+                return JOYSTICK_UP_RIGHT
+
+            if x < 100 and JOYSTICK_LEFT in possible_directions:
+                return JOYSTICK_LEFT
+            if x > 150 and JOYSTICK_RIGHT in possible_directions:
+                return JOYSTICK_RIGHT
+            if y < 100 and JOYSTICK_DOWN in possible_directions:
+                return JOYSTICK_DOWN
+            if y > 150 and JOYSTICK_UP in possible_directions:
+                return JOYSTICK_UP
+            return None
+
+        def is_pressed(self):
+            _, z = self.nunchuck.buttons()
+            return z
+else:
+    class Nunchuck:
+        # Desktop keyboard input emulating the nunchuck API.
+        def __init__(self):
+            self._z = False
+            self._c = False
+            self._x = 128
+            self._y = 128
+
+        def _poll(self):
+            try:
+                import pygame  # type: ignore
+            except Exception:
+                return
+            pygame.event.pump()
+            keys = pygame.key.get_pressed()
+            left = keys[pygame.K_LEFT]
+            right = keys[pygame.K_RIGHT]
+            up = keys[pygame.K_UP]
+            down = keys[pygame.K_DOWN]
+
+            # Z button: z/space/enter
+            self._z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN])
+            # C button: x/escape
+            self._c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE])
+
+            x = 128
+            y = 128
+            if left and not right:
+                x = 0
+            elif right and not left:
+                x = 255
+            if up and not down:
+                y = 255
+            elif down and not up:
+                y = 0
+            self._x = x
+            self._y = y
+
+        def buttons(self):
+            self._poll()
+            if self._c and self._z:
+                raise RestartProgram()
+            return self._c, self._z
+
+        def joystick(self):
+            self._poll()
+            return (self._x, self._y)
+
+    class Joystick:
+        def __init__(self):
+            self.nunchuck = Nunchuck()
+
+        def read_direction(self, possible_directions, debounce=True):
+            x, y = self.nunchuck.joystick()
+
+            # diagonals first
+            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
+                return JOYSTICK_DOWN_LEFT
+            if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
+                return JOYSTICK_DOWN_RIGHT
+            if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
+                return JOYSTICK_UP_LEFT
+            if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
+                return JOYSTICK_UP_RIGHT
+
+            if x < 100 and JOYSTICK_LEFT in possible_directions:
+                return JOYSTICK_LEFT
+            if x > 150 and JOYSTICK_RIGHT in possible_directions:
+                return JOYSTICK_RIGHT
+            if y < 100 and JOYSTICK_DOWN in possible_directions:
+                return JOYSTICK_DOWN
+            if y > 150 and JOYSTICK_UP in possible_directions:
+                return JOYSTICK_UP
+            return None
+
+        def is_pressed(self):
+            _, z = self.nunchuck.buttons()
+            return z
 
 # ---------- Color helper ----------
 def hsb_to_rgb(hue, saturation, brightness):
@@ -529,17 +789,112 @@ class HighScores:
 
     def best(self, game):
         try:
-            return int(self.scores.get(game, 0) or 0)
+            v = self.scores.get(game, 0)
+            if isinstance(v, dict):
+                return int(v.get("score", 0) or 0)
+            return int(v or 0)
         except Exception:
             return 0
 
-    def update(self, game, score):
+    def best_name(self, game):
+        try:
+            v = self.scores.get(game)
+            if isinstance(v, dict):
+                n = v.get("name")
+                if isinstance(n, str) and n:
+                    return n
+        except Exception:
+            pass
+        return "---"
+
+    def update(self, game, score, name=None):
         score = int(score or 0)
         if score > self.best(game):
-            self.scores[game] = score
+            if isinstance(name, str) and name:
+                self.scores[game] = {"score": score, "name": name[:3].upper()}
+            else:
+                self.scores[game] = score
             self.save()
             return True
         return False
+
+
+class InitialsEntryMenu:
+    """3-letter initials entry for highscores."""
+    def __init__(self, joystick, score, best, best_name="---", title="NEW HS"):
+        self.joystick = joystick
+        self.score = score
+        self.best = best
+        self.best_name = best_name
+        self.title = title
+        self.letters = ["A", "A", "A"]
+        self.idx = 0
+
+    def run(self):
+        last_move = ticks_ms()
+        move_delay = 140
+
+        while True:
+            display.clear()
+            draw_text(2, 6, self.title, 0, 220, 0)
+
+            # score line
+            draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+            draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
+            bn = self.best_name if isinstance(self.best_name, str) else "---"
+            bs = "B" + str(self.best) + " " + bn
+            draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
+
+            # letters
+            x0 = 10
+            y0 = 28
+            for i in range(3):
+                col = (255, 255, 255) if i == self.idx else (120, 120, 120)
+                draw_text(10 + i * 18, y0, self.letters[i], *col)
+                if i == self.idx:
+                    draw_rectangle(8 + i * 18, y0 + 13, 20 + i * 18, y0 + 14, 255, 255, 255)
+
+            draw_text_small(2, 50, "A=OK B=BACK", 120, 120, 120)
+
+            now = ticks_ms()
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                if d == JOYSTICK_LEFT and self.idx > 0:
+                    self.idx -= 1
+                    last_move = now
+                elif d == JOYSTICK_RIGHT and self.idx < 2:
+                    self.idx += 1
+                    last_move = now
+                elif d == JOYSTICK_UP:
+                    c = ord(self.letters[self.idx])
+                    c = 65 if c >= 90 else (c + 1)
+                    self.letters[self.idx] = chr(c)
+                    last_move = now
+                elif d == JOYSTICK_DOWN:
+                    c = ord(self.letters[self.idx])
+                    c = 90 if c <= 65 else (c - 1)
+                    self.letters[self.idx] = chr(c)
+                    last_move = now
+
+            c_button, z_button = self.joystick.nunchuck.buttons()
+            if c_button:
+                # cancel
+                while True:
+                    cb, zb = self.joystick.nunchuck.buttons()
+                    if not cb:
+                        break
+                    sleep_ms(10)
+                return None
+
+            if z_button:
+                while True:
+                    cb, zb = self.joystick.nunchuck.buttons()
+                    if not zb:
+                        break
+                    sleep_ms(10)
+                return "".join(self.letters)
+
+            sleep_ms(20)
 
 # ======================================================================
 #                                 GAMES
@@ -2131,7 +2486,7 @@ class RTypeGame:
         self.powerups = []
 
         # tracking start time for time-based difficulty
-        self.start_ms = time.ticks_ms()
+        self.start_ms = ticks_ms()
         # Stars background
         self.stars = []
         for _ in range(18):
@@ -2461,12 +2816,12 @@ class PacmanGame:
         "#P....#....G...#",
         "#.##.#.##.#.##.#",
         "#o#..#....#..#o#",
-        "#....#######...#",
+        "#....###.###...#",
         "#.##........##.#",
         "#....#.##.#....#",
         "#....#.##.#....#",
         "#.##........##.#",
-        "#...#######....#",
+        "#...###.###....#",
         "#o#..#....#..#o#",
         "#.##.#.##.#.##.#",
         "#...G#....#....#",
@@ -2532,6 +2887,10 @@ class PacmanGame:
         self._input_cd = 0
         self.frame = 0
         self._dirty = True
+        self._drawn_bg = False
+        self.prev_px = self.px
+        self.prev_py = self.py
+        self.prev_ghosts = [(g[0], g[1]) for g in self.ghosts]
 
     def _idx(self, x, y):
         return y * self.W + x
@@ -2657,10 +3016,43 @@ class PacmanGame:
         y1 = self.OFF_Y + cy * self.CELL
         draw_rectangle(x1, y1, x1 + self.CELL - 1, y1 + self.CELL - 1, r, g, b)
 
-    def _draw(self):
-        display.clear()
-        sp = display.set_pixel
+    def _draw_bg_cell(self, x, y):
+        i = self._idx(x, y)
+        if self.wall[i]:
+            self._draw_cell(x, y, 0, 0, 140)
+            return
 
+        # empty floor
+        self._draw_cell(x, y, 0, 0, 0)
+
+        # pellet on top of floor
+        v = self.pel[i]
+        if v:
+            cx = self.OFF_X + x * self.CELL + 1
+            cy = self.OFF_Y + y * self.CELL + 1
+            if v == 1:
+                display.set_pixel(cx, cy, 255, 255, 255)
+            else:
+                draw_rectangle(cx, cy, cx + 1, cy + 1, 255, 215, 0)
+
+    def _draw_player(self):
+        px = self.OFF_X + self.px * self.CELL
+        py = self.OFF_Y + self.py * self.CELL
+        draw_rectangle(px, py, px + 2, py + 2, 255, 255, 0)
+
+    def _draw_ghosts(self):
+        frightened = (self.power_timer > 0)
+        for gi, g in enumerate(self.ghosts):
+            gx = self.OFF_X + g[0] * self.CELL
+            gy = self.OFF_Y + g[1] * self.CELL
+            if frightened:
+                col = (80, 80, 255)
+            else:
+                col = (255, 60, 60) if gi == 0 else (255, 0, 255)
+            draw_rectangle(gx, gy, gx + 2, gy + 2, *col)
+
+    def _draw_background(self):
+        display.clear()
         # walls
         for (x, y) in self.wall_list:
             self._draw_cell(x, y, 0, 0, 140)
@@ -2673,29 +3065,33 @@ class PacmanGame:
                     cx = self.OFF_X + x * self.CELL + 1
                     cy = self.OFF_Y + y * self.CELL + 1
                     if v == 1:
-                        sp(cx, cy, 255, 255, 255)
+                        display.set_pixel(cx, cy, 255, 255, 255)
                     else:
-                        # power pellet 2x2
                         draw_rectangle(cx, cy, cx + 1, cy + 1, 255, 215, 0)
+        self._drawn_bg = True
 
-        # player (3x3 yellow)
-        px = self.OFF_X + self.px * self.CELL
-        py = self.OFF_Y + self.py * self.CELL
-        draw_rectangle(px, py, px + 2, py + 2, 255, 255, 0)
-
-        # ghosts
-        frightened = (self.power_timer > 0)
-        for gi, g in enumerate(self.ghosts):
-            gx = self.OFF_X + g[0] * self.CELL
-            gy = self.OFF_Y + g[1] * self.CELL
-            if frightened:
-                col = (80, 80, 255)
-            else:
-                col = (255, 60, 60) if gi == 0 else (255, 0, 255)
-            draw_rectangle(gx, gy, gx + 2, gy + 2, *col)
+    def _draw(self):
+        if not self._drawn_bg:
+            self._draw_background()
+        self._draw_player()
+        self._draw_ghosts()
 
         display_score_and_time(self.score)
         self._dirty = False
+
+    def _draw_dirty_cells(self, dirty):
+        if not self._drawn_bg:
+            self._draw_background()
+
+        # restore background for dirty cells first
+        for (x, y) in dirty:
+            if 0 <= x < self.W and 0 <= y < self.H:
+                self._draw_bg_cell(x, y)
+
+        # redraw sprites on top
+        self._draw_player()
+        self._draw_ghosts()
+        display_score_and_time(self.score)
 
     def main_loop(self, joystick):
         global game_over, global_score
@@ -2704,6 +3100,10 @@ class PacmanGame:
 
         self.reset()
         display_score_and_time(0, force=True)
+
+        # initial full draw
+        self._draw_background()
+        self._draw()
 
         while True:
             c_button, _z = joystick.nunchuck.buttons()
@@ -2729,6 +3129,10 @@ class PacmanGame:
                 self.last_logic = now
                 self.frame += 1
 
+                old_px, old_py = self.px, self.py
+                old_ghosts = [(g[0], g[1]) for g in self.ghosts]
+                old_power = self.power_timer
+
                 if self.power_timer > 0:
                     self.power_timer -= 1
 
@@ -2752,10 +3156,26 @@ class PacmanGame:
 
                 global_score = self.score
 
+                # incremental redraw: old/new sprite cells (and current cell if pellet changed)
+                dirty = set()
+                dirty.add((old_px, old_py))
+                dirty.add((self.px, self.py))
+                for p in old_ghosts:
+                    dirty.add(p)
+                for g in self.ghosts:
+                    dirty.add((g[0], g[1]))
+                # if frightened state toggles, redraw ghosts too (same cells)
+                if (old_power > 0) != (self.power_timer > 0):
+                    for g in self.ghosts:
+                        dirty.add((g[0], g[1]))
+
+                self._draw_dirty_cells(dirty)
+
                 if self.frame % 90 == 0:
                     gc.collect()
 
-                self._dirty = True
+            else:
+                sleep_ms(6)
 
             if self._dirty:
                 self._draw()
@@ -2773,66 +3193,78 @@ class CaveFlyGame:
         self.reset()
 
     def reset(self):
-        self.bx = 12
-        self.by = PLAY_HEIGHT // 2
-        self.vy = 0
-
-        self.gap = 18
-        self.center = PLAY_HEIGHT // 2
-        self.speed = 1
-
-        # Ringbuffer für ceiling/floor
-        self.head = 0
-        self.ceiling = bytearray(WIDTH)
-        self.floor = bytearray(WIDTH)
-
-        # Initiale Höhle
-        for x in range(WIDTH):
-            self._gen_column_at((self.head + x) % WIDTH)
-
         self.score = 0
         self.frame = 0
+
+        # Player (2x2) fixed Y, steer X (no gravity)
+        self.by = PLAY_HEIGHT // 2
+        self.bx = WIDTH // 2
+
+        # Tunnel parameters
+        self.base_gap = 22
+        self.min_gap = 8
+        self.gap = self.base_gap
+        self.center = WIDTH // 2  # start centered
+        self.speed = 1
+
+        # Ringbuffer for left/right tunnel boundaries per row
+        self.head = 0
+        self.left_wall = bytearray(PLAY_HEIGHT)
+        self.right_wall = bytearray(PLAY_HEIGHT)
+
+        # Initialize tunnel for all visible rows
+        for y in range(PLAY_HEIGHT):
+            self._gen_row_at((self.head + y) % PLAY_HEIGHT)
+
+        # Ensure player starts in the middle of the opening
+        mid = (int(self.left_wall[self._idx_row(self.by)]) + int(self.right_wall[self._idx_row(self.by)])) // 2
+        self.bx = self._clamp(mid, 1, WIDTH - 3)
 
     def _clamp(self, v, lo, hi):
         if v < lo: return lo
         if v > hi: return hi
         return v
 
-    def _gen_column_at(self, idx):
-        # Center drift
+    def _idx_row(self, y):
+        return (self.head + y) % PLAY_HEIGHT
+
+    def _gen_row_at(self, idx):
+        # tunnel tightens over time
+        self.gap = self.base_gap - int(self.score / 80)
+        if self.gap < self.min_gap:
+            self.gap = self.min_gap
+
+        # center drift (keep within bounds)
         self.center += random.randint(-2, 2)
-        self.center = self._clamp(self.center, self.gap // 2 + 3, PLAY_HEIGHT - self.gap // 2 - 4)
+        self.center = self._clamp(self.center, (self.gap // 2) + 3, WIDTH - (self.gap // 2) - 4)
 
-        top_end = self.center - self.gap // 2
-        bot_start = self.center + self.gap // 2
-
-        self.ceiling[idx] = self._clamp(top_end, 1, PLAY_HEIGHT - 2)
-        self.floor[idx] = self._clamp(bot_start, 2, PLAY_HEIGHT - 2)
-
-    def _idx(self, x):
-        return (self.head + x) % WIDTH
+        left = self.center - (self.gap // 2)
+        right = self.center + (self.gap // 2)
+        if left < 1:
+            left = 1
+        if right > WIDTH - 2:
+            right = WIDTH - 2
+        self.left_wall[idx] = left
+        self.right_wall[idx] = right
 
     def _step_scroll(self):
-        # “links scrollen” = head eins weiter
-        self.head = (self.head + 1) % WIDTH
-        # neue rechte Spalte generieren
-        self._gen_column_at(self._idx(WIDTH - 1))
+        # scroll upward: advance head so y=0 becomes previous y=1
+        self.head = (self.head + 1) % PLAY_HEIGHT
+        # generate new bottom row
+        self._gen_row_at(self._idx_row(PLAY_HEIGHT - 1))
 
     def _collide(self):
-        # bird 2x2
-        y = self.by
-        # check 2 columns for safety (bx and bx+1)
-        for xx in (self.bx, self.bx + 1):
-            if xx < 0 or xx >= WIDTH:
-                continue
-            ci = self._idx(xx)
-            top = int(self.ceiling[ci])
-            bot = int(self.floor[ci])
-            # obere Wand
-            if y <= top:
+        # bird 2x2 at (bx,by)
+        x = self.bx
+        for yy in (self.by, self.by + 1):
+            if yy < 0 or yy >= PLAY_HEIGHT:
                 return True
-            # untere Wand
-            if (y + 1) >= bot:
+            ri = self._idx_row(yy)
+            left = int(self.left_wall[ri])
+            right = int(self.right_wall[ri])
+            if x <= left:
+                return True
+            if (x + 1) >= right:
                 return True
         return False
 
@@ -2840,21 +3272,19 @@ class CaveFlyGame:
         display.clear()
         sp = display.set_pixel
 
-        # Höhlenlinien zeichnen
-        for x in range(WIDTH):
-            i = self._idx(x)
-            top = int(self.ceiling[i])
-            bot = int(self.floor[i])
-
-            # outline (2px dick)
-            if 0 <= top < PLAY_HEIGHT:
-                sp(x, top, 0, 180, 255)
-                if top + 1 < PLAY_HEIGHT:
-                    sp(x, top + 1, 0, 120, 200)
-            if 0 <= bot < PLAY_HEIGHT:
-                sp(x, bot, 0, 180, 255)
-                if bot - 1 >= 0:
-                    sp(x, bot - 1, 0, 120, 200)
+        # tunnel outlines per row
+        for y in range(PLAY_HEIGHT):
+            i = self._idx_row(y)
+            left = int(self.left_wall[i])
+            right = int(self.right_wall[i])
+            if 0 <= left < WIDTH:
+                sp(left, y, 0, 180, 255)
+                if left + 1 < WIDTH:
+                    sp(left + 1, y, 0, 120, 200)
+            if 0 <= right < WIDTH:
+                sp(right, y, 0, 180, 255)
+                if right - 1 >= 0:
+                    sp(right - 1, y, 0, 120, 200)
 
         # Bird 2x2
         draw_rectangle(self.bx, self.by, self.bx + 1, self.by + 1, 255, 255, 0)
@@ -2888,13 +3318,13 @@ class CaveFlyGame:
             last = now
             self.frame += 1
 
-            # Direct control (no gravity): joystick UP/DOWN or Z moves the bird
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
+            # Direct control (no gravity): steer left/right
+            d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
             step = 2
-            if z_button or d == JOYSTICK_UP:
-                self.by = max(self.by - step, 0)
-            elif d == JOYSTICK_DOWN:
-                self.by = min(self.by + step, PLAY_HEIGHT - 2)
+            if d == JOYSTICK_LEFT:
+                self.bx = max(self.bx - step, 0)
+            elif d == JOYSTICK_RIGHT:
+                self.bx = min(self.bx + step, WIDTH - 2)
 
             # scroll cave
             self._step_scroll()
@@ -2943,6 +3373,9 @@ class PitfallGame:
         self.frame = 0
         self.jump_start_frame = 0
         self.jump_charging = False
+        self.jump_charge_max_frames = 10
+        self.jump_min_power = -3.2
+        self.jump_max_power = -6.5
 
     def _spawn_one(self, x_start):
         
@@ -3090,7 +3523,7 @@ class PitfallGame:
         self._ensure_obstacles()
 
         frame_ms = 33
-        last_frame = time.ticks_ms()
+        last_frame = ticks_ms()
 
         while not game_over:
             try:
@@ -3098,8 +3531,8 @@ class PitfallGame:
                 if c_button:
                     return
 
-                now = time.ticks_ms()
-                if time.ticks_diff(now, last_frame) < frame_ms:
+                now = ticks_ms()
+                if ticks_diff(now, last_frame) < frame_ms:
                     sleep_ms(2)
                     continue
                 last_frame = now
@@ -3134,10 +3567,27 @@ class PitfallGame:
                     if not self.jump_charging:
                         self.jump_charging = True
                         self.jump_start_frame = self.frame
+                    else:
+                        # cap charge: auto-release after max frames
+                        hold_frames = self.frame - self.jump_start_frame
+                        if hold_frames >= self.jump_charge_max_frames:
+                            self.vy = self.jump_max_power
+                            self.on_ground = False
+                            self.jump_cd = 10
+                            self.jump_charging = False
                 elif not jump_pressed and self.jump_charging:
                     # release: jump with height based on hold duration
                     hold_frames = self.frame - self.jump_start_frame
-                    jump_power = min(-3.2 - (hold_frames * 0.5), -6.5)
+                    if hold_frames < 0:
+                        hold_frames = 0
+                    if hold_frames > self.jump_charge_max_frames:
+                        hold_frames = self.jump_charge_max_frames
+
+                    jump_power = self.jump_min_power - (hold_frames * 0.35)
+                    # clamp: don't exceed max power
+                    if jump_power < self.jump_max_power:
+                        jump_power = self.jump_max_power
+
                     self.vy = jump_power
                     self.on_ground = False
                     self.jump_cd = 10
@@ -3181,6 +3631,346 @@ class PitfallGame:
                 return
 
 
+class DemosGame:
+    """Zero-player demos: simple animations and cellular automata."""
+    def __init__(self):
+        self.demos = ["SNAKE", "TRON", "LIFE", "ANT"]
+        self.idx = 0
+        self._init = False
+        self._last_move = ticks_ms()
+        self._move_delay = 180
+        self._reset_demo_state()
+
+    def _reset_demo_state(self):
+        # shared
+        self._init = False
+        self._frame = 0
+
+        # LIFE (2x2 scaled)
+        self._life_w = 32
+        self._life_h = 24
+        self._life_cur = bytearray(self._life_w * self._life_h)
+        self._life_nxt = bytearray(self._life_w * self._life_h)
+        self._life_prev = bytearray(self._life_w * self._life_h)
+
+        # ANT
+        self._ant_w = WIDTH
+        self._ant_h = PLAY_HEIGHT
+        self._ant_cells = bytearray(self._ant_w * self._ant_h)
+        self._ant = [self._ant_w // 2, self._ant_h // 2, 0]
+        self._ant_prev = [self._ant[0], self._ant[1]]
+
+        # TRON
+        self._tron_w = WIDTH
+        self._tron_h = PLAY_HEIGHT
+        self._tron_occ = bytearray(self._tron_w * self._tron_h)
+        self._tron_p1 = [self._tron_w // 3, self._tron_h // 2, 1, 0]
+        self._tron_p2 = [2 * self._tron_w // 3, self._tron_h // 2, -1, 0]
+        self._tron_prev1 = [self._tron_p1[0], self._tron_p1[1]]
+        self._tron_prev2 = [self._tron_p2[0], self._tron_p2[1]]
+
+        # SNAKE
+        self._snake = [(WIDTH // 2, PLAY_HEIGHT // 2)]
+        self._snake_len = 8
+        self._snake_dir = 0  # 0U 1D 2L 3R
+        self._snake_target = (random.randint(1, WIDTH - 2), random.randint(1, PLAY_HEIGHT - 2))
+        self._snake_occ = bytearray(WIDTH * PLAY_HEIGHT)
+
+    def _life_step(self, w, h, cur, nxt):
+        for y in range(h):
+            ym1 = (y - 1) % h
+            yp1 = (y + 1) % h
+            row = y * w
+            rowm1 = ym1 * w
+            rowp1 = yp1 * w
+            for x in range(w):
+                xm1 = (x - 1) % w
+                xp1 = (x + 1) % w
+                i = row + x
+                n = (
+                    cur[rowm1 + xm1] + cur[rowm1 + x] + cur[rowm1 + xp1] +
+                    cur[row + xm1] + cur[row + xp1] +
+                    cur[rowp1 + xm1] + cur[rowp1 + x] + cur[rowp1 + xp1]
+                )
+                if cur[i]:
+                    nxt[i] = 1 if (n == 2 or n == 3) else 0
+                else:
+                    nxt[i] = 1 if (n == 3) else 0
+
+    def _life_draw_diffs(self, w, h, cur, prev):
+        # diff-draw at 2x2 scale (no full clear)
+        for y in range(h):
+            row = y * w
+            for x in range(w):
+                i = row + x
+                v = cur[i]
+                if v == prev[i]:
+                    continue
+                prev[i] = v
+                px = x * 2
+                py = y * 2
+                if py >= PLAY_HEIGHT:
+                    continue
+                if v:
+                    r, g, b = 0, 180, 0
+                else:
+                    r, g, b = 0, 0, 0
+                display.set_pixel(px, py, r, g, b)
+                if px + 1 < WIDTH:
+                    display.set_pixel(px + 1, py, r, g, b)
+                if py + 1 < PLAY_HEIGHT:
+                    display.set_pixel(px, py + 1, r, g, b)
+                    if px + 1 < WIDTH:
+                        display.set_pixel(px + 1, py + 1, r, g, b)
+
+    def _langton_step(self, w, h, cells, ant):
+        x, y, d = ant
+        i = y * w + x
+        if cells[i]:
+            # black: turn left
+            d = (d - 1) & 3
+            cells[i] = 0
+        else:
+            # white: turn right
+            d = (d + 1) & 3
+            cells[i] = 1
+        if d == 0:
+            y = (y - 1) % h
+        elif d == 1:
+            x = (x + 1) % w
+        elif d == 2:
+            y = (y + 1) % h
+        else:
+            x = (x - 1) % w
+        ant[0], ant[1], ant[2] = x, y, d
+
+    def _langton_draw(self, w, h, cells, ant):
+        # kept for compatibility (not used in incremental mode)
+        display.clear()
+        for y in range(h):
+            for x in range(w):
+                if cells[y * w + x] == 1 and y < PLAY_HEIGHT:
+                    display.set_pixel(x, y, 50, 50, 255)
+        ax, ay, _ = ant
+        if ay < PLAY_HEIGHT:
+            display.set_pixel(ax, ay, 255, 255, 0)
+
+    def _tron_step(self, w, h, occ, p):
+        # p: [x,y,dx,dy]
+        x, y, dx, dy = p
+        nx = x + dx
+        ny = y + dy
+        if nx <= 0 or nx >= w - 1 or ny <= 0 or ny >= h - 1 or occ[ny * w + nx]:
+            # turn randomly
+            if random.randint(0, 1) == 0:
+                dx, dy = -dy, dx
+            else:
+                dx, dy = dy, -dx
+            nx = x + dx
+            ny = y + dy
+        if nx <= 0 or nx >= w - 1 or ny <= 0 or ny >= h - 1 or occ[ny * w + nx]:
+            return False
+        p[0], p[1], p[2], p[3] = nx, ny, dx, dy
+        occ[ny * w + nx] = 1
+        return True
+
+    def _tron_draw(self, w, h, occ, p1, p2):
+        # kept for compatibility (not used in incremental mode)
+        display.clear()
+        for y in range(h):
+            for x in range(w):
+                if occ[y * w + x] and y < PLAY_HEIGHT:
+                    display.set_pixel(x, y, 0, 200, 200)
+        if p1[1] < PLAY_HEIGHT:
+            display.set_pixel(p1[0], p1[1], 255, 0, 0)
+        if p2[1] < PLAY_HEIGHT:
+            display.set_pixel(p2[0], p2[1], 0, 255, 0)
+
+    def _snake_place_target(self):
+        tries = 0
+        while tries < 200:
+            x = random.randint(1, WIDTH - 2)
+            y = random.randint(1, PLAY_HEIGHT - 2)
+            if self._snake_occ[y * WIDTH + x] == 0:
+                self._snake_target = (x, y)
+                return
+            tries += 1
+        self._snake_target = (WIDTH // 2, PLAY_HEIGHT // 2)
+
+    def _snake_init(self):
+        self._snake_occ = bytearray(WIDTH * PLAY_HEIGHT)
+        self._snake = [(WIDTH // 2, PLAY_HEIGHT // 2)]
+        self._snake_len = 10
+        self._snake_dir = random.randint(0, 3)
+        self._snake_occ[self._snake[0][1] * WIDTH + self._snake[0][0]] = 1
+        self._snake_place_target()
+        display.clear()
+        tx, ty = self._snake_target
+        display.set_pixel(tx, ty, 255, 0, 0)
+        hx, hy = self._snake[0]
+        display.set_pixel(hx, hy, 0, 255, 0)
+
+    def _snake_step(self):
+        # simple greedy AI to target avoiding self
+        head_x, head_y = self._snake[0]
+        tx, ty = self._snake_target
+
+        def cand_dirs():
+            # prioritize moving closer (Manhattan)
+            opts = [0, 1, 2, 3]
+            _shuffle_in_place(opts)
+            opts.sort(key=lambda d: abs((head_x + (d == 3) - (d == 2)) - tx) + abs((head_y + (d == 1) - (d == 0)) - ty))
+            return opts
+
+        nd = self._snake_dir
+        for d in cand_dirs():
+            nx = head_x + (1 if d == 3 else (-1 if d == 2 else 0))
+            ny = head_y + (1 if d == 1 else (-1 if d == 0 else 0))
+            if nx <= 0 or nx >= WIDTH - 1 or ny <= 0 or ny >= PLAY_HEIGHT - 1:
+                continue
+            if self._snake_occ[ny * WIDTH + nx]:
+                continue
+            nd = d
+            break
+
+        self._snake_dir = nd
+        nx = head_x + (1 if nd == 3 else (-1 if nd == 2 else 0))
+        ny = head_y + (1 if nd == 1 else (-1 if nd == 0 else 0))
+
+        # if blocked, restart demo
+        if nx <= 0 or nx >= WIDTH - 1 or ny <= 0 or ny >= PLAY_HEIGHT - 1 or self._snake_occ[ny * WIDTH + nx]:
+            self._snake_init()
+            return
+
+        self._snake.insert(0, (nx, ny))
+        self._snake_occ[ny * WIDTH + nx] = 1
+        display.set_pixel(nx, ny, 0, 255, 0)
+
+        if (nx, ny) == self._snake_target:
+            self._snake_len += 2
+            self._snake_place_target()
+            tx, ty = self._snake_target
+            display.set_pixel(tx, ty, 255, 0, 0)
+
+        if len(self._snake) > self._snake_len:
+            tx, ty = self._snake.pop()
+            self._snake_occ[ty * WIDTH + tx] = 0
+            display.set_pixel(tx, ty, 0, 0, 0)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        frame_ms = 35
+        last_frame = ticks_ms()
+
+        while True:
+            c_button, _ = joystick.nunchuck.buttons()
+            if c_button:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, self._last_move) > self._move_delay:
+                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                if d == JOYSTICK_LEFT:
+                    self.idx = (self.idx - 1) % len(self.demos)
+                    self._reset_demo_state()
+                    self._last_move = now
+                elif d == JOYSTICK_RIGHT:
+                    self.idx = (self.idx + 1) % len(self.demos)
+                    self._reset_demo_state()
+                    self._last_move = now
+
+            if ticks_diff(now, last_frame) < frame_ms:
+                sleep_ms(1)
+                continue
+            last_frame = now
+            self._frame += 1
+
+            demo = self.demos[self.idx]
+            if not self._init:
+                display.clear()
+                draw_text_small(1, PLAY_HEIGHT, demo, 120, 120, 120)
+                if demo == "LIFE":
+                    for i in range(self._life_w * self._life_h):
+                        self._life_cur[i] = 1 if random.randint(0, 99) < 18 else 0
+                        self._life_prev[i] = 2  # force draw
+                elif demo == "ANT":
+                    # start with empty field
+                    self._ant_cells = bytearray(self._ant_w * self._ant_h)
+                    self._ant = [self._ant_w // 2, self._ant_h // 2, 0]
+                    self._ant_prev = [self._ant[0], self._ant[1]]
+                elif demo == "TRON":
+                    self._tron_occ = bytearray(self._tron_w * self._tron_h)
+                    self._tron_p1 = [self._tron_w // 3, self._tron_h // 2, 1, 0]
+                    self._tron_p2 = [2 * self._tron_w // 3, self._tron_h // 2, -1, 0]
+                    self._tron_prev1 = [self._tron_p1[0], self._tron_p1[1]]
+                    self._tron_prev2 = [self._tron_p2[0], self._tron_p2[1]]
+                    self._tron_occ[self._tron_p1[1] * self._tron_w + self._tron_p1[0]] = 1
+                    self._tron_occ[self._tron_p2[1] * self._tron_w + self._tron_p2[0]] = 1
+                    display.set_pixel(self._tron_p1[0], self._tron_p1[1], 255, 0, 0)
+                    display.set_pixel(self._tron_p2[0], self._tron_p2[1], 0, 255, 0)
+                else:  # SNAKE
+                    self._snake_init()
+                self._init = True
+
+            if demo == "LIFE":
+                self._life_step(self._life_w, self._life_h, self._life_cur, self._life_nxt)
+                self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
+                self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
+
+            elif demo == "ANT":
+                # do multiple steps per frame, draw only changed cell + ant
+                for _ in range(10):
+                    ax0, ay0 = self._ant[0], self._ant[1]
+                    self._langton_step(self._ant_w, self._ant_h, self._ant_cells, self._ant)
+                    # redraw flipped cell
+                    i = ay0 * self._ant_w + ax0
+                    if self._ant_cells[i]:
+                        display.set_pixel(ax0, ay0, 50, 50, 255)
+                    else:
+                        display.set_pixel(ax0, ay0, 0, 0, 0)
+
+                # erase previous ant marker (restore cell color)
+                px, py = self._ant_prev
+                i = py * self._ant_w + px
+                if self._ant_cells[i]:
+                    display.set_pixel(px, py, 50, 50, 255)
+                else:
+                    display.set_pixel(px, py, 0, 0, 0)
+                # draw ant
+                ax, ay, _d = self._ant
+                if ay < PLAY_HEIGHT:
+                    display.set_pixel(ax, ay, 255, 255, 0)
+                self._ant_prev[0], self._ant_prev[1] = ax, ay
+
+            elif demo == "TRON":
+                # step a few times per frame
+                for _ in range(2):
+                    ok1 = self._tron_step(self._tron_w, self._tron_h, self._tron_occ, self._tron_p1)
+                    ok2 = self._tron_step(self._tron_w, self._tron_h, self._tron_occ, self._tron_p2)
+                    if not ok1 or not ok2:
+                        # restart this demo
+                        self._reset_demo_state()
+                        break
+
+                # convert old heads to trail
+                display.set_pixel(self._tron_prev1[0], self._tron_prev1[1], 0, 90, 90)
+                display.set_pixel(self._tron_prev2[0], self._tron_prev2[1], 0, 90, 90)
+
+                # draw new heads
+                display.set_pixel(self._tron_p1[0], self._tron_p1[1], 255, 0, 0)
+                display.set_pixel(self._tron_p2[0], self._tron_p2[1], 0, 255, 0)
+                self._tron_prev1[0], self._tron_prev1[1] = self._tron_p1[0], self._tron_p1[1]
+                self._tron_prev2[0], self._tron_prev2[1] = self._tron_p2[0], self._tron_p2[1]
+
+            else:  # SNAKE
+                self._snake_step()
+
+            maybe_collect(1)
+
+
 class LunarLanderGame:
     """
     LUNAR LANDER MINI
@@ -3219,7 +4009,7 @@ class LunarLanderGame:
         self.thrust = 0.22
 
         self.points = 0
-        self.last_points_ms = time.ticks_ms()
+        self.last_points_ms = ticks_ms()
         self.frame = 0
 
     def _make_terrain(self):
@@ -3338,7 +4128,7 @@ class LunarLanderGame:
         self.reset()
 
         frame_ms = 35
-        last_frame = time.ticks_ms()
+        last_frame = ticks_ms()
 
         while not game_over:
             try:
@@ -3346,15 +4136,15 @@ class LunarLanderGame:
                 if c_button:
                     return
 
-                now = time.ticks_ms()
-                if time.ticks_diff(now, last_frame) < frame_ms:
+                now = ticks_ms()
+                if ticks_diff(now, last_frame) < frame_ms:
                     sleep_ms(2)
                     continue
                 last_frame = now
                 self.frame += 1
 
                 # points over time
-                if time.ticks_diff(now, self.last_points_ms) >= 500:
+                if ticks_diff(now, self.last_points_ms) >= 500:
                     self.last_points_ms = now
                     self.points += 1
 
@@ -3467,13 +4257,15 @@ class UFODefenseGame:
 
         self.spawn_ms = 850
         self.min_spawn_ms = 260
-        self.last_spawn = time.ticks_ms()
-        self.enemy_speed = 0.4
+        self.last_spawn = ticks_ms()
+        self.base_enemy_speed = 0.4
+        self.max_enemy_speed = 2.0
+        self.enemy_speed = self.base_enemy_speed
         self.level = 0
         self.frame = 0
         # crosshair movement smoothing: ms between pixel moves (tweakable)
         self.cross_move_ms = 45
-        self._last_cross_move = time.ticks_ms()
+        self._last_cross_move = ticks_ms()
 
     def _line(self, x0, y0, x1, y1, col):
         x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
@@ -3535,7 +4327,7 @@ class UFODefenseGame:
 
     def _enemy_cap(self, now):
         # time-based caps: 0-60s -> 2, 60-180s -> 4, 180-300s -> 6, afterwards 6
-        elapsed = time.ticks_diff(now, getattr(self, 'start_ms', now))
+        elapsed = ticks_diff(now, getattr(self, 'start_ms', now))
         if elapsed < 60_000:
             return 2
         if elapsed < 180_000:
@@ -3690,7 +4482,7 @@ class UFODefenseGame:
         self.reset()
 
         frame_ms = 35
-        last_frame = time.ticks_ms()
+        last_frame = ticks_ms()
 
         while not game_over:
             try:
@@ -3698,12 +4490,12 @@ class UFODefenseGame:
                 if c_button:
                     return
 
-                now = time.ticks_ms()
+                now = ticks_ms()
 
                 # crosshair move: move one pixel only when enough ms passed
                 d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
                 step = 1
-                if d and time.ticks_diff(now, self._last_cross_move) >= self.cross_move_ms:
+                if d and ticks_diff(now, self._last_cross_move) >= self.cross_move_ms:
                     if d == JOYSTICK_LEFT:
                         self.cx = max(0, self.cx - step)
                     elif d == JOYSTICK_RIGHT:
@@ -3722,7 +4514,7 @@ class UFODefenseGame:
                     self.shot_cd = 8
 
                 # spawn enemies with time-based caps
-                if time.ticks_diff(now, self.last_spawn) >= self.spawn_ms:
+                if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
                     self.last_spawn = now
                     cap = self._enemy_cap(now)
                     # only spawn if below current cap
@@ -3730,10 +4522,10 @@ class UFODefenseGame:
                         self._spawn_enemy()
                     self.level += 1
                     self.spawn_ms = max(self.min_spawn_ms, 850 - self.level * 10)
-                    self.enemy_speed = min(2.0, 1.0 + self.level * 0.01)
+                    self.enemy_speed = min(self.max_enemy_speed, self.base_enemy_speed + self.level * 0.01)
 
                 # frame pacing
-                if time.ticks_diff(now, last_frame) < frame_ms:
+                if ticks_diff(now, last_frame) < frame_ms:
                     sleep_ms(2)
                     continue
                 last_frame = now
@@ -3760,10 +4552,11 @@ class UFODefenseGame:
 
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
-    def __init__(self, joystick, score, best):
+    def __init__(self, joystick, score, best, best_name="---"):
         self.joystick = joystick
         self.score = score
         self.best = best
+        self.best_name = best_name
         self.opts = ["RETRY", "MENU"]
 
     def run(self):
@@ -3783,7 +4576,8 @@ class GameOverMenu:
                 # score HUD line
                 draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
                 draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
-                bs = "B" + str(self.best)
+                bn = self.best_name if isinstance(self.best_name, str) else "---"
+                bs = "B" + str(self.best) + " " + bn
                 draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
 
                 for i, o in enumerate(self.opts):
@@ -3827,8 +4621,13 @@ class GameSelect:
             "PITFAL": PitfallGame,
             "LANDER": LunarLanderGame,
             "UFODEF": UFODefenseGame,
+            "DEMOS": DemosGame,
         }
-        self.sorted_games = sorted(self.game_classes.keys())
+        keys = sorted(self.game_classes.keys())
+        if "DEMOS" in keys:
+            keys.remove("DEMOS")
+            keys.insert(0, "DEMOS")
+        self.sorted_games = keys
 
     def run_game_selector(self):
         games = self.sorted_games
@@ -3854,7 +4653,8 @@ class GameSelect:
                     draw_text(8, 5 + i * 15, name, *col)
 
                     hs = self.highscores.best(name)
-                    hs_str = str(hs)
+                    hn = self.highscores.best_name(name)
+                    hs_str = str(hs) + " " + str(hn)
                     draw_text_small(WIDTH - len(hs_str) * 6, 5 + i * 15 + 8, hs_str, 120, 120, 0)
 
             if ticks_diff(now, last_move) > move_delay:
@@ -3891,12 +4691,17 @@ class GameSelect:
                 game = self.game_classes[game_name]()
                 game.main_loop(self.joystick)
 
-                # update highscore
-                self.highscores.update(game_name, global_score)
-
                 if game_over:
                     best = self.highscores.best(game_name)
-                    choice = GameOverMenu(self.joystick, global_score, best).run()
+                    best_name = self.highscores.best_name(game_name)
+                    if global_score > best:
+                        initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
+                        if initials:
+                            self.highscores.update(game_name, global_score, initials)
+                    # refresh best name in case initials were saved
+                    best = self.highscores.best(game_name)
+                    best_name = self.highscores.best_name(game_name)
+                    choice = GameOverMenu(self.joystick, global_score, best, best_name).run()
                     if choice == "RETRY":
                         continue
                     else:
@@ -3919,6 +4724,7 @@ def main():
             continue
         except Exception as e:
             # Failsafe: show simple error marker and reset to menu
+            print("Error:", e)
             display.clear()
             draw_text(1, 20, "ERR", 255, 0, 0)
             sleep_ms(800)
