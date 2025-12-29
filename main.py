@@ -4,6 +4,16 @@ import math
 import gc
 import sys
 
+
+def _boot_log(tag):
+    try:
+        # Keep this tiny to reduce chance of further allocations.
+        print("BOOT:", tag, gc.mem_free())
+    except Exception:
+        pass
+
+_boot_log("imports done")
+
 def _shuffle_in_place(seq):
     # Fisher-Yates; avoids relying on random.shuffle (not present on some MicroPython builds)
     n = len(seq)
@@ -17,9 +27,14 @@ try:
 except Exception:
     IS_MICROPYTHON = False
 
+_boot_log("runtime detect")
+
 if IS_MICROPYTHON:
+    _boot_log("before hub75 import")
     import hub75
+    _boot_log("after hub75 import")
     import machine
+    _boot_log("after machine import")
 else:
     hub75 = None
     machine = None
@@ -35,6 +50,8 @@ HEIGHT = const(64)
 
 HUD_HEIGHT  = const(6)
 PLAY_HEIGHT = const(HEIGHT - HUD_HEIGHT)  # 58
+
+_boot_log("constants")
 
 def sleep_ms(ms):
     try:
@@ -75,8 +92,15 @@ def maybe_collect(period=90):
 
 # ---------- Display ----------
 if IS_MICROPYTHON:
-    display = hub75.Hub75(WIDTH, HEIGHT)
+    _boot_log("before display")
+    try:
+        display = hub75.Hub75(WIDTH, HEIGHT)
+        _boot_log("after display")
+    except MemoryError as e:
+        print("MemoryError creating display:", e)
+        raise
     rtc = machine.RTC()
+    _boot_log("after rtc")
 else:
     # Desktop (CPython) runtime: emulate HUB75 via PyGame.
     class _DesktopRTC:
@@ -135,54 +159,97 @@ else:
     rtc = _DesktopRTC()
 
 # Use the software framebuffer diff layer only on MicroPython/HUB75.
-# On desktop, drawing directly to the PyGame surface is simpler and avoids
-# subtle corruption when the menu redraws rapidly.
-USE_BUFFERED_DISPLAY = IS_MICROPYTHON
+# IMPORTANT: delay allocations until after display.start(), otherwise the
+# hub75 driver may fail to allocate its own internal buffers on boot.
+USE_BUFFERED_DISPLAY_DESIRED = IS_MICROPYTHON
+USE_BUFFERED_DISPLAY = False
+
+_boot_log("buffer flags")
 
 # ---------- Framebuffer diff / buffered drawing ----------
 # keep a software framebuffer and only push changed pixels to the hardware
 _fb_w = WIDTH
 _fb_h = HEIGHT
 _fb_size = _fb_w * _fb_h * 3
-_fb_current = bytearray(_fb_size)
-_fb_prev = bytearray(_fb_size)
+_fb_current = None
+_fb_prev = None
+_dirty_mask = None
+_force_full_flush = False
 
-# dirty tracking: list of changed pixel indices and mask to avoid duplicates
-_dirty_pixels = []
-_dirty_mask = bytearray(_fb_w * _fb_h)
+_boot_log("framebuffer vars")
 
 # keep originals to actually write to the hardware
 _display_set_pixel_orig = display.set_pixel
 _display_clear_orig = getattr(display, "clear", None)
 
+_boot_log("display refs")
+
+def init_buffered_display():
+    """Allocate software framebuffer + hooks after hub75 display is started."""
+    global USE_BUFFERED_DISPLAY, _fb_current, _fb_prev, _dirty_mask, _force_full_flush
+    if USE_BUFFERED_DISPLAY:
+        return
+    if not USE_BUFFERED_DISPLAY_DESIRED:
+        return
+
+    try:
+        gc.collect()
+    except Exception:
+        pass
+
+    try:
+        if _fb_current is None or len(_fb_current) != _fb_size:
+            _fb_current = bytearray(_fb_size)
+        if _fb_prev is None or len(_fb_prev) != _fb_size:
+            _fb_prev = bytearray(_fb_size)
+        if _dirty_mask is None or len(_dirty_mask) != (_fb_w * _fb_h):
+            _dirty_mask = bytearray(_fb_w * _fb_h)
+        _force_full_flush = True
+    except MemoryError:
+        # Not enough contiguous heap for buffering. Keep unbuffered drawing.
+        USE_BUFFERED_DISPLAY = False
+        return
+
+    # Apply our buffered hooks if the hardware object exposes the expected methods.
+    try:
+        display.set_pixel = _set_pixel_buf
+        display.clear = _clear_buf
+        USE_BUFFERED_DISPLAY = True
+    except Exception:
+        USE_BUFFERED_DISPLAY = False
+
 def _mark_dirty_pixel(px):
-    if _dirty_mask[px] == 0:
+    # legacy stub (kept to avoid touching other call-sites)
+    if _dirty_mask is not None:
         _dirty_mask[px] = 1
-        _dirty_pixels.append(px)
 
 def _set_pixel_buf(x, y, r, g, b):
     if x < 0 or x >= _fb_w or y < 0 or y >= _fb_h:
         return
     pix = y * _fb_w + x
     idx = pix * 3
+    if _fb_current is None:
+        return
     if _fb_current[idx] != r or _fb_current[idx + 1] != g or _fb_current[idx + 2] != b:
         _fb_current[idx] = r
         _fb_current[idx + 1] = g
         _fb_current[idx + 2] = b
-        _mark_dirty_pixel(pix)
+        if _dirty_mask is not None:
+            _dirty_mask[pix] = 1
 
 def _clear_buf():
     # clear current framebuffer and mark all pixels dirty
     w = _fb_w * _fb_h
-    for i in range(w * 3):
-        if _fb_current[i] != 0:
-            _fb_current[i] = 0
-    # mark all pixels dirty so they will be pushed
-    # reset mask and append indices
-    del _dirty_pixels[:]
-    for i in range(w):
-        _dirty_mask[i] = 1
-        _dirty_pixels.append(i)
+    global _force_full_flush
+    if _fb_current is not None:
+        for i in range(w * 3):
+            if _fb_current[i] != 0:
+                _fb_current[i] = 0
+    # Avoid building a huge list of dirty pixel indices.
+    _force_full_flush = True
+    if _dirty_mask is not None:
+        for i in range(w):
+            _dirty_mask[i] = 0
     # also clear hardware quickly if supported
     if _display_clear_orig:
         try:
@@ -198,26 +265,44 @@ def display_flush():
         except Exception:
             pass
         return
-    # push only dirty pixels to the hardware and update prev buffer
-    if not _dirty_pixels:
+    # push changed pixels to the hardware and update prev buffer
+    if _fb_current is None or _fb_prev is None or _dirty_mask is None:
         return
     sp = _display_set_pixel_orig
-    for pix in _dirty_pixels:
-        idx = pix * 3
-        r = _fb_current[idx]
-        g = _fb_current[idx + 1]
-        b = _fb_current[idx + 2]
-        # compare with previous
-        if _fb_prev[idx] != r or _fb_prev[idx + 1] != g or _fb_prev[idx + 2] != b:
-            try:
-                sp(pix % _fb_w, pix // _fb_w, r, g, b)
-            except Exception:
-                pass
-            _fb_prev[idx] = r
-            _fb_prev[idx + 1] = g
-            _fb_prev[idx + 2] = b
-        _dirty_mask[pix] = 0
-    del _dirty_pixels[:]
+    w = _fb_w * _fb_h
+    global _force_full_flush
+    if _force_full_flush:
+        for pix in range(w):
+            idx = pix * 3
+            r = _fb_current[idx]
+            g = _fb_current[idx + 1]
+            b = _fb_current[idx + 2]
+            if _fb_prev[idx] != r or _fb_prev[idx + 1] != g or _fb_prev[idx + 2] != b:
+                try:
+                    sp(pix % _fb_w, pix // _fb_w, r, g, b)
+                except Exception:
+                    pass
+                _fb_prev[idx] = r
+                _fb_prev[idx + 1] = g
+                _fb_prev[idx + 2] = b
+        _force_full_flush = False
+    else:
+        for pix in range(w):
+            if _dirty_mask[pix] == 0:
+                continue
+            _dirty_mask[pix] = 0
+            idx = pix * 3
+            r = _fb_current[idx]
+            g = _fb_current[idx + 1]
+            b = _fb_current[idx + 2]
+            if _fb_prev[idx] != r or _fb_prev[idx + 1] != g or _fb_prev[idx + 2] != b:
+                try:
+                    sp(pix % _fb_w, pix // _fb_w, r, g, b)
+                except Exception:
+                    pass
+                _fb_prev[idx] = r
+                _fb_prev[idx + 1] = g
+                _fb_prev[idx + 2] = b
     # Desktop display needs an explicit present; HUB75 hardware does not.
     try:
         if hasattr(display, "show"):
@@ -225,16 +310,7 @@ def display_flush():
     except Exception:
         pass
 
-# override display methods to write into our buffer (MicroPython/HUB75 only)
-if USE_BUFFERED_DISPLAY:
-    # Apply our buffered hooks if the hardware object exposes the expected methods.
-    # Some hub75 wrappers may not expose the exact same API; guard against that.
-    try:
-        display.set_pixel = _set_pixel_buf
-        display.clear = _clear_buf
-    except Exception:
-        # fallback: keep originals
-        pass
+# Note: hooks are installed by init_buffered_display() after display.start().
 
 # Helper for games: use this to push changed pixels to the hardware.
 def push_frame():
@@ -270,8 +346,19 @@ COLORS_BRIGHT = [
     (0, 0, 255),    # Blue
     (255, 255, 0),  # Yellow
 ]
-colors = [(int(r * 0.5), int(g * 0.5), int(b * 0.5)) for r, g, b in COLORS_BRIGHT]
-inactive_colors = [(int(r * 0.2), int(g * 0.2), int(b * 0.2)) for r, g, b in COLORS_BRIGHT]
+# Pre-computed to avoid list comprehension allocations during import
+colors = (
+    (127, 0, 0),
+    (0, 127, 0),
+    (0, 0, 127),
+    (127, 127, 0),
+)
+inactive_colors = (
+    (51, 0, 0),
+    (0, 51, 0),
+    (0, 0, 51),
+    (51, 51, 0),
+)
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -289,45 +376,51 @@ JOYSTICK_DOWN_LEFT = "DOWN-LEFT"
 JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 
 # ---------- Fonts ----------
-CHAR_DICT = {
-    "A": "3078ccccfccccc00","B": "fc66667c6666fc00","C": "3c66c0c0c0663c00","D": "f86c6666666cf800",
-    "E": "fe6268786862fe00","F": "fe6268786860f000","G": "3c66c0c0ce663e00","H": "ccccccfccccccc00",
-    "I": "7830303030307800","J": "1e0c0c0ccccc7800","K": "f6666c786c66f600","L": "f06060606266fe00",
-    "M": "c6eefefed6c6c600","N": "c6e6f6decec6c600","O": "386cc6c6c66c3800","P": "fc66667c6060f000",
-    "Q": "78ccccccdc781c00","R": "fc66667c6c66f600","S": "78cce0380ccc7800","T": "fcb4303030307800",
-    "U": "ccccccccccccfc00","V": "cccccccccc783000","W": "c6c6c6d6feeec600","X": "c6c66c38386cc600",
-    "Y": "cccccc7830307800","Z": "fec68c183266fe00",
-    "0": "78ccdcfceccc7c00","1": "307030303030fc00","2": "78cc0c3860ccfc00","3": "78cc0c380ccc7800",
-    "4": "1c3c6cccfe0c1e00","5": "fcc0f80c0ccc7800","6": "3860c0f8cccc7800","7": "fccc0c1830303000",
-    "8": "78cccc78cccc7800","9": "78cccc7c0c187000",
-    "!": "3078783030003000","#": "6c6cfe6cfe6c6c00","$": "307cc0780cf83000","%": "00c6cc183066c600",
-    "&": "386c3876dccc7600","?": "78cc0c1830003000"," ": "0000000000000000",".": "0000000000003000",
-    ":": "0030000000300000","(": "0c18303030180c00",")": "6030180c18306000","-": "000000fc00000000",
-}
+# NOTE: On MicroPython, even defining large dicts at module level can trigger
+# MemoryError during import. We define them inside functions (lazy) to avoid
+# any allocation until first use.
 
-NUMS = {
-    "0": ["01110","10001","10001","10001","01110"],
-    "1": ["00100","01100","00100","00100","01110"],
-    "2": ["11110","00001","01110","10000","11111"],
-    "3": ["11110","00001","00110","00001","11110"],
-    "4": ["10000","10010","10010","11111","00010"],
-    "5": ["11111","10000","11110","00001","11110"],
-    "6": ["01110","10000","11110","10001","01110"],
-    "7": ["11111","00010","00100","01000","10000"],
-    "8": ["01110","10001","01110","10001","01110"],
-    "9": ["01110","10001","01111","00001","01110"],
-    " ": ["00000","00000","00000","00000","00000"],
-    ".": ["00000","00000","00000","00000","00001"],
-    ":": ["00000","00100","00000","00100","00000"],
-    "/": ["00001","00010","00100","01000","10000"],
-    "|": ["00100","00100","00100","00100","00100"],
-    "-": ["00000","00000","11111","00000","00000"],
-    "=": ["00000","11111","00000","11111","00000"],
-    "+": ["00000","00100","01110","00100","00000"],
-    "*": ["00000","10101","01110","10101","00000"],
-    "(": ["00010","00100","00100","00100","00010"],
-    ")": ["00100","00010","00010","00010","00100"],
-}
+def _get_char_dict():
+    return {
+        "A": "3078ccccfccccc00","B": "fc66667c6666fc00","C": "3c66c0c0c0663c00","D": "f86c6666666cf800",
+        "E": "fe6268786862fe00","F": "fe6268786860f000","G": "3c66c0c0ce663e00","H": "ccccccfccccccc00",
+        "I": "7830303030307800","J": "1e0c0c0ccccc7800","K": "f6666c786c66f600","L": "f06060606266fe00",
+        "M": "c6eefefed6c6c600","N": "c6e6f6decec6c600","O": "386cc6c6c66c3800","P": "fc66667c6060f000",
+        "Q": "78ccccccdc781c00","R": "fc66667c6c66f600","S": "78cce0380ccc7800","T": "fcb4303030307800",
+        "U": "ccccccccccccfc00","V": "cccccccccc783000","W": "c6c6c6d6feeec600","X": "c6c66c38386cc600",
+        "Y": "cccccc7830307800","Z": "fec68c183266fe00",
+        "0": "78ccdcfceccc7c00","1": "307030303030fc00","2": "78cc0c3860ccfc00","3": "78cc0c380ccc7800",
+        "4": "1c3c6cccfe0c1e00","5": "fcc0f80c0ccc7800","6": "3860c0f8cccc7800","7": "fccc0c1830303000",
+        "8": "78cccc78cccc7800","9": "78cccc7c0c187000",
+        "!": "3078783030003000","#": "6c6cfe6cfe6c6c00","$": "307cc0780cf83000","%": "00c6cc183066c600",
+        "&": "386c3876dccc7600","?": "78cc0c1830003000"," ": "0000000000000000",".": "0000000000003000",
+        ":": "0030000000300000","(": "0c18303030180c00",")": "6030180c18306000","-": "000000fc00000000",
+    }
+
+def _get_nums_dict():
+    return {
+        "0": ["01110","10001","10001","10001","01110"],
+        "1": ["00100","01100","00100","00100","01110"],
+        "2": ["11110","00001","01110","10000","11111"],
+        "3": ["11110","00001","00110","00001","11110"],
+        "4": ["10000","10010","10010","11111","00010"],
+        "5": ["11111","10000","11110","00001","11110"],
+        "6": ["01110","10000","11110","10001","01110"],
+        "7": ["11111","00010","00100","01000","10000"],
+        "8": ["01110","10001","01110","10001","01110"],
+        "9": ["01110","10001","01111","00001","01110"],
+        " ": ["00000","00000","00000","00000","00000"],
+        ".": ["00000","00000","00000","00000","00001"],
+        ":": ["00000","00100","00000","00100","00000"],
+        "/": ["00001","00010","00100","01000","10000"],
+        "|": ["00100","00100","00100","00100","00100"],
+        "-": ["00000","00000","11111","00000","00000"],
+        "=": ["00000","11111","00000","11111","00000"],
+        "+": ["00000","00100","01110","00100","00000"],
+        "*": ["00000","10101","01110","10101","00000"],
+        "(": ["00010","00100","00100","00100","00010"],
+        ")": ["00100","00010","00010","00010","00100"],
+    }
 
 def _hex_to_bytes(hex_str):
     try:
@@ -340,11 +433,68 @@ def _hex_to_bytes(hex_str):
             oi += 1
         return bytes(out)
 
-FONT8 = {ch: _hex_to_bytes(hs) for ch, hs in CHAR_DICT.items()}  # 8 bytes per char
-FONT5 = {ch: bytes(int(row, 2) for row in rows) for ch, rows in NUMS.items()}  # 5 rows
-del CHAR_DICT
-del NUMS
-gc.collect()
+
+# Lazy caches (created on first use to reduce MicroPython import pressure)
+_FONT8_CACHE = None
+_FONT5_CACHE = None
+
+
+def _get_font8(ch):
+    """Return 8 row-bytes for a character (8x8 font)."""
+    global _FONT8_CACHE
+    cache = _FONT8_CACHE
+    if cache is None:
+        cache = {}
+        _FONT8_CACHE = cache
+
+    v = cache.get(ch)
+    if v is not None:
+        return v
+
+    hs = _get_char_dict().get(ch)
+    if not hs:
+        hs = _get_char_dict().get(" ")
+        if not hs:
+            cache[ch] = b"\x00" * 8
+            return cache[ch]
+
+    rows = _hex_to_bytes(hs)
+    # Ensure we always return exactly 8 rows
+    if not rows or len(rows) != 8:
+        rows = (rows or b"")[:8] + (b"\x00" * (8 - len(rows or b"")))
+
+    cache[ch] = rows
+    return rows
+
+
+def _get_font5(ch):
+    """Return 5 row bitmasks for a character (5x5 font)."""
+    global _FONT5_CACHE
+    cache = _FONT5_CACHE
+    if cache is None:
+        cache = {}
+        _FONT5_CACHE = cache
+
+    v = cache.get(ch)
+    if v is not None:
+        return v
+
+    rows = _get_nums_dict().get(ch)
+    if rows is None:
+        rows = _get_nums_dict().get(" ")
+    if rows is None:
+        cache[ch] = (0, 0, 0, 0, 0)
+        return cache[ch]
+
+    out = [0, 0, 0, 0, 0]
+    for i in range(5):
+        try:
+            out[i] = int(rows[i], 2)
+        except Exception:
+            out[i] = 0
+    out = tuple(out)
+    cache[ch] = out
+    return out
 
 # ---------- Drawing ----------
 def draw_rectangle(x1, y1, x2, y2, r, g, b):
@@ -362,7 +512,7 @@ def draw_rectangle(x1, y1, x2, y2, r, g, b):
             sp(x, y, r, g, b)
 
 def draw_character(x, y, ch, r, g, b):
-    rows = FONT8.get(ch)
+    rows = _get_font8(ch)
     if not rows:
         return
     sp = display.set_pixel
@@ -385,7 +535,7 @@ def draw_text(x, y, text, r, g, b):
         ox += 9
 
 def draw_character_small(x, y, ch, r, g, b):
-    rows = FONT5.get(ch)
+    rows = _get_font5(ch)
     if not rows:
         return
     sp = display.set_pixel
@@ -443,13 +593,25 @@ def display_score_and_time(score, force=False):
 # ---------- Grid (nibble-packed) for Maze/Qix ----------
 GRID_W = WIDTH
 GRID_H = PLAY_HEIGHT
-grid = bytearray((GRID_W * GRID_H + 1) // 2)
+grid = None  # lazy-allocated to reduce import-time RAM usage on MicroPython
 
 def initialize_grid():
     global grid
-    grid = bytearray((GRID_W * GRID_H + 1) // 2)
+    size = (GRID_W * GRID_H + 1) // 2
+    if grid is None or len(grid) != size:
+        grid = bytearray(size)
+    else:
+        for i in range(size):
+            grid[i] = 0
+
+def _ensure_grid():
+    # Small helper to avoid allocating at import-time.
+    global grid
+    if grid is None:
+        grid = bytearray((GRID_W * GRID_H + 1) // 2)
 
 def get_grid_value(x, y):
+    _ensure_grid()
     if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
         return 1  # treat out-of-bounds as wall/border
     idx = y * GRID_W + x
@@ -459,6 +621,7 @@ def get_grid_value(x, y):
     return b & 0x0F
 
 def set_grid_value(x, y, value):
+    _ensure_grid()
     if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
         return
     idx = y * GRID_W + x
@@ -4365,8 +4528,17 @@ class LunarLanderGame:
     Ziel: weich & gerade auf dem grünen Pad landen.
     """
     _STEP = 5
-    _LUT = [(int(math.cos(math.radians(a)) * 256), int(math.sin(math.radians(a)) * 256))
-            for a in range(0, 360, _STEP)]
+    _LUT = None
+
+    @classmethod
+    def _ensure_lut(cls):
+        if cls._LUT is not None:
+            return
+        lut = []
+        step = cls._STEP
+        for a in range(0, 360, step):
+            lut.append((int(math.cos(math.radians(a)) * 256), int(math.sin(math.radians(a)) * 256)))
+        cls._LUT = lut
 
     def __init__(self):
         self.reset()
@@ -4418,6 +4590,7 @@ class LunarLanderGame:
 
     def _cos_sin256(self, angle_deg):
         angle_deg %= 360
+        self._ensure_lut()
         idx = (angle_deg // self._STEP) % (360 // self._STEP)
         return self._LUT[idx]
 
@@ -4987,14 +5160,40 @@ class DoomLiteGame:
     MAX_DIST = 32.0
 
     # LUT für sin/cos (256 Steps, Scale 1024)
-    if array:
-        _COS = array('h', [int(math.cos(2 * math.pi * i / 256) * 1024) for i in range(256)])
-        _SIN = array('h', [int(math.sin(2 * math.pi * i / 256) * 1024) for i in range(256)])
-    else:
-        _COS = [int(math.cos(2 * math.pi * i / 256) * 1024) for i in range(256)]
-        _SIN = [int(math.sin(2 * math.pi * i / 256) * 1024) for i in range(256)]
+    # Lazy init to avoid large import-time allocations on MicroPython.
+    _COS = None
+    _SIN = None
+
+    @classmethod
+    def _ensure_trig(cls):
+        if cls._COS is not None and cls._SIN is not None:
+            return
+        try:
+            gc.collect()
+        except Exception:
+            pass
+
+        if array:
+            cos_lut = array('h')
+            sin_lut = array('h')
+            for i in range(256):
+                ang = 2 * math.pi * i / 256
+                cos_lut.append(int(math.cos(ang) * 1024))
+                sin_lut.append(int(math.sin(ang) * 1024))
+            cls._COS = cos_lut
+            cls._SIN = sin_lut
+        else:
+            cos_lut = []
+            sin_lut = []
+            for i in range(256):
+                ang = 2 * math.pi * i / 256
+                cos_lut.append(int(math.cos(ang) * 1024))
+                sin_lut.append(int(math.sin(ang) * 1024))
+            cls._COS = cos_lut
+            cls._SIN = sin_lut
 
     def __init__(self):
+        self._ensure_trig()
         self.zbuf = [self.MAX_DIST] * WIDTH  # Wanddistanz pro Screen-Spalte
         self.reset()
 
@@ -5594,7 +5793,19 @@ class GameSelect:
 
 # ---------- Main ----------
 def main():
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    _boot_log("before display.start")
     display.start()
+    _boot_log("after display.start")
+    # After hub75 has allocated its internal buffers, we can try to enable
+    # the optional software framebuffer diff layer.
+    try:
+        init_buffered_display()
+    except Exception:
+        pass
     display.clear()
     display_score_and_time(0, force=True)
 
@@ -5616,4 +5827,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
