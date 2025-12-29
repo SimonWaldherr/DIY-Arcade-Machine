@@ -3363,8 +3363,8 @@ class CaveFlyGame:
         self.by = PLAY_HEIGHT // 2
         self.bx = WIDTH // 2
 
-        # Tunnel parameters
-        self.base_gap = 22
+        # Tunnel parameters: start wide, narrow progressively
+        self.base_gap = 36  # much wider start
         self.min_gap = 8
         self.gap = self.base_gap
         self.center = WIDTH // 2  # start centered
@@ -3392,8 +3392,8 @@ class CaveFlyGame:
         return (self.head + y) % PLAY_HEIGHT
 
     def _gen_row_at(self, idx):
-        # tunnel tightens over time
-        self.gap = self.base_gap - int(self.score / 80)
+        # tunnel tightens over time: starts wide, narrows progressively
+        self.gap = self.base_gap - int(self.score / 60)
         if self.gap < self.min_gap:
             self.gap = self.min_gap
 
@@ -3540,10 +3540,18 @@ class PitfallGame:
         self.jump_min_power = -3.2
         self.jump_max_power = -6.5
 
+        # Start-of-run grace period: no snakes/holes at the very beginning.
+        # We enforce this via spawn logic so it works for both desktop and RP2040.
+        self._safe_distance = 30.0
+
     def _spawn_one(self, x_start):
-        
-        r = random.randint(0, 99)
-        kind = "PIT" if r < 45 else ("SNAKE" if r < 75 else "TREASURE")
+
+        # At the start, spawn only treasures to avoid immediate frustration.
+        if self.distance < self._safe_distance:
+            kind = "TREASURE"
+        else:
+            r = random.randint(0, 99)
+            kind = "PIT" if r < 45 else ("SNAKE" if r < 75 else "TREASURE")
 
         # nicht zu viele pits hintereinander
         if kind == "PIT" and self.last_spawn_kind == "PIT" and random.randint(0, 99) < 55:
@@ -4541,12 +4549,20 @@ class LunarLanderGame:
         cls._LUT = lut
 
     def __init__(self):
+        self.level = 1
+        self.total_score = 0
         self.reset()
 
-    def reset(self):
+    def reset(self, keep_level=False):
+        # Multi-level system: keep level on successful landing, reset on crash
+        if not keep_level:
+            self.level = 1
+            self.total_score = 0
+        
         self.terrain = self._make_terrain()
 
-        self.pad_w = 10
+        # Pad gets smaller and fuel/gravity adjust per level
+        self.pad_w = max(6, 10 - self.level)
         self.pad_x = random.randint(6, WIDTH - self.pad_w - 6)
         self.pad_y = self.terrain[self.pad_x]
         for x in range(self.pad_x, self.pad_x + self.pad_w):
@@ -4558,10 +4574,11 @@ class LunarLanderGame:
         self.vy = 0.0
         self.angle = 90
 
-        self.fuel_max = 700
+        # Fuel decreases and gravity increases per level
+        self.fuel_max = max(400, 700 - (self.level - 1) * 60)
         self.fuel = self.fuel_max
 
-        self.g = 0.10
+        self.g = 0.10 + (self.level - 1) * 0.015
         self.thrust = 0.22
 
         self.points = 0
@@ -4756,15 +4773,32 @@ class LunarLanderGame:
                     upright = (self._angle_diff(self.angle, 90) <= 25)
 
                     if on_pad and soft and upright:
-                        final = self.points + int(self.fuel) + 200
-                        global_score = final
+                        # Successful landing: award points and advance level
+                        level_bonus = self.points + int(self.fuel) + 200 + (self.level * 150)
+                        self.total_score += level_bonus
+                        global_score = self.total_score
+                        
                         display.clear()
-                        draw_text(4, 18, "LANDED", 0, 255, 0)
+                        draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
+                        draw_text(2, 24, "DONE", 0, 255, 0)
+                        display_score_and_time(global_score)
+                        sleep_ms(1800)
+                        
+                        # Next level
+                        self.level += 1
+                        self.reset(keep_level=True)
+                        
+                        # Short preview of new terrain
+                        display.clear()
+                        self._draw_terrain()
+                        draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
                         display_score_and_time(global_score)
                         sleep_ms(1500)
-                        return
+                        
+                        last_frame = ticks_ms()
+                        continue
                     else:
-                        global_score = self.points
+                        global_score = self.total_score if hasattr(self, 'total_score') else self.points
                         game_over = True
                         return
 
@@ -5049,17 +5083,20 @@ class UFODefenseGame:
 
                 now = ticks_ms()
 
-                # crosshair move: move one pixel only when enough ms passed
-                d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                # crosshair move: move one pixel only when enough ms passed (now with diagonal support)
+                d = joystick.read_direction([
+                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
+                ])
                 step = 1
                 if d and ticks_diff(now, self._last_cross_move) >= self.cross_move_ms:
-                    if d == JOYSTICK_LEFT:
+                    if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
                         self.cx = max(0, self.cx - step)
-                    elif d == JOYSTICK_RIGHT:
+                    elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
                         self.cx = min(WIDTH - 1, self.cx + step)
-                    elif d == JOYSTICK_UP:
+                    if d in (JOYSTICK_UP, JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT):
                         self.cy = max(0, self.cy - step)
-                    elif d == JOYSTICK_DOWN:
+                    elif d in (JOYSTICK_DOWN, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT):
                         self.cy = min(PLAY_HEIGHT - 8, self.cy + step)
                     self._last_cross_move = now
 
