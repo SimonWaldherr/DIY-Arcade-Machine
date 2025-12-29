@@ -1,115 +1,185 @@
-# DIY-Arcade-Machine
+# DIY Arcade Machine
 
 [![Short video of the DIY Arcade Console in action (on YouTube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
 
-## My Very Own Arcade Machine
+A complete mini arcade system that runs on **both hardware and desktop**: play a collection of classic-inspired games on a **64×64 RGB LED matrix** (HUB75 + MicroPython) or on your computer with a **PyGame-based emulator**.
 
-Welcome to the DIY-Arcade-Machine project! This is a hands-on project to build your very own arcade machine using the Interstate 75 - RGB LED Matrix Driver from Pimoroni (PIM584), a 64x64 Pixel RGB LED Matrix with a Hub75 connector, and a KY-023 Joystick Module (or a Nunchuck). The project includes several games inspired by the classics: Simon, Snake, Qix, Breakout, Tetris, Asteroid, and Pong, all playable on a vibrant LED matrix display.
+## Features
 
-Don’t have the hardware yet? You can still try out the games by running the [PyGame Branch](https://github.com/SimonWaldherr/DIY-Arcade-Machine/tree/pygame), which simulates the experience on your PC or Mac.
+- **Dual Runtime Support**
+  - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
+  - **Desktop (CPython) + PyGame**: Full emulator for development and testing
+- **16+ Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, and more
+- **64×64 Display Layout**
+  - 58-pixel playfield (rows 0-57)
+  - 6-pixel HUD at bottom (score + clock)
+- **High Score System**: Persistent scores with 3-letter initials entry
+- **Memory-Optimized**: Buffered framebuffer, packed grid storage, lazy font loading
+- **Controller Support**
+  - MicroPython: Wii Nunchuk-style I2C controller (with auto-detection for variants)
+  - Desktop: Keyboard emulation (arrow keys + Z/X)
+
+---
 
 ## Table of Contents
 
 - [Hardware Requirements](#hardware-requirements)
 - [Software Requirements](#software-requirements)
 - [Installation](#installation)
+  - [Desktop Setup](#desktop-setup)
+  - [MicroPython Setup](#micropython-setup)
+- [Game List](#game-list)
+- [Controls](#controls)
 - [Usage](#usage)
-- [Games](#games)
-  - [Simon](#simon)
-  - [Asteroid](#asteroid)
-  - [Snake](#snake)
-  - [Pong](#pong)
-  - [Breakout](#breakout)
-  - [Qix / Xonix](#qix)
-  - [Tetris](#tetris)
-- [Fun](#fun)
+- [Architecture](#architecture)
+- [Troubleshooting](#troubleshooting)
+
+---
 
 ## Hardware Requirements
 
-- **Interstate 75 (W) by Pimoroni (PIM584)**
-  - Available at: [Pimoroni](https://shop.pimoroni.com/products/interstate-75?variant=39443584417875) | [DigiKey](https://www.digikey.de/de/products/detail/pimoroni-ltd/PIM584/15851385) | [Adafruit](https://www.adafruit.com/product/5342) | [BerryBase](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
-- **64x64 Pixel RGB LED Matrix with Hub75 connector**  
-  - [Amazon link](https://amzn.to/3Yadyhh)
-- **Joystick options**  
-  - [Adafruit Wii Nunchuck Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter) + [Nunchuk](https://www.amazon.de/dp/B0D4V5JC71)
-- **Wiring and Power Supply**
-- **Optional 3D-printed enclosures**  
-  - [LED Matrix Case](https://www.thingiverse.com/thing:6751325) or [the tilted version](https://www.thingiverse.com/thing:6781604)
-- **Optional Mesh and Diffuser**  
-  - [Mesh](https://www.thingiverse.com/thing:6751323)  
-  - [Satin-Finished Plexiglass](https://acrylglas-shop.com/plexiglas-gs-led-9h04-sc-black-white-hinterleuchtung-3-mm-staerke)
+### For Physical Arcade Machine
+
+- **Interstate 75 (W) by Pimoroni (PIM584)** - RP2040-based HUB75 driver board
+  - [Pimoroni](https://shop.pimoroni.com/products/interstate-75?variant=39443584417875) | [DigiKey](https://www.digikey.de/de/products/detail/pimoroni-ltd/PIM584/15851385) | [Adafruit](https://www.adafruit.com/product/5342) | [BerryBase](https://www.berrybase.de/pimoroni-interstate-75-controller-fuer-led-matrizen)
+- **64×64 Pixel RGB LED Matrix** with HUB75 connector
+  - [Example on Amazon](https://amzn.to/3Yadyhh)
+- **Controller** (one of):
+  - [Wii Nunchuk](https://www.amazon.de/dp/B0D4V5JC71) + [Breakout Adapter](https://www.berrybase.de/adafruit-wii-nunchuck-breakout-adapter)
+  - Compatible I2C joystick module
+- **Power Supply**: 5V adequate for LED matrix (typically 2-4A)
+- **Optional**:
+  - [3D-Printed Enclosure](https://www.thingiverse.com/thing:6751325) or [Tilted Version](https://www.thingiverse.com/thing:6781604)
+  - [Diffuser Mesh](https://www.thingiverse.com/thing:6751323)
+  - [Satin Plexiglass Diffuser](https://acrylglas-shop.com/plexiglas-gs-led-9h04-sc-black-white-hinterleuchtung-3-mm-staerke)
+
+---
 
 ## Software Requirements
 
-- [MicroPython](https://github.com/pimoroni/pimoroni-pico/releases/download/v1.23.0-1/pico-v1.23.0-1-pimoroni-micropython.uf2)
-- [Thonny IDE](https://thonny.org/)
+### MicroPython Hardware
+
+- [MicroPython Firmware](https://github.com/pimoroni/pimoroni-pico/releases/download/v1.23.0-1/pico-v1.23.0-1-pimoroni-micropython.uf2) (Pimoroni build recommended)
+- Optional: [Thonny IDE](https://thonny.org/) for uploading files
+- Optional: `mpy-cross` for compiling to bytecode (reduces boot RAM usage)
+
+### Desktop
+
+- Python 3.7+
+- PyGame 2.x
+
+---
 
 ## Installation
 
-### 1. Set up your Microcontroller with MicroPython
-- Follow the instructions for your microcontroller to flash it with MicroPython.
+### Desktop Setup
 
-### 2. Connect the Hardware
-- Connect the Interstate 75 to the RGB LED Matrix using the Hub75 connector.
-- Connect the Nunchuck to the microcontroller.
+1. **Install dependencies**:
+   ```bash
+   pip install pygame
+   ```
 
-### 3. Upload the Code
-- Use Thonny (or another compatible tool) to copy the provided Python script to your microcontroller.
+2. **Run the game**:
+   ```bash
+   python main.py
+   ```
 
-## Usage
+A 640×640 window will appear showing the emulated LED matrix (10× scale).
 
-### 1. Power Up
-- Ensure all connections are secure, then power up the microcontroller.
+### MicroPython Setup
 
-### 2. Start the Game Selector
-- Once powered, the game selector interface will appear on the LED matrix.
+#### Quick Method (Recommended)
 
-### 3. Select a Game
-- Use the joystick to navigate the menu and select a game. Press the joystick button to start.
+The project now uses a **tiny bootstrap** approach to avoid on-device compilation memory errors:
 
-### 4. Play
-- Refer to the instructions below for controls on each game.
+1. **Install `mpy-cross`** (optional but highly recommended):
+   ```bash
+   brew install micropython  # macOS
+   # or: pip install mpy-cross
+   ```
 
-### 5. Exit a Game
-- To exit a game and return to the menu, press both joystick buttons simultaneously.
+2. **Connect your Interstate 75** via USB
 
-## Games
+3. **Upload with the interactive script**:
+   ```bash
+   ./upload.sh
+   ```
+   
+   The script will:
+   - Auto-detect connected devices
+   - Compile `arcade_app.py` → `arcade_app.mpy` (if `mpy-cross` available)
+   - Upload both `main.py` (tiny bootstrap) and the compiled module
 
-### Simon
-A memory game where the player must recall and repeat a sequence of colors.
-- **Controls**: Use the joystick to select the flashed color. Repeat the sequence as it grows.
+4. **Reboot the device** - games start automatically
 
-### Asteroid
-A classic shooter where the goal is to destroy asteroids.
-- **Controls**: Use the joystick to rotate and move your ship. Press the button to shoot.
+#### Manual Method
 
-### Snake
-Guide the snake to eat targets and grow in length, but avoid hitting the walls or yourself.
-- **Controls**: Use the joystick to control the snake's direction (UP, DOWN, LEFT, RIGHT).
+If you prefer manual upload via Thonny or `ampy`:
 
-### Pong
-A classic two-player table tennis game, where you control a paddle to keep the ball in play.
-- **Controls**: Move the paddle up and down using the joystick.
+1. Flash MicroPython firmware to Interstate 75
+2. Upload `main.py` (tiny bootstrap file)
+3. Upload `arcade_app.py` or `arcade_app.mpy` (the main application)
+4. Optional: Upload `highscores.json` if you want to preserve scores
 
-### Breakout
-Break the bricks with the ball without letting it fall off the screen.
-- **Controls**: Use the joystick to move the paddle left and right. Break as many bricks as possible!
+---
 
-### Qix
-Claim territory while avoiding enemies. Move strategically to win.
-- **Controls**: Move with the joystick to claim territory while avoiding enemy contact.  
-  - For a version written in Go using the Ebiten engine, [click here](https://github.com/SimonWaldherr/golang-examples/blob/master/non-std-lib/ebiten-qix.go).
+## Game List
 
-### Tetris
-Stack blocks to form complete lines and score points.
-- **Controls**: Use the joystick to move and rotate the blocks. Speed them up by moving them down.
+The arcade includes **16+ games** accessible via the main menu:
 
-### Maze
-A simple maze game
+| Game ID | Name | Description |
+|---------|------|-------------|
+| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Conway's Life, Langton's Ants, Floodfill Maze, Fire |
+| `SIMON` | Simon Says | Memory sequence game with colored quadrants |
+| `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
+| `PONG` | Pong | Paddle vs. AI, increasing difficulty |
+| `BRKOUT` | Breakout | Brick breaker with rainbow bricks |
+| `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
+| `QIX` | Qix | Territory capture, avoid the enemy |
+| `TETRIS` | Tetris | Falling blocks with line clearing |
+| `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
+| `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
+| `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
+| `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
+| `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
+| `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
+| `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
+| `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
+| `DOOMLT` | Doom Lite | Mini raycaster FPS with enemies |
 
-## Fun
+Each game tracks high scores with optional initials entry.
 
-Enjoy building and gaming on your very own DIY-Arcade-Machine! If you encounter any issues or need assistance, feel free to open an issue or reach out.
+---
 
-**Happy Gaming!**
+## Controls
 
+### Common Controls
+
+**Menu Navigation**:
+- **Up/Down**: Navigate menu
+- **Z (or Space/Enter)**: Select/Confirm
+- **C (or X/Escape)**: Back/Cancel
+
+**In-Game**:
+- **Directional movement**: Arrow keys / Joystick
+- **Primary action** (jump/shoot/rotate): Z button / Space / Enter
+- **Secondary/Back**: C button / X / Escape
+
+### Desktop Keyboard Mapping
+
+| Action | Keys |
+|--------|------|
+| Move | Arrow Keys |
+| Confirm/Action | `Z`, `Space`, or `Enter` |
+| Back/Cancel | `X` or `Escape` |
+
+### MicroPython Controller
+
+- **I2C Address**: 0x52 (standard Nunchuk)
+- **Pins**: SCL=21, SDA=20 (configurable in code)
+- **Buttons**:
+  - **C button**: Back/Cancel
+  - **Z button**: Confirm/Action
+- **Analog stick**: 8-directional movement (includes diagonals)
+
+The code auto-detects controller variants including the "new signature" controllers (`A0 20 10 00 FF FF`).
