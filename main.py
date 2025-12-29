@@ -3634,7 +3634,8 @@ class PitfallGame:
 class DemosGame:
     """Zero-player demos: simple animations and cellular automata."""
     def __init__(self):
-        self.demos = ["SNAKE", "TRON", "LIFE", "ANT"]
+        # TRON removed; new demos added: ANTS, FLOOD, FIRE
+        self.demos = ["SNAKE", "LIFE", "ANTS", "FLOOD", "FIRE"]
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
@@ -3645,36 +3646,51 @@ class DemosGame:
         # shared
         self._init = False
         self._frame = 0
+        self._demo_w = WIDTH
+        self._demo_h = HEIGHT
 
         # LIFE (2x2 scaled)
         self._life_w = 32
-        self._life_h = 24
-        self._life_cur = bytearray(self._life_w * self._life_h)
-        self._life_nxt = bytearray(self._life_w * self._life_h)
-        self._life_prev = bytearray(self._life_w * self._life_h)
+        self._life_h = 32
+        self._life_cur = None
+        self._life_nxt = None
+        self._life_prev = None
 
-        # ANT
-        self._ant_w = WIDTH
-        self._ant_h = PLAY_HEIGHT
-        self._ant_cells = bytearray(self._ant_w * self._ant_h)
-        self._ant = [self._ant_w // 2, self._ant_h // 2, 0]
-        self._ant_prev = [self._ant[0], self._ant[1]]
+        # ANTS (multi Langton ants)
+        self._ants_w = WIDTH
+        self._ants_h = HEIGHT
+        self._ants_cells = None  # bytearray: 0 dead, 1 alive
+        self._ants = []
+        self._ants_prev = []
+        self._ants_changed = []
 
-        # TRON
-        self._tron_w = WIDTH
-        self._tron_h = PLAY_HEIGHT
-        self._tron_occ = bytearray(self._tron_w * self._tron_h)
-        self._tron_p1 = [self._tron_w // 3, self._tron_h // 2, 1, 0]
-        self._tron_p2 = [2 * self._tron_w // 3, self._tron_h // 2, -1, 0]
-        self._tron_prev1 = [self._tron_p1[0], self._tron_p1[1]]
-        self._tron_prev2 = [self._tron_p2[0], self._tron_p2[1]]
+        # FLOOD (flood fill through random maze)
+        self._flood_w = WIDTH
+        self._flood_h = HEIGHT
+        # values: 0 empty, 1 line, 2 floodfill, 3 enemy, 4 queued, 5 line
+        self._flood = None
+        self._flood_vis = None
+        self._flood_q = None  # bytearray queue of packed (y<<8)|x
+        self._flood_q_head = 0
+        self._flood_q_tail = 0
+        self._flood_steps = 0
+        self._flood_max_steps = 4000  # scaled from 16000 @ 128x128
+
+        # FIRE (doom-fire)
+        self._fire_w = WIDTH
+        self._fire_h = HEIGHT
+        self._fire = None
+        self._fire_prev = None
 
         # SNAKE
-        self._snake = [(WIDTH // 2, PLAY_HEIGHT // 2)]
-        self._snake_len = 8
-        self._snake_dir = 0  # 0U 1D 2L 3R
-        self._snake_target = (random.randint(1, WIDTH - 2), random.randint(1, PLAY_HEIGHT - 2))
-        self._snake_occ = bytearray(WIDTH * PLAY_HEIGHT)
+        self._snake = [(WIDTH // 2, HEIGHT // 2)]
+        self._snake_length = 3
+        self._snake_dir = 'UP'
+        self._snake_score = 0
+        self._snake_target = (WIDTH // 2, HEIGHT // 2)
+        self._snake_green_targets = []  # list of (x,y,lifespan)
+        self._snake_step_counter = 0
+        self._snake_step_counter2 = 0
 
     def _life_step(self, w, h, cur, nxt):
         for y in range(h):
@@ -3709,7 +3725,7 @@ class DemosGame:
                 prev[i] = v
                 px = x * 2
                 py = y * 2
-                if py >= PLAY_HEIGHT:
+                if py >= HEIGHT:
                     continue
                 if v:
                     r, g, b = 0, 180, 0
@@ -3718,144 +3734,544 @@ class DemosGame:
                 display.set_pixel(px, py, r, g, b)
                 if px + 1 < WIDTH:
                     display.set_pixel(px + 1, py, r, g, b)
-                if py + 1 < PLAY_HEIGHT:
+                if py + 1 < HEIGHT:
                     display.set_pixel(px, py + 1, r, g, b)
                     if px + 1 < WIDTH:
                         display.set_pixel(px + 1, py + 1, r, g, b)
 
-    def _langton_step(self, w, h, cells, ant):
-        x, y, d = ant
-        i = y * w + x
-        if cells[i]:
-            # black: turn left
-            d = (d - 1) & 3
-            cells[i] = 0
-        else:
-            # white: turn right
-            d = (d + 1) & 3
-            cells[i] = 1
-        if d == 0:
-            y = (y - 1) % h
-        elif d == 1:
-            x = (x + 1) % w
-        elif d == 2:
-            y = (y + 1) % h
-        else:
-            x = (x - 1) % w
-        ant[0], ant[1], ant[2] = x, y, d
+    def _ants_init(self):
+        # Match original "game_of_ants" look:
+        # - dead: black
+        # - alive base: (155,155,155)
+        # - alive trail: dim ant color
+        # - ants: bright unique colors
+        w = self._ants_w
+        h = self._ants_h
 
-    def _langton_draw(self, w, h, cells, ant):
-        # kept for compatibility (not used in incremental mode)
+        self._ants_cells = bytearray(w * h)
+        for i in range(w * h):
+            self._ants_cells[i] = 1 if random.randint(0, 7) == 0 else 0
+
+        # init ants: [x,y,dir,r,g,b]
+        self._ants = []
+        self._ants_prev = []
+        self._ants_changed = []
+        n = 8
+        for _ in range(n):
+            ax = random.randint(0, w - 1)
+            ay = random.randint(0, h - 1)
+            ad = random.randint(0, 3)
+            r, g, b = hsb_to_rgb(random.randint(0, 360), 1, 1)
+            self._ants.append([ax, ay, ad, r, g, b])
+            self._ants_prev.append((ax, ay))
+
         display.clear()
+        # draw initial grid (alive base)
         for y in range(h):
+            row = y * w
             for x in range(w):
-                if cells[y * w + x] == 1 and y < PLAY_HEIGHT:
-                    display.set_pixel(x, y, 50, 50, 255)
-        ax, ay, _ = ant
-        if ay < PLAY_HEIGHT:
-            display.set_pixel(ax, ay, 255, 255, 0)
+                if self._ants_cells[row + x]:
+                    display.set_pixel(x, y, 155, 155, 155)
+        # draw ants
+        for ant in self._ants:
+            display.set_pixel(ant[0], ant[1], ant[3], ant[4], ant[5])
 
-    def _tron_step(self, w, h, occ, p):
-        # p: [x,y,dx,dy]
-        x, y, dx, dy = p
-        nx = x + dx
-        ny = y + dy
-        if nx <= 0 or nx >= w - 1 or ny <= 0 or ny >= h - 1 or occ[ny * w + nx]:
-            # turn randomly
-            if random.randint(0, 1) == 0:
-                dx, dy = -dy, dx
+    def _ants_step(self):
+        w = self._ants_w
+        h = self._ants_h
+        cells = self._ants_cells
+        ants = self._ants
+
+        prev_positions = []
+        changed = []
+
+        # 1) update ants + grid state
+        for ant in ants:
+            x = ant[0]
+            y = ant[1]
+            d = ant[2]
+            r = ant[3]
+            g = ant[4]
+            b = ant[5]
+
+            prev_positions.append((x, y))
+            i = y * w + x
+            state = cells[i]
+            if state == 0:
+                if random.randint(0, 3) == 0:
+                    d = random.randint(0, 3)
+                else:
+                    d = (d - 1) & 3
+                cells[i] = 1
+                changed.append((x, y, 1, r, g, b))
             else:
-                dx, dy = dy, -dx
-            nx = x + dx
-            ny = y + dy
-        if nx <= 0 or nx >= w - 1 or ny <= 0 or ny >= h - 1 or occ[ny * w + nx]:
-            return False
-        p[0], p[1], p[2], p[3] = nx, ny, dx, dy
-        occ[ny * w + nx] = 1
-        return True
+                d = (d + 1) & 3
+                cells[i] = 0
+                changed.append((x, y, 0, 0, 0, 0))
 
-    def _tron_draw(self, w, h, occ, p1, p2):
-        # kept for compatibility (not used in incremental mode)
+            # move
+            if d == 0:
+                y = (y - 1) % h
+            elif d == 1:
+                x = (x + 1) % w
+            elif d == 2:
+                y = (y + 1) % h
+            else:
+                x = (x - 1) % w
+
+            ant[0], ant[1], ant[2] = x, y, d
+
+        # 2) erase ants from previous positions (restore base cell colors)
+        for x, y in prev_positions:
+            if cells[y * w + x]:
+                display.set_pixel(x, y, 155, 155, 155)
+            else:
+                display.set_pixel(x, y, 0, 0, 0)
+
+        # 3) apply changed cells (dim colored trails)
+        for x, y, st, r, g, b in changed:
+            if st:
+                display.set_pixel(x, y, r // 2, g // 2, b // 2)
+            else:
+                display.set_pixel(x, y, 0, 0, 0)
+
+        # 4) draw ants in new positions
+        for ant in ants:
+            display.set_pixel(ant[0], ant[1], ant[3], ant[4], ant[5])
+
+    def _flood_init(self):
+        # Closely matches hub75/floodfill_maze_on_hub75_128x128.py, optimized for 64x64.
+        w = self._flood_w
+        h = self._flood_h
+
+        try:
+            gc.collect()
+        except Exception:
+            pass
+
+        if self._flood is None or len(self._flood) != w * h:
+            self._flood = bytearray(w * h)
+        else:
+            for i in range(w * h):
+                self._flood[i] = 0
+
+        if self._flood_vis is None or len(self._flood_vis) != w * h:
+            self._flood_vis = bytearray(w * h)
+        else:
+            for i in range(w * h):
+                self._flood_vis[i] = 0
+
+        if self._flood_q is None or len(self._flood_q) != w * h * 2:
+            self._flood_q = bytearray(w * h * 2)
+
+        self._flood_q_head = 0
+        self._flood_q_tail = 0
+        self._flood_steps = 0
+
+        g = self._flood
+        visited = self._flood_vis
+
+        border = 24  # 48 @ 128 scaled to 64
+        step = 4      # 8 @ 128 scaled to 64
+
+        # Start near center like reference
+        sx = random.randint(border // 2, min(w - 2, w - border // 2))
+        sy = random.randint(border // 2, min(h - 2, h - border // 2))
+
+        # Fixed-size stack for DFS nodes (step grid is about (w/step)*(h/step)).
+        max_nodes = (w // step) * (h // step)
+        stack = bytearray(max_nodes * 2)
+        sp = 0
+
+        def stack_push(v):
+            nonlocal sp
+            stack[sp] = v & 0xFF
+            stack[sp + 1] = (v >> 8) & 0xFF
+            sp += 2
+
+        def stack_top():
+            return stack[sp - 2] | (stack[sp - 1] << 8)
+
+        def stack_pop():
+            nonlocal sp
+            sp -= 2
+
+        def mark_line(px, py, v=1):
+            g[py * w + px] = v
+            display.set_pixel(px, py, 255, 255, 255)
+
         display.clear()
-        for y in range(h):
+
+        stack_push((sy << 6) | sx)
+        visited[sy * w + sx] = 1
+
+        dirs = [(0, step), (0, -step), (step, 0), (-step, 0)]
+        while sp:
+            v = stack_top()
+            x = v & 0x3F
+            y = v >> 6
+
+            mixed = dirs[:]
+            _shuffle_in_place(mixed)
+
+            found = False
+            for dx, dy in mixed:
+                nx = x + dx
+                ny = y + dy
+                if not (0 < nx < w and 0 < ny < h):
+                    continue
+                ii = ny * w + nx
+                if visited[ii]:
+                    continue
+
+                sx1 = dx // step
+                sy1 = dy // step
+                for i in range(1, step):
+                    mark_line(x + sx1 * i, y + sy1 * i, 1)
+
+                # endpoint in reference uses value 5
+                mark_line(nx, ny, 5)
+
+                visited[ii] = 1
+                stack_push((ny << 6) | nx)
+                found = True
+                break
+
+            if not found:
+                stack_pop()
+
+        # Choose "enemy" start in central border area on empty cell
+        while True:
+            ex = random.randint(border, w - border - 1)
+            ey = random.randint(border, h - border - 1)
+            idx = ey * w + ex
+            if g[idx] == 0:
+                g[idx] = 3
+                break
+
+        # enqueue start (do not overwrite enemy)
+        bi = self._flood_q_tail * 2
+        self._flood_q[bi] = ex & 0xFF
+        self._flood_q[bi + 1] = ey & 0xFF
+        self._flood_q_tail += 1
+
+    def _flood_step(self):
+        w = self._flood_w
+        h = self._flood_h
+        q = self._flood_q
+        head = self._flood_q_head
+        tail = self._flood_q_tail
+        g = self._flood
+        max_steps = self._flood_max_steps
+
+        # expand a bunch per frame
+        n = 260
+        while n > 0:
+            n -= 1
+            if head >= tail or self._flood_steps >= max_steps:
+                self._flood_init()
+                return
+            bi = head * 2
+            # stored as bytes: x then y
+            x = q[bi]
+            y = q[bi + 1]
+            head += 1
+            i = y * w + x
+            gv = g[i]
+            # match reference: allow flood on empty and enemy; leave lines intact
+            if gv != 0 and gv != 3 and gv != 4:
+                continue
+            # visit
+            g[i] = 2
+            if gv != 3:
+                hue = (self._flood_steps * 360) // max_steps
+                r, gg, b = hsb_to_rgb(hue, 1.0, 1.0)
+                display.set_pixel(x, y, r, gg, b)
+            self._flood_steps += 1
+
+            # neighbors
+            def q_push_xy(px, py):
+                nonlocal tail
+                if tail >= w * h:
+                    return
+                bj = tail * 2
+                q[bj] = px & 0xFF
+                q[bj + 1] = py & 0xFF
+                tail += 1
+
+            if x + 1 < w and g[i + 1] == 0:
+                g[i + 1] = 4
+                q_push_xy(x + 1, y)
+            if x - 1 >= 0 and g[i - 1] == 0:
+                g[i - 1] = 4
+                q_push_xy(x - 1, y)
+            if y + 1 < h and g[i + w] == 0:
+                g[i + w] = 4
+                q_push_xy(x, y + 1)
+            if y - 1 >= 0 and g[i - w] == 0:
+                g[i - w] = 4
+                q_push_xy(x, y - 1)
+
+        self._flood_q_head = head
+        self._flood_q_tail = tail
+
+    def _fire_palette(self, v):
+        # v: 0..36 -> rgb
+        if v <= 0:
+            return (0, 0, 0)
+        if v < 10:
+            return (v * 7, 0, 0)
+        if v < 20:
+            return (70 + (v - 10) * 10, (v - 10) * 3, 0)
+        if v < 30:
+            return (170 + (v - 20) * 6, 30 + (v - 20) * 8, 0)
+        return (255, 120 + (v - 30) * 10 if (120 + (v - 30) * 10) < 255 else 255, 20)
+
+    def _fire_init(self):
+        w = self._fire_w
+        h = self._fire_h
+        if self._fire is None or len(self._fire) != w * h:
+            self._fire = bytearray(w * h)
+        else:
+            for i in range(w * h):
+                self._fire[i] = 0
+        if self._fire_prev is None or len(self._fire_prev) != w * h:
+            self._fire_prev = bytearray(w * h)
+        # force redraw first frame
+        for i in range(w * h):
+            self._fire_prev[i] = 255
+        display.clear()
+
+    def _fire_step(self):
+        w = self._fire_w
+        h = self._fire_h
+        buf = self._fire
+
+        # seed bottom row
+        base = (h - 1) * w
+        for x in range(w):
+            buf[base + x] = 36 if random.randint(0, 99) < 60 else 0
+
+        # propagate upwards
+        for y in range(h - 1):
+            row = y * w
+            src_row = (y + 1) * w
             for x in range(w):
-                if occ[y * w + x] and y < PLAY_HEIGHT:
-                    display.set_pixel(x, y, 0, 200, 200)
-        if p1[1] < PLAY_HEIGHT:
-            display.set_pixel(p1[0], p1[1], 255, 0, 0)
-        if p2[1] < PLAY_HEIGHT:
-            display.set_pixel(p2[0], p2[1], 0, 255, 0)
+                src = src_row + x
+                v = buf[src]
+                if v:
+                    decay = random.randint(0, 3)
+                    nv = v - decay
+                    if nv < 0:
+                        nv = 0
+                    dx = x + 1 - random.randint(0, 2)
+                    if dx < 0:
+                        dx = 0
+                    elif dx >= w:
+                        dx = w - 1
+                    buf[row + dx] = nv
+                else:
+                    # slowly cool
+                    if buf[row + x] > 0:
+                        buf[row + x] -= 1
+
+        # diff-draw
+        prev = self._fire_prev
+        for i in range(w * h):
+            v = buf[i]
+            if v == prev[i]:
+                continue
+            prev[i] = v
+            x = i % w
+            y = i // w
+            r, g, b = self._fire_palette(v)
+            display.set_pixel(x, y, r, g, b)
+
+    # --- SNAKE (based on hub75/snake_on_hub75_zeroplayer.py) ---
+    def _snake_restart(self):
+        self._snake_score = 0
+        self._snake = [(WIDTH // 2, HEIGHT // 2)]
+        self._snake_length = 3
+        self._snake_dir = 'UP'
+        self._snake_green_targets = []
+        self._snake_step_counter = 0
+        self._snake_step_counter2 = 0
+        display.clear()
+        self._snake_place_target()
+
+    def _snake_random_target(self):
+        return (random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 2))
 
     def _snake_place_target(self):
         tries = 0
-        while tries < 200:
-            x = random.randint(1, WIDTH - 2)
-            y = random.randint(1, PLAY_HEIGHT - 2)
-            if self._snake_occ[y * WIDTH + x] == 0:
-                self._snake_target = (x, y)
-                return
+        while tries < 300:
             tries += 1
-        self._snake_target = (WIDTH // 2, PLAY_HEIGHT // 2)
-
-    def _snake_init(self):
-        self._snake_occ = bytearray(WIDTH * PLAY_HEIGHT)
-        self._snake = [(WIDTH // 2, PLAY_HEIGHT // 2)]
-        self._snake_len = 10
-        self._snake_dir = random.randint(0, 3)
-        self._snake_occ[self._snake[0][1] * WIDTH + self._snake[0][0]] = 1
-        self._snake_place_target()
-        display.clear()
-        tx, ty = self._snake_target
-        display.set_pixel(tx, ty, 255, 0, 0)
-        hx, hy = self._snake[0]
-        display.set_pixel(hx, hy, 0, 255, 0)
-
-    def _snake_step(self):
-        # simple greedy AI to target avoiding self
-        head_x, head_y = self._snake[0]
-        tx, ty = self._snake_target
-
-        def cand_dirs():
-            # prioritize moving closer (Manhattan)
-            opts = [0, 1, 2, 3]
-            _shuffle_in_place(opts)
-            opts.sort(key=lambda d: abs((head_x + (d == 3) - (d == 2)) - tx) + abs((head_y + (d == 1) - (d == 0)) - ty))
-            return opts
-
-        nd = self._snake_dir
-        for d in cand_dirs():
-            nx = head_x + (1 if d == 3 else (-1 if d == 2 else 0))
-            ny = head_y + (1 if d == 1 else (-1 if d == 0 else 0))
-            if nx <= 0 or nx >= WIDTH - 1 or ny <= 0 or ny >= PLAY_HEIGHT - 1:
+            x, y = self._snake_random_target()
+            if (x, y) in self._snake:
                 continue
-            if self._snake_occ[ny * WIDTH + nx]:
+            hit_green = False
+            for gx, gy, _ in self._snake_green_targets:
+                if (gx, gy) == (x, y):
+                    hit_green = True
+                    break
+            if hit_green:
                 continue
-            nd = d
-            break
+            self._snake_target = (x, y)
+            display.set_pixel(x, y, 255, 0, 0)
+            return
+        self._snake_target = (WIDTH // 2, HEIGHT // 2)
+        display.set_pixel(self._snake_target[0], self._snake_target[1], 255, 0, 0)
 
-        self._snake_dir = nd
-        nx = head_x + (1 if nd == 3 else (-1 if nd == 2 else 0))
-        ny = head_y + (1 if nd == 1 else (-1 if nd == 0 else 0))
-
-        # if blocked, restart demo
-        if nx <= 0 or nx >= WIDTH - 1 or ny <= 0 or ny >= PLAY_HEIGHT - 1 or self._snake_occ[ny * WIDTH + nx]:
-            self._snake_init()
+    def _snake_place_green_target(self):
+        tries = 0
+        while tries < 200:
+            tries += 1
+            x, y = random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 2)
+            if (x, y) == self._snake_target:
+                continue
+            if (x, y) in self._snake:
+                continue
+            self._snake_green_targets.append((x, y, 256))
+            display.set_pixel(x, y, 0, 255, 0)
             return
 
-        self._snake.insert(0, (nx, ny))
-        self._snake_occ[ny * WIDTH + nx] = 1
-        display.set_pixel(nx, ny, 0, 255, 0)
+    def _snake_update_green_targets(self):
+        new_targets = []
+        for x, y, lifespan in self._snake_green_targets:
+            if lifespan > 1:
+                new_targets.append((x, y, lifespan - 1))
+            else:
+                display.set_pixel(x, y, 0, 0, 0)
+        self._snake_green_targets = new_targets
 
-        if (nx, ny) == self._snake_target:
-            self._snake_len += 2
-            self._snake_place_target()
-            tx, ty = self._snake_target
-            display.set_pixel(tx, ty, 255, 0, 0)
+    def _snake_find_nearest_target(self, head_x, head_y):
+        def md(x1, y1, x2, y2):
+            return abs(x1 - x2) + abs(y1 - y2)
 
-        if len(self._snake) > self._snake_len:
+        nearest_green = None
+        min_green = 99999
+        for x, y, _ in self._snake_green_targets:
+            d = md(head_x, head_y, x, y)
+            if d < min_green:
+                min_green = d
+                nearest_green = (x, y)
+
+        tx, ty = self._snake_target
+        red_d = md(head_x, head_y, tx, ty)
+        if nearest_green and min_green <= red_d * 1.5:
+            return nearest_green
+        return (tx, ty)
+
+    def _snake_update_direction(self):
+        head_x, head_y = self._snake[0]
+        target_x, target_y = self._snake_find_nearest_target(head_x, head_y)
+
+        opposite = {'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
+        cur = self._snake_dir
+        new_dir = cur
+
+        if head_x == target_x:
+            if head_y < target_y and cur != 'UP':
+                new_dir = 'DOWN'
+            elif head_y > target_y and cur != 'DOWN':
+                new_dir = 'UP'
+        elif head_y == target_y:
+            if head_x < target_x and cur != 'LEFT':
+                new_dir = 'RIGHT'
+            elif head_x > target_x and cur != 'RIGHT':
+                new_dir = 'LEFT'
+        else:
+            if abs(head_x - target_x) < abs(head_y - target_y):
+                if head_x < target_x and cur != 'LEFT':
+                    new_dir = 'RIGHT'
+                elif head_x > target_x and cur != 'RIGHT':
+                    new_dir = 'LEFT'
+            else:
+                if head_y < target_y and cur != 'UP':
+                    new_dir = 'DOWN'
+                elif head_y > target_y and cur != 'DOWN':
+                    new_dir = 'UP'
+
+        if new_dir == opposite.get(cur):
+            new_dir = cur
+        self._snake_dir = new_dir
+
+    def _snake_check_self_collision(self):
+        head_x, head_y = self._snake[0]
+        body = self._snake[1:]
+        potential = {
+            'UP': (head_x, (head_y - 1) % HEIGHT),
+            'DOWN': (head_x, (head_y + 1) % HEIGHT),
+            'LEFT': ((head_x - 1) % WIDTH, head_y),
+            'RIGHT': ((head_x + 1) % WIDTH, head_y)
+        }
+        cur_next = potential[self._snake_dir]
+        if cur_next in body:
+            safe = [d for d, pos in potential.items() if pos not in body]
+            if safe:
+                self._snake_dir = safe[random.randint(0, len(safe) - 1)]
+            else:
+                self._snake_restart()
+
+    def _snake_update_position(self):
+        head_x, head_y = self._snake[0]
+        if self._snake_dir == 'UP':
+            head_y -= 1
+        elif self._snake_dir == 'DOWN':
+            head_y += 1
+        elif self._snake_dir == 'LEFT':
+            head_x -= 1
+        else:
+            head_x += 1
+        head_x %= WIDTH
+        head_y %= HEIGHT
+
+        self._snake.insert(0, (head_x, head_y))
+        if len(self._snake) > self._snake_length:
             tx, ty = self._snake.pop()
-            self._snake_occ[ty * WIDTH + tx] = 0
             display.set_pixel(tx, ty, 0, 0, 0)
+
+    def _snake_check_target_collision(self):
+        if self._snake[0] == self._snake_target:
+            self._snake_length += 2
+            self._snake_place_target()
+            self._snake_score += 1
+
+    def _snake_check_green_target_collision(self):
+        hx, hy = self._snake[0]
+        for x, y, lifespan in self._snake_green_targets:
+            if (hx, hy) == (x, y):
+                self._snake_length = max(self._snake_length // 2, 2)
+                try:
+                    self._snake_green_targets.remove((x, y, lifespan))
+                except Exception:
+                    pass
+                display.set_pixel(x, y, 0, 0, 0)
+                break
+
+    def _snake_draw(self):
+        hue = 0
+        for x, y in self._snake:
+            hue = (hue + 5) % 360
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            display.set_pixel(x, y, r, g, b)
+
+    def _snake_init(self):
+        self._snake_restart()
+
+    def _snake_step(self):
+        self._snake_step_counter += 1
+        self._snake_step_counter2 += 1
+        if (self._snake_step_counter2 & 1023) == 0:
+            self._snake_place_green_target()
+
+        self._snake_update_green_targets()
+        self._snake_update_direction()
+        self._snake_check_self_collision()
+        self._snake_update_position()
+        self._snake_check_target_collision()
+        self._snake_check_green_target_collision()
+        self._snake_draw()
 
     def main_loop(self, joystick):
         global game_over, global_score
@@ -3876,10 +4292,18 @@ class DemosGame:
                 if d == JOYSTICK_LEFT:
                     self.idx = (self.idx - 1) % len(self.demos)
                     self._reset_demo_state()
+                    try:
+                        gc.collect()
+                    except Exception:
+                        pass
                     self._last_move = now
                 elif d == JOYSTICK_RIGHT:
                     self.idx = (self.idx + 1) % len(self.demos)
                     self._reset_demo_state()
+                    try:
+                        gc.collect()
+                    except Exception:
+                        pass
                     self._last_move = now
 
             if ticks_diff(now, last_frame) < frame_ms:
@@ -3891,26 +4315,22 @@ class DemosGame:
             demo = self.demos[self.idx]
             if not self._init:
                 display.clear()
-                draw_text_small(1, PLAY_HEIGHT, demo, 120, 120, 120)
+                # No HUD in demos: use full 64x64 for visuals.
                 if demo == "LIFE":
+                    self._life_cur = bytearray(self._life_w * self._life_h)
+                    self._life_nxt = bytearray(self._life_w * self._life_h)
+                    self._life_prev = bytearray(self._life_w * self._life_h)
                     for i in range(self._life_w * self._life_h):
                         self._life_cur[i] = 1 if random.randint(0, 99) < 18 else 0
                         self._life_prev[i] = 2  # force draw
-                elif demo == "ANT":
-                    # start with empty field
-                    self._ant_cells = bytearray(self._ant_w * self._ant_h)
-                    self._ant = [self._ant_w // 2, self._ant_h // 2, 0]
-                    self._ant_prev = [self._ant[0], self._ant[1]]
-                elif demo == "TRON":
-                    self._tron_occ = bytearray(self._tron_w * self._tron_h)
-                    self._tron_p1 = [self._tron_w // 3, self._tron_h // 2, 1, 0]
-                    self._tron_p2 = [2 * self._tron_w // 3, self._tron_h // 2, -1, 0]
-                    self._tron_prev1 = [self._tron_p1[0], self._tron_p1[1]]
-                    self._tron_prev2 = [self._tron_p2[0], self._tron_p2[1]]
-                    self._tron_occ[self._tron_p1[1] * self._tron_w + self._tron_p1[0]] = 1
-                    self._tron_occ[self._tron_p2[1] * self._tron_w + self._tron_p2[0]] = 1
-                    display.set_pixel(self._tron_p1[0], self._tron_p1[1], 255, 0, 0)
-                    display.set_pixel(self._tron_p2[0], self._tron_p2[1], 0, 255, 0)
+                elif demo == "ANTS":
+                    self._ants_init()
+                elif demo == "FLOOD":
+                    self._flood_init()
+                elif demo == "FIRE":
+                    self._fire = bytearray(self._fire_w * self._fire_h)
+                    self._fire_prev = bytearray(self._fire_w * self._fire_h)
+                    self._fire_init()
                 else:  # SNAKE
                     self._snake_init()
                 self._init = True
@@ -3920,50 +4340,14 @@ class DemosGame:
                 self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
                 self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
 
-            elif demo == "ANT":
-                # do multiple steps per frame, draw only changed cell + ant
-                for _ in range(10):
-                    ax0, ay0 = self._ant[0], self._ant[1]
-                    self._langton_step(self._ant_w, self._ant_h, self._ant_cells, self._ant)
-                    # redraw flipped cell
-                    i = ay0 * self._ant_w + ax0
-                    if self._ant_cells[i]:
-                        display.set_pixel(ax0, ay0, 50, 50, 255)
-                    else:
-                        display.set_pixel(ax0, ay0, 0, 0, 0)
+            elif demo == "ANTS":
+                self._ants_step()
 
-                # erase previous ant marker (restore cell color)
-                px, py = self._ant_prev
-                i = py * self._ant_w + px
-                if self._ant_cells[i]:
-                    display.set_pixel(px, py, 50, 50, 255)
-                else:
-                    display.set_pixel(px, py, 0, 0, 0)
-                # draw ant
-                ax, ay, _d = self._ant
-                if ay < PLAY_HEIGHT:
-                    display.set_pixel(ax, ay, 255, 255, 0)
-                self._ant_prev[0], self._ant_prev[1] = ax, ay
+            elif demo == "FLOOD":
+                self._flood_step()
 
-            elif demo == "TRON":
-                # step a few times per frame
-                for _ in range(2):
-                    ok1 = self._tron_step(self._tron_w, self._tron_h, self._tron_occ, self._tron_p1)
-                    ok2 = self._tron_step(self._tron_w, self._tron_h, self._tron_occ, self._tron_p2)
-                    if not ok1 or not ok2:
-                        # restart this demo
-                        self._reset_demo_state()
-                        break
-
-                # convert old heads to trail
-                display.set_pixel(self._tron_prev1[0], self._tron_prev1[1], 0, 90, 90)
-                display.set_pixel(self._tron_prev2[0], self._tron_prev2[1], 0, 90, 90)
-
-                # draw new heads
-                display.set_pixel(self._tron_p1[0], self._tron_p1[1], 255, 0, 0)
-                display.set_pixel(self._tron_p2[0], self._tron_p2[1], 0, 255, 0)
-                self._tron_prev1[0], self._tron_prev1[1] = self._tron_p1[0], self._tron_p1[1]
-                self._tron_prev2[0], self._tron_prev2[1] = self._tron_p2[0], self._tron_p2[1]
+            elif demo == "FIRE":
+                self._fire_step()
 
             else:  # SNAKE
                 self._snake_step()
@@ -4546,6 +4930,504 @@ class UFODefenseGame:
             except RestartProgram:
                 return
 
+# -----------------------------
+# DOOM-LITE / RAYCASTER GAME
+# -----------------------------
+try:
+    from array import array
+except ImportError:
+    array = None
+
+
+class DoomLiteGame:
+    """
+    DOOM-LITE (extrem abgesteckt) = Wolf3D-Raycaster + Sprites
+
+    Steuerung:
+      - UP/DOWN: vor/zurück
+      - LEFT/RIGHT: drehen
+      - Diagonal: drehen+laufen
+      - Z: schießen
+      - C: zurück ins Menü
+
+    Ziel:
+      - Gegner erledigen, Wellen überleben (endlos)
+    """
+
+    # Playfield ohne Score-Leiste
+    PLAY_H = HEIGHT - 6
+
+    # Map: 16x16, '#' = Wand, '.' = frei
+    MAP_W = 16
+    MAP_H = 16
+    MAP = (
+        b"################",
+        b"#..............#",
+        b"#..####..####..#",
+        b"#..#..#..#..#..#",
+        b"#..#..#..#..#..#",
+        b"#..#..#..#..#..#",
+        b"#..####..####..#",
+        b"#..............#",
+        b"#..####..####..#",
+        b"#..#..#..#..#..#",
+        b"#..#..#..#..#..#",
+        b"#..#..#..#..#..#",
+        b"#..####..####..#",
+        b"#..............#",
+        b"#....######....#",
+        b"################",
+    )
+
+    # Raycaster Parameter
+    ANGLE_MAX = 256               # 0..255 entspricht 0..360°
+    FOV = 48                      # ~67.5° (48/256 * 360)
+    HALF_FOV = FOV // 2
+    MAX_STEPS = 36
+    MAX_DIST = 32.0
+
+    # LUT für sin/cos (256 Steps, Scale 1024)
+    if array:
+        _COS = array('h', [int(math.cos(2 * math.pi * i / 256) * 1024) for i in range(256)])
+        _SIN = array('h', [int(math.sin(2 * math.pi * i / 256) * 1024) for i in range(256)])
+    else:
+        _COS = [int(math.cos(2 * math.pi * i / 256) * 1024) for i in range(256)]
+        _SIN = [int(math.sin(2 * math.pi * i / 256) * 1024) for i in range(256)]
+
+    def __init__(self):
+        self.zbuf = [self.MAX_DIST] * WIDTH  # Wanddistanz pro Screen-Spalte
+        self.reset()
+
+    def reset(self):
+        # Player (Map-Koordinaten, 1 Tile = 1.0)
+        self.px = 2.5
+        self.py = 2.5
+        self.ang = 0  # 0 = nach rechts
+
+        self.score = 0
+        self.lives = 3
+        self.wave = 1
+
+        self.shot_cd = 0
+
+        self.enemies = []
+        self._spawn_wave(self.wave)
+
+        self.last_frame = ticks_ms()
+        self.frame_ms = 35  # ~28 fps
+        self.frame = 0
+
+    # --- helpers ---
+    def _is_wall_tile(self, mx, my):
+        if mx < 0 or mx >= self.MAP_W or my < 0 or my >= self.MAP_H:
+            return True
+        return self.MAP[my][mx] == 35  # '#'
+
+    def _is_wall_pos(self, x, y):
+        return self._is_wall_tile(int(x), int(y))
+
+    def _cos_sin(self, a):
+        a &= 255
+        return self._COS[a] / 1024.0, self._SIN[a] / 1024.0
+
+    def _angle_to_units(self, dx, dy):
+        # dx,dy in Map-Koordinaten; Achtung y-Achse ist "nach unten"
+        ang = math.atan2(-dy, dx)  # -dy -> mathematisch korrekt
+        if ang < 0:
+            ang += 2 * math.pi
+        return int(ang * 256 / (2 * math.pi)) & 255
+
+    def _angle_delta(self, a, b):
+        # kleinste Differenz a-b in [-128..127]
+        d = (a - b + 128) & 255
+        return d - 128
+
+    def _cast_ray(self, ray_ang):
+        """
+        DDA Raycast: liefert (dist, side)
+        side: 0 = x-seite (vertikale Wand), 1 = y-seite (horizontale Wand)
+        """
+        # Ray direction (float)
+        c, s = self._cos_sin(ray_ang)
+        ray_dx = c
+        ray_dy = -s  # y nach unten
+
+        # avoid division by 0
+        if ray_dx == 0:
+            ray_dx = 1e-6
+        if ray_dy == 0:
+            ray_dy = 1e-6
+
+        map_x = int(self.px)
+        map_y = int(self.py)
+
+        delta_x = abs(1.0 / ray_dx)
+        delta_y = abs(1.0 / ray_dy)
+
+        if ray_dx < 0:
+            step_x = -1
+            side_x = (self.px - map_x) * delta_x
+        else:
+            step_x = 1
+            side_x = (map_x + 1.0 - self.px) * delta_x
+
+        if ray_dy < 0:
+            step_y = -1
+            side_y = (self.py - map_y) * delta_y
+        else:
+            step_y = 1
+            side_y = (map_y + 1.0 - self.py) * delta_y
+
+        side = 0
+        for _ in range(self.MAX_STEPS):
+            if side_x < side_y:
+                side_x += delta_x
+                map_x += step_x
+                side = 0
+            else:
+                side_y += delta_y
+                map_y += step_y
+                side = 1
+
+            if self._is_wall_tile(map_x, map_y):
+                if side == 0:
+                    dist = side_x - delta_x
+                else:
+                    dist = side_y - delta_y
+                if dist < 0.05:
+                    dist = 0.05
+                if dist > self.MAX_DIST:
+                    dist = self.MAX_DIST
+                return dist, side
+
+        return self.MAX_DIST, side
+
+    def _spawn_wave(self, wave):
+        # sehr klein halten: 2..6 Gegner
+        n = 2 + (wave // 2)
+        if n > 6:
+            n = 6
+        self.enemies = []
+        tries = 0
+        while len(self.enemies) < n and tries < 200:
+            tries += 1
+            ex = random.randint(1, self.MAP_W - 2) + 0.5
+            ey = random.randint(1, self.MAP_H - 2) + 0.5
+            if self._is_wall_pos(ex, ey):
+                continue
+            # nicht direkt am Start
+            if abs(ex - self.px) + abs(ey - self.py) < 4:
+                continue
+            hp = 1 if wave < 4 else 2
+            self.enemies.append([ex, ey, hp])
+
+    def _shoot(self):
+        # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
+        wall_dist, _ = self._cast_ray(self.ang)
+
+        best_i = -1
+        best_d = 999.0
+
+        for i, e in enumerate(self.enemies):
+            if e[2] <= 0:
+                continue
+            dx = e[0] - self.px
+            dy = e[1] - self.py
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist <= 0.1:
+                continue
+
+            if dist >= wall_dist + 0.2:
+                continue
+
+            a = self._angle_to_units(dx, dy)
+            delta = self._angle_delta(a, self.ang)
+
+            # nur wenn nahe an der Mitte (Crosshair) -> sehr "abgesteckt"
+            if abs(delta) > 3:
+                continue
+
+            if dist < best_d:
+                best_d = dist
+                best_i = i
+
+        if best_i >= 0:
+            self.enemies[best_i][2] -= 1
+            if self.enemies[best_i][2] <= 0:
+                self.score += 50
+            else:
+                self.score += 15
+
+    def _update_enemies(self):
+        global game_over, global_score
+
+        # Enemies bewegen sich selten (Performance + Doom-Feeling)
+        if (self.frame & 1) == 1:
+            return
+
+        for e in self.enemies:
+            if e[2] <= 0:
+                continue
+
+            dx = self.px - e[0]
+            dy = self.py - e[1]
+            dist2 = dx * dx + dy * dy
+
+            # Contact damage
+            if dist2 < 0.20:
+                self.lives -= 1
+                if self.lives <= 0:
+                    global_score = self.score
+                    game_over = True
+                    return
+                # Respawn player (aber Score behalten)
+                self.px, self.py = 2.5, 2.5
+                return
+
+            # Move toward player
+            step = 0.055 + (self.wave * 0.002)
+            if step > 0.09:
+                step = 0.09
+
+            # axis-priority move
+            if abs(dx) > abs(dy):
+                sx = step if dx > 0 else -step
+                nx = e[0] + sx
+                if not self._is_wall_pos(nx, e[1]):
+                    e[0] = nx
+                else:
+                    sy = step if dy > 0 else -step
+                    ny = e[1] + sy
+                    if not self._is_wall_pos(e[0], ny):
+                        e[1] = ny
+            else:
+                sy = step if dy > 0 else -step
+                ny = e[1] + sy
+                if not self._is_wall_pos(e[0], ny):
+                    e[1] = ny
+                else:
+                    sx = step if dx > 0 else -step
+                    nx = e[0] + sx
+                    if not self._is_wall_pos(nx, e[1]):
+                        e[0] = nx
+
+    def _render(self):
+        # background sky/floor
+        # Intentionally no display.clear(): we always redraw the full playfield
+        # background first. With the buffered framebuffer this means only pixels
+        # that actually changed (walls/sprites/movement) are flushed.
+        half = self.PLAY_H // 2
+        draw_rectangle(0, 0, WIDTH - 1, half - 1, 0, 0, 25)                 # sky
+        draw_rectangle(0, half, WIDTH - 1, self.PLAY_H - 1, 18, 10, 0)      # floor
+
+        # ray angles: fixedpoint, damit FOV/64 sauber läuft
+        angle_step_fp = (self.FOV << 16) // WIDTH
+        ang_fp = ((self.ang - self.HALF_FOV) & 255) << 16
+
+        for x in range(WIDTH):
+            ray_ang = (ang_fp >> 16) & 255
+            ang_fp += angle_step_fp
+
+            dist, side = self._cast_ray(ray_ang)
+            self.zbuf[x] = dist
+
+            line_h = int(self.PLAY_H / (dist + 1e-6))
+            if line_h < 1:
+                line_h = 1
+            if line_h > self.PLAY_H:
+                line_h = self.PLAY_H
+
+            start = (self.PLAY_H - line_h) // 2
+            end = start + line_h - 1
+            if start < 0: start = 0
+            if end >= self.PLAY_H: end = self.PLAY_H - 1
+
+            # simple shading
+            b = 220 - int(dist * 18)
+            if b < 40:
+                b = 40
+            if side == 1:
+                b = (b * 3) // 4
+
+            draw_rectangle(x, start, x, end, b, b, b)
+
+        # sprites (enemies) als billboards
+        # sortiert nach Entfernung (weit -> nah)
+        alive = []
+        for e in self.enemies:
+            if e[2] > 0:
+                dx = e[0] - self.px
+                dy = e[1] - self.py
+                d = math.sqrt(dx * dx + dy * dy)
+                alive.append((d, e))
+        alive.sort(reverse=True)
+
+        for dist, e in alive:
+            dx = e[0] - self.px
+            dy = e[1] - self.py
+            a = self._angle_to_units(dx, dy)
+            delta = self._angle_delta(a, self.ang)
+            if abs(delta) > self.HALF_FOV:
+                continue
+
+            sx = int((delta + self.HALF_FOV) * WIDTH / self.FOV)
+            if sx < 0 or sx >= WIDTH:
+                continue
+
+            # sprite size
+            sh = int(self.PLAY_H / (dist + 1e-6))
+            if sh < 2:
+                sh = 2
+            if sh > self.PLAY_H:
+                sh = self.PLAY_H
+            sw = sh // 3
+            if sw < 1:
+                sw = 1
+            if sw > 6:
+                sw = 6
+
+            y0 = (self.PLAY_H - sh) // 2
+            y1 = y0 + sh - 1
+
+            x0 = sx - sw // 2
+            x1 = x0 + sw - 1
+
+            # draw with z-buffer test per column
+            for xx in range(x0, x1 + 1):
+                if 0 <= xx < WIDTH and dist < self.zbuf[xx]:
+                    # hp color
+                    if e[2] >= 2:
+                        col = (255, 0, 255)
+                    else:
+                        col = (255, 60, 60)
+                    draw_rectangle(xx, y0, xx, y1, col[0], col[1], col[2])
+
+        # minimap overlay (16x16)
+        draw_rectangle(0, 0, self.MAP_W + 1, self.MAP_H + 1, 0, 0, 0)
+        sp = display.set_pixel
+        for my in range(self.MAP_H):
+            row = self.MAP[my]
+            for mx in range(self.MAP_W):
+                if row[mx] == 35:
+                    sp(mx, my, 0, 0, 160)
+        sp(int(self.px), int(self.py), 0, 255, 0)
+        # direction hint
+        dc, ds = self._cos_sin(self.ang)
+        ax = int(self.px + dc * 0.7)
+        ay = int(self.py - ds * 0.7)
+        if 0 <= ax < self.MAP_W and 0 <= ay < self.MAP_H:
+            sp(ax, ay, 0, 200, 0)
+        for e in self.enemies:
+            if e[2] > 0:
+                ex = int(e[0])
+                ey = int(e[1])
+                if 0 <= ex < self.MAP_W and 0 <= ey < self.MAP_H:
+                    sp(ex, ey, 255, 0, 0)
+
+        # lives indicator (oben rechts)
+        for i in range(self.lives):
+            x = WIDTH - 2 - i * 3
+            y = 1
+            if 0 <= x < WIDTH and 0 <= y < self.PLAY_H:
+                sp(x, y, 0, 255, 0)
+
+        # crosshair
+        cx = WIDTH // 2
+        cy = self.PLAY_H // 2
+        if 0 <= cx < WIDTH and 0 <= cy < self.PLAY_H:
+            sp(cx, cy, 255, 255, 255)
+
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0)
+
+        while not game_over:
+            try:
+                c_button, z_button = joystick.nunchuck.buttons()
+                if c_button:
+                    return
+
+                now = ticks_ms()
+                if ticks_diff(now, self.last_frame) < self.frame_ms:
+                    sleep_ms(2)
+                    continue
+                self.last_frame = now
+                self.frame += 1
+
+                # input
+                d = joystick.read_direction([
+                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
+                ], debounce=False)
+
+                # rotate
+                rot = 0
+                if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
+                    rot = -5
+                elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
+                    rot = +5
+                if rot:
+                    self.ang = (self.ang + rot) & 255
+
+                # move
+                move = 0.0
+                if d in (JOYSTICK_UP, JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT):
+                    move = 0.12
+                elif d in (JOYSTICK_DOWN, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT):
+                    move = -0.10
+
+                if move != 0.0:
+                    c, s = self._cos_sin(self.ang)
+                    dx = c * move
+                    dy = -s * move
+
+                    nx = self.px + dx
+                    ny = self.py + dy
+
+                    # axis-separate collision
+                    if not self._is_wall_pos(nx, self.py):
+                        self.px = nx
+                    if not self._is_wall_pos(self.px, ny):
+                        self.py = ny
+
+                # shoot
+                if self.shot_cd > 0:
+                    self.shot_cd -= 1
+                if z_button and self.shot_cd == 0:
+                    self._shoot()
+                    self.shot_cd = 10
+
+                # enemy update / collision
+                self._update_enemies()
+                if game_over:
+                    global_score = self.score
+                    return
+
+                # next wave?
+                alive = 0
+                for e in self.enemies:
+                    if e[2] > 0:
+                        alive += 1
+                if alive == 0:
+                    self.score += 100
+                    self.wave += 1
+                    self._spawn_wave(self.wave)
+
+                global_score = self.score
+                self._render()
+
+                if (self.frame % 80) == 0:
+                    gc.collect()
+
+            except RestartProgram:
+                return
+
 # ======================================================================
 #                              MENUS / FLOW
 # ======================================================================
@@ -4621,6 +5503,7 @@ class GameSelect:
             "PITFAL": PitfallGame,
             "LANDER": LunarLanderGame,
             "UFODEF": UFODefenseGame,
+            "DOOMLT": DoomLiteGame,
             "DEMOS": DemosGame,
         }
         keys = sorted(self.game_classes.keys())
