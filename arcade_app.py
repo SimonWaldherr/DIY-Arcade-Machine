@@ -11,14 +11,14 @@ import gc
 import sys
 from typing import Any
 
-# Module-level runtime objects typed as Any for static checking convenience.
+# Module-level runtime objects. Some names are bound conditionally
+# below (depending on MicroPython vs desktop). Avoid pre-annotating
+# names that will later be bound via imports to prevent mypy
+# redefinition warnings.
 display: Any = None
 rtc: Any = None
-hub75: Any = None
-machine: Any = None
 Nunchuck: Any = None
 Joystick: Any = None
-json: Any = None
 
 
 def _boot_log(tag):
@@ -219,6 +219,92 @@ def maybe_collect(period=90):
     if _gc_ctr >= period:
         _gc_ctr = 0
         gc.collect()
+
+
+def draw_line(x0: float, y0: float, x1: float, y1: float, *color) -> None:
+    """Draw a Bresenham line between two points.
+
+    The color may be supplied as a single (r, g, b) tuple/list or as three
+    separate integers `r, g, b`.
+
+    Args:
+        x0 (float): Start x coordinate.
+        y0 (float): Start y coordinate.
+        x1 (float): End x coordinate.
+        y1 (float): End y coordinate.
+        *color: Either a single sequence (r,g,b) or three ints r, g, b.
+
+    Raises:
+        ValueError: If the color arguments are malformed.
+    """
+    if not color:
+        raise ValueError("color must be provided as (r,g,b) or r,g,b")
+    if len(color) == 1 and isinstance(color[0], (tuple, list)):
+        r, g, b = color[0]
+    elif len(color) == 3:
+        r, g, b = color  # type: ignore[assignment]
+    else:
+        raise ValueError("color must be a tuple/list or three integers")
+
+    x0_i = int(x0)
+    y0_i = int(y0)
+    x1_i = int(x1)
+    y1_i = int(y1)
+
+    dx = abs(x1_i - x0_i)
+    dy = -abs(y1_i - y0_i)
+    sx = 1 if x0_i < x1_i else -1
+    sy = 1 if y0_i < y1_i else -1
+    err = dx + dy
+    sp = display.set_pixel
+
+    while True:
+        if 0 <= x0_i < WIDTH and 0 <= y0_i < PLAY_HEIGHT:
+            sp(x0_i, y0_i, int(r), int(g), int(b))
+        if x0_i == x1_i and y0_i == y1_i:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0_i += sx
+        if e2 <= dx:
+            err += dx
+            y0_i += sy
+
+
+def make_explosion(x: float, y: float, max_r: int, color) -> dict:
+    """Create a normalized explosion dict used by animation code.
+
+    Args:
+        x: Explosion center x.
+        y: Explosion center y.
+        max_r: Maximum radius for the explosion animation.
+        color: (r,g,b) color tuple.
+
+    Returns:
+        dict: Explosion entry with typed fields used by update/draw code.
+    """
+    return {"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color}
+
+
+def render_explosion(ex: dict) -> None:
+    """Render a single explosion ring described by `ex` onto `display`.
+
+    This extracts the drawing logic out of game classes so it can be reused.
+    """
+    r = ex.get("r", 0)
+    if r <= 0:
+        return
+    x0 = ex.get("x", 0)
+    y0 = ex.get("y", 0)
+    col = ex.get("col", (255, 255, 255))
+    sp = display.set_pixel
+    for deg in range(0, 360, 18):
+        a = math.radians(deg)
+        x = int(x0 + math.cos(a) * r)
+        y = int(y0 + math.sin(a) * r)
+        if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+            sp(x, y, col[0], col[1], col[2])
 
 
 # ---------- Display ----------
@@ -2281,6 +2367,7 @@ class AsteroidGame:
     """
 
     """Asteroids: pilot a ship, shoot asteroids and survive."""
+
     class Projectile:
         def __init__(self, x, y, angle, speed):
             """Create a projectile at (x,y) moving at `angle` with `speed`."""
@@ -2577,6 +2664,7 @@ class QixGame:
     """
 
     """Qix-like: draw lines to claim area while avoiding opponents."""
+
     def __init__(self):
         """Initialize QixGame grid, player and opponent state for a level."""
         self.height = PLAY_HEIGHT
@@ -5748,6 +5836,7 @@ class Game2048:
 try:
     from micropython import const
 except ImportError:
+
     def const(x):
         """Fallback `const` implementation for non-MicroPython builds.
 
@@ -6453,6 +6542,7 @@ class LocoMotionGame:
 try:
     from micropython import const
 except ImportError:
+
     def const(x):
         """Fallback `const` for non-MicroPython environments."""
         return x
@@ -6796,104 +6886,6 @@ class OthelloGame:
 
 
 # ---- Sokoban ----
-try:
-    from micropython import const
-except ImportError:
-    def const(x):
-        """Fallback `const` for non-MicroPython builds."""
-        return x
-
-
-SOK_TILE = const(4)
-SOK_W = const(16)
-SOK_H = const(14)
-# SOK_OFF_* depend on runtime PLAY_HEIGHT; compute per-instance
-
-# Map encoding (bytes)
-# '#' wall
-# '.' floor
-# 'G' goal
-# 'B' box
-# '*' box on goal
-# 'P' player
-# '+' player on goal
-SOK_LEVELS = [
-    (
-        b"################",
-        b"#..............#",
-        b"#....#####.....#",
-        b"#....#..P#.....#",
-        b"#..###.B.#.....#",
-        b"#..#..BBB#.....#",
-        b"#..#...GG#.....#",
-        b"#..###.GG#.....#",
-        b"#....#...#.....#",
-        b"#....#####.....#",
-        b"#..............#",
-        b"#..............#",
-        b"#..............#",
-        b"################",
-    ),
-    (
-        b"################",
-        b"#..............#",
-        b"#..#####.......#",
-        b"#..#...#.......#",
-        b"#..#.B.#..GG...#",
-        b"#..#.BB#..GG...#",
-        b"#..#..P........#",
-        b"#..#####.......#",
-        b"#..............#",
-        b"#..............#",
-        b"#..............#",
-        b"#..............#",
-        b"#..............#",
-        b"################",
-    ),
-    (
-        b"################",
-        b"#..............#",
-        b"#..######..GG..#",
-        b"#..#....#..GG..#",
-        b"#..#.BB.#......#",
-        b"#..#..B.#..###.#",
-        b"#..#..P....#...#",
-        b"#..######..#...#",
-        b"#..........#...#",
-        b"#..#############",
-        b"#..............#",
-        b"#..............#",
-        b"#..............#",
-        b"################",
-    ),
-    (
-        b"################",
-        b"#..............#",
-        b"#..............#",
-        b"#....#####.....#",
-        b"#..###...#..GG.#",
-        b"#..#...B.#.....#",
-        b"#..#..B..#.....#",
-        b"#..#..P..#####.#",
-        b"#..#......#....##",
-        b"#..####.####...#",
-        b"#..............#",
-        b"#..............#",
-        b"#..............#",
-        b"################",
-    ),
-]
-
-# Colors (tweak to taste)
-COL_BG = (0, 0, 0)
-COL_WALL = (0, 0, 140)
-COL_FLOOR = (0, 0, 0)
-COL_GOAL = (0, 120, 0)
-COL_BOX = (220, 140, 0)
-COL_BOXG = (255, 220, 0)
-COL_PLYR = (255, 255, 255)
-COL_PLYRG = (180, 255, 180)
-COL_GRID = (0, 35, 0)
 
 
 class SokobanGame:
@@ -6902,6 +6894,91 @@ class SokobanGame:
 
     Tracks player position, box movement, and level completion.
     """
+
+    # --- Sokoban constants & levels (kept as class attributes) ---
+    SOK_TILE = const(4)
+    SOK_W = const(16)
+    SOK_H = const(14)
+
+    # Map encoding (bytes): '#' wall, '.' floor, 'G' goal, 'B' box,
+    # '*' box on goal, 'P' player, '+' player on goal
+    SOK_LEVELS = [
+        (
+            b"################",
+            b"#..............#",
+            b"#....#####.....#",
+            b"#....#..P#.....#",
+            b"#..###.B.#.....#",
+            b"#..#..BBB#.....#",
+            b"#..#...GG#.....#",
+            b"#..###.GG#.....#",
+            b"#....#...#.....#",
+            b"#....#####.....#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#..#####.......#",
+            b"#..#...#.......#",
+            b"#..#.B.#..GG...#",
+            b"#..#.BB#..GG...#",
+            b"#..#..P........#",
+            b"#..#####.......#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#..######..GG..#",
+            b"#..#....#..GG..#",
+            b"#..#.BB.#......#",
+            b"#..#..B.#..###.#",
+            b"#..#..P....#...#",
+            b"#..######..#...#",
+            b"#..........#...#",
+            b"#..#############",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#..............#",
+            b"#....#####.....#",
+            b"#..###...#..GG.#",
+            b"#..#...B.#.....#",
+            b"#..#..B..#.....#",
+            b"#..#..P..#####.#",
+            b"#..#......#....##",
+            b"#..####.####...#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"################",
+        ),
+    ]
+
+    # Colors (tweak to taste)
+    COL_BG = (0, 0, 0)
+    COL_WALL = (0, 0, 140)
+    COL_FLOOR = (0, 0, 0)
+    COL_GOAL = (0, 120, 0)
+    COL_BOX = (220, 140, 0)
+    COL_BOXG = (255, 220, 0)
+    COL_PLYR = (255, 255, 255)
+    COL_PLYRG = (180, 255, 180)
+    COL_GRID = (0, 35, 0)
 
     def __init__(self, ctx=None):
         """Initialize SokobanGame and bind optional runtime helpers.
@@ -6938,7 +7015,7 @@ class SokobanGame:
         self.input_ms = 120
         try:
             self.sok_off_x = 0
-            self.sok_off_y = (PLAY_HEIGHT - (SOK_H * SOK_TILE)) // 2
+            self.sok_off_y = (PLAY_HEIGHT - (self.SOK_H * self.SOK_TILE)) // 2
         except Exception:
             self.sok_off_x = 0
             self.sok_off_y = 0
@@ -6946,11 +7023,11 @@ class SokobanGame:
 
     def _idx(self, x, y):
         """Return linear index for the Sokoban level grid at (x, y)."""
-        return y * SOK_W + x
+        return y * self.SOK_W + x
 
     def _inside(self, x, y):
         """Return True when (x, y) lies within the Sokoban map bounds."""
-        return 0 <= x < SOK_W and 0 <= y < SOK_H
+        return 0 <= x < self.SOK_W and 0 <= y < self.SOK_H
 
     def reset_level(self, reset_all=False):
         """Load and initialize the current Sokoban level.
@@ -6963,16 +7040,16 @@ class SokobanGame:
         self.moves = 0
         self.undo = []
 
-        raw = SOK_LEVELS[self.level_idx % len(SOK_LEVELS)]
-        self.walls = bytearray(SOK_W * SOK_H)
-        self.goals = bytearray(SOK_W * SOK_H)
-        self.boxes = bytearray(SOK_W * SOK_H)
+        raw = self.SOK_LEVELS[self.level_idx % len(self.SOK_LEVELS)]
+        self.walls = bytearray(self.SOK_W * self.SOK_H)
+        self.goals = bytearray(self.SOK_W * self.SOK_H)
+        self.boxes = bytearray(self.SOK_W * self.SOK_H)
 
         px = py = 1
 
-        for y in range(SOK_H):
+        for y in range(self.SOK_H):
             row = raw[y]
-            for x in range(SOK_W):
+            for x in range(self.SOK_W):
                 ch = row[x]
                 i = self._idx(x, y)
                 if ch == 35:
@@ -7067,7 +7144,7 @@ class SokobanGame:
         """Return True when all boxes are on goal tiles (level solved)."""
         b = self.boxes
         g = self.goals
-        for i in range(SOK_W * SOK_H):
+        for i in range(self.SOK_W * self.SOK_H):
             if b[i] and not g[i]:
                 return False
         return True
@@ -7075,35 +7152,35 @@ class SokobanGame:
     def _draw_tile(self, x, y):
         """Draw a single Sokoban tile including walls, goals and boxes."""
         i = self._idx(x, y)
-        x1 = self.sok_off_x + x * SOK_TILE
-        y1 = self.sok_off_y + y * SOK_TILE
-        x2 = x1 + SOK_TILE - 1
-        y2 = y1 + SOK_TILE - 1
+        x1 = self.sok_off_x + x * self.SOK_TILE
+        y1 = self.sok_off_y + y * self.SOK_TILE
+        x2 = x1 + self.SOK_TILE - 1
+        y2 = y1 + self.SOK_TILE - 1
 
         if self.walls[i]:
-            draw_rectangle(x1, y1, x2, y2, *COL_WALL)
+            draw_rectangle(x1, y1, x2, y2, *self.COL_WALL)
             return
 
-        draw_rectangle(x1, y1, x2, y2, *COL_FLOOR)
+        draw_rectangle(x1, y1, x2, y2, *self.COL_FLOOR)
 
         if self.goals[i]:
-            draw_rectangle(x1 + 1, y1 + 1, x2 - 1, y2 - 1, *COL_GOAL)
+            draw_rectangle(x1 + 1, y1 + 1, x2 - 1, y2 - 1, *self.COL_GOAL)
 
         if self.boxes[i]:
-            col = COL_BOXG if self.goals[i] else COL_BOX
+            col = self.COL_BOXG if self.goals[i] else self.COL_BOX
             draw_rectangle(x1 + 1, y1 + 1, x2 - 1, y2 - 1, *col)
 
     def _draw_player(self):
         """Draw the player at its current tile position with goal highlight."""
-        x = self.sok_off_x + self.px * SOK_TILE
-        y = self.sok_off_y + self.py * SOK_TILE
-        col = COL_PLYRG if self._is_goal(self.px, self.py) else COL_PLYR
+        x = self.sok_off_x + self.px * self.SOK_TILE
+        y = self.sok_off_y + self.py * self.SOK_TILE
+        col = self.COL_PLYRG if self._is_goal(self.px, self.py) else self.COL_PLYR
         draw_rectangle(x + 1, y + 1, x + 2, y + 2, *col)
 
     def render(self, full=False):
         """Render Sokoban level and HUD; `full` forces full redraw."""
-        for y in range(SOK_H):
-            for x in range(SOK_W):
+        for y in range(self.SOK_H):
+            for x in range(self.SOK_W):
                 self._draw_tile(x, y)
         self._draw_player()
         display_score_and_time(self.moves)
@@ -7169,7 +7246,7 @@ class SokobanGame:
                     draw_text(
                         4,
                         30,
-                        "LVL " + str((self.level_idx % len(SOK_LEVELS)) + 1),
+                        "LVL " + str((self.level_idx % len(self.SOK_LEVELS)) + 1),
                         255,
                         255,
                         0,
@@ -7177,7 +7254,7 @@ class SokobanGame:
                     display_score_and_time(self.moves, force=True)
                     sleep_ms(1300)
 
-                    self.level_idx = (self.level_idx + 1) % len(SOK_LEVELS)
+                    self.level_idx = (self.level_idx + 1) % len(self.SOK_LEVELS)
                     self.reset_level(reset_all=False)
 
             else:
@@ -7738,6 +7815,7 @@ class DemosGame:
 
     def _snake_find_nearest_target(self, head_x, head_y):
         """Return the nearest attractive target (green or red) to the snake head."""
+
         def md(x1, y1, x2, y2):
             """Manhattan distance helper function."""
             return abs(x1 - x2) + abs(y1 - y2)
@@ -8064,30 +8142,8 @@ class LunarLanderGame:
         return abs(d)
 
     def _line(self, x0, y0, x1, y1, r, g, b):
-        """Draw a Bresenham line between two points with given color."""
-        x0 = int(x0)
-        y0 = int(y0)
-        x1 = int(x1)
-        y1 = int(y1)
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        sp = display.set_pixel
-
-        while True:
-            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
-                sp(x0, y0, r, g, b)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
+        """Draw a line using the shared `draw_line` utility."""
+        draw_line(x0, y0, x1, y1, (r, g, b))
 
     def _draw_ship(self, thrust_on=False):
         """Draw the lander ship; optionally render thrust visuals when active."""
@@ -8330,31 +8386,16 @@ class UFODefenseGame:
         self._last_cross_move = ticks_ms()
 
     def _line(self, x0, y0, x1, y1, col):
-        """Draw a colored line between two points (col is (r,g,b))."""
-        x0 = int(x0)
-        y0 = int(y0)
-        x1 = int(x1)
-        y1 = int(y1)
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        sp = display.set_pixel
-        r, g, b = col
+        """Draw a colored line between two points using shared utility.
 
-        while True:
-            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
-                sp(x0, y0, r, g, b)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
+        Args:
+            x0: Start x coordinate.
+            y0: Start y coordinate.
+            x1: End x coordinate.
+            y1: End y coordinate.
+            col: Color tuple (r,g,b).
+        """
+        draw_line(x0, y0, x1, y1, col)
 
     def _cities_alive(self):
         """Return True if any city is still alive."""
@@ -8444,26 +8485,11 @@ class UFODefenseGame:
 
     def _add_explosion(self, x, y, max_r, color):
         """Append a new explosion entry to be animated."""
-        self.explosions.append(
-            {"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color}
-        )
+        self.explosions.append(make_explosion(x, y, max_r, color))
 
     def _draw_explosion(self, ex):
         """Render a single explosion ring on the display."""
-        r = ex["r"]
-        if r <= 0:
-            return
-        x0 = ex["x"]
-        y0 = ex["y"]
-        col = ex["col"]
-        sp = display.set_pixel
-
-        for deg in range(0, 360, 18):
-            a = math.radians(deg)
-            x = int(x0 + math.cos(a) * r)
-            y = int(y0 + math.sin(a) * r)
-            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
-                sp(x, y, col[0], col[1], col[2])
+        render_explosion(ex)
 
     def _update_explosions_and_hits(self):
         """Advance explosion animations and remove missiles hit by them."""
