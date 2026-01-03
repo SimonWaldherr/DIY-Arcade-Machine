@@ -4,3 +4,14 @@ __pycache__
 .mypy_cache
 .vscode
 .pytest_cache
+
+# Python env
+.venv
+
+# Pygbag / web build artifacts
+build/
+dist/
+*-pygbag.???
+
+# Misc
+*.egg-info/

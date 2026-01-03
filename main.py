@@ -1,13 +1,16 @@
-"""Tiny bootstrap.
+import asyncio
 
-On MicroPython (RP2040), importing/compiling a very large `main.py` can fail at boot
-with `MemoryError`.
+"""Tiny bootstrap for the arcade app.
 
-This file stays intentionally small and simply imports and runs `arcade_app`.
-For best results on-device, upload `arcade_app.mpy` (compiled with `mpy-cross`)
-so the Pico doesn't have to compile ~180KB of Python source at boot.
+This minimal entry avoids large import-time memory pressure on constrained
+targets (RP2040/MicroPython). It imports and runs `arcade_app` so the bulk of
+the code can live in a separate file. For device deployment, compile
+`arcade_app.py` with `mpy-cross` and upload `arcade_app.mpy` to reduce boot-time
+compilation and memory usage.
 
-Desktop (CPython/PyGame) remains supported: `python main.py` runs the same app.
+For web builds using pygbag, run: `python -m pygbag ./main.py` (starts the
+pygbag runtime and serves the app in a browser environment backed by
+Emscripten/WebAssembly).
 """
 
 def _print_exception(exc):
@@ -51,4 +54,4 @@ def _run():
 
 
 if __name__ == "__main__":
-    _run()
+    asyncio.run(_run())
