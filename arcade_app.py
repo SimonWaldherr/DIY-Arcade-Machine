@@ -70,10 +70,9 @@ except Exception:
 
 # Detect pygbag (Emscripten) browser environment used for web builds.
 # Pygbag runs CPython in WebAssembly and requires cooperative yielding to the browser.
+# Use sys.platform for reliable browser detection (pygbag best practice).
 try:
-    import platform
-
-    IS_PYGBAG = platform.system() == "Emscripten"
+    IS_PYGBAG = sys.platform == "emscripten"
 except Exception:
     IS_PYGBAG = False
 
@@ -145,12 +144,15 @@ def sleep_ms(ms):
         pass
 
     if IS_PYGBAG:
+        # In browser/pygbag mode, display_flush() already yields via pygame.event.pump()
+        # so we don't need to sleep - just flush is enough for cooperative multitasking.
+        # For longer sleeps, do a minimal non-blocking wait.
         _pygbag_op_counter += 1
         if _pygbag_op_counter >= _pygbag_yield_interval:
             _pygbag_op_counter = 0
             _pygbag_needs_yield = True
-        if ms > 0:
-            time.sleep(ms / 1000.0)
+        # Don't use time.sleep() in browser as it blocks the event loop
+        # The display flush above (via pygame.event.pump) handles yielding
     elif hasattr(time, "sleep_ms"):
         time.sleep_ms(ms)
     else:
