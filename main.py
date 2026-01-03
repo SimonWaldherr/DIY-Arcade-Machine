@@ -7,7 +7,7 @@ for browser deployment via pygbag.
 
 Platform Support:
   - MicroPython (RP2040): Synchronous execution (upload as arcade_app.mpy for best results)
-  - Desktop (CPython + PyGame): Synchronous execution  
+  - Desktop (CPython + PyGame): Synchronous execution
   - Browser (pygbag/WASM): Asynchronous execution with proper event loop yielding
 
 For browser deployment, the async entry point ensures cooperative multitasking with
@@ -29,6 +29,7 @@ def _print_exception(exc):
 
     try:
         import traceback
+
         traceback.print_exc()
     except Exception:
         pass
@@ -37,11 +38,12 @@ def _print_exception(exc):
 def main():
     """
     Synchronous entry point for desktop and MicroPython platforms.
-    
+
     Imports the arcade application and runs the main game loop directly.
     """
     try:
         import gc
+
         gc.collect()
     except Exception:
         pass
@@ -63,17 +65,17 @@ def main():
 async def async_main():
     """
     Asynchronous entry point for browser/pygbag platform.
-    
+
     This async wrapper is required for pygbag browser deployment. It imports
     and runs the arcade application's async_main() function, which includes
     proper event loop yielding to keep the browser responsive.
-    
+
     Note: No code should follow asyncio.run() as per pygbag best practices.
     """
-    import asyncio
-    
+
     try:
         import gc
+
         gc.collect()
     except Exception:
         pass
@@ -95,10 +97,11 @@ async def async_main():
 if __name__ == "__main__":
     # Platform detection: use sys.platform for reliable browser detection
     is_browser = sys.platform == "emscripten"
-    
+
     if is_browser:
         # Browser/pygbag: use async entry point
         import asyncio
+
         asyncio.run(async_main())
         # IMPORTANT: No code after asyncio.run() - browser execution ends here
     else:
