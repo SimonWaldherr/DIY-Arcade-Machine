@@ -15,3 +15,5 @@ dist/
 
 # Misc
 *.egg-info/
+arcade_app.mpy
+highscores.json

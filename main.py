@@ -12,6 +12,7 @@ so the Pico doesn't have to compile ~180KB of Python source at boot.
 Desktop (CPython/PyGame) remains supported: `python main.py` runs the same app.
 """
 
+
 def _print_exception(exc):
     try:
         import sys

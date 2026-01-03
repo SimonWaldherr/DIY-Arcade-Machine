@@ -1,11 +1,34 @@
+"""
+This file contains the core logic for the arcade application, including runtime detection,
+display handling, and utility functions for game development. It supports both MicroPython
+and desktop environments, ensuring compatibility across platforms.
+"""
+
 import random
 import time
 import math
 import gc
 import sys
+from typing import Any
+
+# Module-level runtime objects typed as Any for static checking convenience.
+display: Any = None
+rtc: Any = None
+hub75: Any = None
+machine: Any = None
+Nunchuck: Any = None
+Joystick: Any = None
+json: Any = None
 
 
 def _boot_log(tag):
+    """
+    Log a boot-time message with the current free memory (if available).
+    This function is useful for debugging startup issues and tracking memory usage.
+
+    Args:
+        tag (str): A descriptive tag for the log message.
+    """
     try:
         print("BOOT:", tag, gc.mem_free())
     except Exception:
@@ -24,12 +47,15 @@ except Exception:
 mod_2048 = None
 
 
-
-
-
 def _shuffle_in_place(seq):
-    # Fisher-Yates shuffle implemented in-place.
-    # Avoids relying on `random.shuffle` which may be unavailable on some MicroPython builds.
+    """
+    Perform an in-place Fisher-Yates shuffle on the given sequence.
+    This function avoids relying on `random.shuffle`, which may not be available
+    on some MicroPython builds.
+
+    Args:
+        seq (list): The sequence to shuffle.
+    """
     n = len(seq)
     for i in range(n - 1, 0, -1):
         j = random.randint(0, i)
@@ -38,7 +64,7 @@ def _shuffle_in_place(seq):
 
 # ---------- Runtime detection ----------
 try:
-    IS_MICROPYTHON = (sys.implementation.name == "micropython")
+    IS_MICROPYTHON = sys.implementation.name == "micropython"
 except Exception:
     IS_MICROPYTHON = False
 
@@ -46,6 +72,7 @@ except Exception:
 # Pygbag runs CPython in WebAssembly and requires cooperative yielding to the browser.
 try:
     import platform
+
     IS_PYGBAG = platform.system() == "Emscripten"
 except Exception:
     IS_PYGBAG = False
@@ -55,8 +82,10 @@ _boot_log("runtime detect")
 if IS_MICROPYTHON:
     _boot_log("before hub75 import")
     import hub75
+
     _boot_log("after hub75 import")
     import machine
+
     _boot_log("after machine import")
 else:
     hub75 = None
@@ -66,12 +95,21 @@ else:
 try:
     from micropython import const
 except ImportError:
-    def const(x): return x
 
-WIDTH  = const(64)
+    def const(x):
+        """
+        Compatibility shim for MicroPython's `const()`.
+
+        On CPython this just returns the passed value; on MicroPython the
+        real `const` may help the compiler optimize constants.
+        """
+        return x
+
+
+WIDTH = const(64)
 HEIGHT = const(64)
 
-HUD_HEIGHT  = const(6)
+HUD_HEIGHT = const(6)
 PLAY_HEIGHT = const(HEIGHT - HUD_HEIGHT)  # 58
 
 _boot_log("constants")
@@ -89,25 +127,28 @@ _pygbag_op_counter = 0
 _pygbag_yield_interval = 100  # force yield after this many sleep_ms calls
 _pygbag_needs_yield = False
 
+
 def sleep_ms(ms):
+    """
+    Sleep for the specified number of milliseconds, flushing the display if needed.
+    On pygbag, this function also tracks operations and signals when a cooperative
+    yield is required to keep the browser responsive.
+
+    Args:
+        ms (int): The number of milliseconds to sleep.
+    """
     global _pygbag_op_counter, _pygbag_needs_yield
-    
+
     try:
-        # Attempt to flush any pending pixel updates before sleeping.
-        # This keeps both HUB75 hardware drivers and the desktop emulator responsive
-        # and reduces visible latency for frame updates.
         display_flush()
     except Exception:
         pass
-    
-    # Track operations in pygbag to prevent the browser event loop from starving.
+
     if IS_PYGBAG:
         _pygbag_op_counter += 1
         if _pygbag_op_counter >= _pygbag_yield_interval:
             _pygbag_op_counter = 0
-            # Signal that we desperately need a yield - game loop should check this
             _pygbag_needs_yield = True
-        # Use platform sleep
         if ms > 0:
             time.sleep(ms / 1000.0)
     elif hasattr(time, "sleep_ms"):
@@ -115,22 +156,32 @@ def sleep_ms(ms):
     else:
         time.sleep(ms / 1000)
 
-def pygbag_check_yield():
-    """Games call this to detect whether a cooperative yield is requested.
 
-    On pygbag (WebAssembly) long-running synchronous loops can block the
-    browser. This helper resets the internal flag and returns True when the
-    runtime requests that the game yield back to the event loop.
+def pygbag_check_yield():
+    """
+    Check if a cooperative yield is requested by the pygbag runtime.
+    This function is used to prevent the browser from becoming unresponsive
+    during long-running synchronous loops.
+
+    Returns:
+        bool: True if a yield is requested, False otherwise.
     """
     global _pygbag_needs_yield
     if IS_PYGBAG and _pygbag_needs_yield:
         _pygbag_needs_yield = False
-        # Can't actually yield from sync code, but we reset the flag
-        # The async wrapper will yield at the next opportunity
         return True
     return False
 
+
 def ticks_ms():
+    """
+    Return the current time in milliseconds.
+
+    Uses `time.ticks_ms()` when available (MicroPython) or falls back to
+    `time.time() * 1000` on desktop runtimes. On desktop this function also
+    attempts a lightweight display flush at ~60Hz to keep the window
+    responsive.
+    """
     now = time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
     if not IS_MICROPYTHON:
         try:
@@ -144,16 +195,31 @@ def ticks_ms():
             pass
     return now
 
+
 def ticks_diff(a, b):
+    """
+    Return the difference between two tick values (a - b) using
+    `time.ticks_diff` when available to handle wraparound.
+    """
     return time.ticks_diff(a, b) if hasattr(time, "ticks_diff") else (a - b)
 
+
 _gc_ctr = 0
+
+
 def maybe_collect(period=90):
+    """
+    Perform garbage collection periodically to free up memory.
+
+    Args:
+        period (int): The number of calls before triggering garbage collection.
+    """
     global _gc_ctr
     _gc_ctr += 1
     if _gc_ctr >= period:
         _gc_ctr = 0
         gc.collect()
+
 
 # ---------- Display ----------
 if IS_MICROPYTHON:
@@ -170,6 +236,10 @@ else:
     # Desktop (Python) runtime: emulate HUB75 LED matrix using pygame.
     class _DesktopRTC:
         def datetime(self):
+            """
+            Return the current localtime in a MicroPython `machine.RTC`-compatible
+            tuple: (year, month, day, weekday, hour, minute, second, subseconds).
+            """
             # machine.RTC().datetime() layout: (year, month, day, weekday, hour, minute, second, subseconds)
             lt = time.localtime()
             # weekday: MicroPython usually uses 0=Mon..6=Sun
@@ -177,6 +247,14 @@ else:
 
     class _PyGameDisplay:
         def __init__(self, w, h, scale=10):
+            """
+            Initialize the PyGame-based display emulator.
+
+            Args:
+                w (int): Display width in pixels.
+                h (int): Display height in pixels.
+                scale (int): Window scaling factor for desktop display.
+            """
             self.w = int(w)
             self.h = int(h)
             self.scale = int(scale)
@@ -186,37 +264,66 @@ else:
             self._inited = False
 
         def start(self):
+            """
+            Initialize the PyGame display and internal surfaces.
+
+            This method is idempotent and will do nothing if initialization
+            has already been performed.
+            """
             if self._inited:
                 return
             try:
                 import pygame  # type: ignore
             except Exception as e:
-                raise RuntimeError("PyGame not installed. Install with: pip install pygame") from e
+                raise RuntimeError(
+                    "PyGame not installed. Install with: pip install pygame"
+                ) from e
             self._pg = pygame
             pygame.init()
             pygame.display.set_caption("DIY Arcade Machine (Desktop)")
-            self._screen = pygame.display.set_mode((self.w * self.scale, self.h * self.scale))
+            self._screen = pygame.display.set_mode(
+                (self.w * self.scale, self.h * self.scale)
+            )
             self._surface = pygame.Surface((self.w, self.h))
             self.clear()
             self.show()
             self._inited = True
 
         def set_pixel(self, x, y, r, g, b):
+            """
+            Set a pixel on the internal surface with bounds checking.
+
+            Args:
+                x, y (int): Pixel coordinates.
+                r, g, b (int): Color channels (0-255).
+            """
             if not self._surface:
                 return
             if 0 <= x < self.w and 0 <= y < self.h:
-                self._surface.set_at((int(x), int(y)), (int(r) & 255, int(g) & 255, int(b) & 255))
+                self._surface.set_at(
+                    (int(x), int(y)), (int(r) & 255, int(g) & 255, int(b) & 255)
+                )
 
         def clear(self):
+            """
+            Clear the internal surface by filling it with black.
+            """
             if self._surface:
                 self._surface.fill((0, 0, 0))
 
         def show(self):
+            """
+            Present the internal surface to the PyGame window (scaled).
+
+            Also pumps the event queue to keep the desktop window responsive.
+            """
             if not self._pg or not self._screen or not self._surface:
                 return
             # keep window responsive
             self._pg.event.pump()
-            scaled = self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale))
+            scaled = self._pg.transform.scale(
+                self._surface, (self.w * self.scale, self.h * self.scale)
+            )
             self._screen.blit(scaled, (0, 0))
             self._pg.display.flip()
 
@@ -228,6 +335,7 @@ else:
 # and reduce expensive I/O on HUB75 hardware or desktop emulation.
 try:
     import game_utils
+
     display = game_utils.ShadowBuffer(WIDTH, HEIGHT, display)
     _boot_log("display wrapped with ShadowBuffer")
 except Exception:
@@ -262,8 +370,12 @@ _display_clear_orig = getattr(display, "clear", None)
 
 _boot_log("display refs")
 
+
 def init_buffered_display():
-    """Allocate software framebuffer + hooks after hub75 display is started."""
+    """
+    Allocate and initialize the software framebuffer for buffered drawing.
+    This reduces write amplification on HUB75 hardware and improves performance.
+    """
     global USE_BUFFERED_DISPLAY, _fb_current, _fb_prev, _dirty_mask, _force_full_flush
     if USE_BUFFERED_DISPLAY:
         return
@@ -280,12 +392,17 @@ def init_buffered_display():
             _fb_current = bytearray(_fb_size)
         if _fb_prev is None or len(_fb_prev) != _fb_size:
             _fb_prev = bytearray(_fb_size)
+    except MemoryError:
+        _fb_current = None
+        _fb_prev = None
+        return
+
+    try:
         if _dirty_mask is None or len(_dirty_mask) != (_fb_w * _fb_h):
             _dirty_mask = bytearray(_fb_w * _fb_h)
         _force_full_flush = True
     except MemoryError:
-        # Not enough contiguous heap for buffering. Keep unbuffered drawing.
-        USE_BUFFERED_DISPLAY = False
+        _dirty_mask = None
         return
 
     # Apply our buffered hooks if the hardware object exposes the expected methods.
@@ -296,12 +413,27 @@ def init_buffered_display():
     except Exception:
         USE_BUFFERED_DISPLAY = False
 
+
 def _mark_dirty_pixel(px):
+    """
+    Mark a pixel (by linear index) as dirty in the dirty mask.
+
+    This is a legacy stub kept for compatibility with existing call-sites.
+    """
     # legacy stub (kept to avoid touching other call-sites)
     if _dirty_mask is not None:
         _dirty_mask[px] = 1
 
+
 def _set_pixel_buf(x, y, r, g, b):
+    """
+    Buffered set_pixel: write into the software framebuffer and mark pixel dirty.
+    This prevents immediate hardware writes and allows efficient diffs.
+
+    Args:
+        x, y (int): Coordinates.
+        r, g, b (int): Color components.
+    """
     if x < 0 or x >= _fb_w or y < 0 or y >= _fb_h:
         return
     pix = y * _fb_w + x
@@ -315,9 +447,12 @@ def _set_pixel_buf(x, y, r, g, b):
         if _dirty_mask is not None:
             _dirty_mask[pix] = 1
 
+
 def _clear_buf():
-    # Clear the current software framebuffer and mark the full buffer dirty
-    # so the next flush rewrites all pixels to the hardware/display.
+    """
+    Clear the software framebuffer and mark the full buffer dirty so the
+    next flush rewrites all pixels to the hardware/display.
+    """
     w = _fb_w * _fb_h
     global _force_full_flush
     if _fb_current is not None:
@@ -337,7 +472,12 @@ def _clear_buf():
         except Exception:
             pass
 
+
 def display_flush():
+    """
+    Flush pending framebuffer changes to the underlying display.
+    If buffered drawing is disabled, call the display's `show()` method.
+    """
     if not USE_BUFFERED_DISPLAY:
         try:
             if hasattr(display, "show"):
@@ -391,18 +531,31 @@ def display_flush():
     except Exception:
         pass
 
+
 # Note: hooks are installed by init_buffered_display() after display.start().
+
 
 # Helper for games: use this to push changed pixels to the hardware.
 def push_frame():
+    """
+    Convenience helper for games to push the current frame to hardware.
+    Wraps `display_flush()` and swallows exceptions for robustness.
+    """
     try:
         display_flush()
     except Exception:
         pass
 
+
 # Shared helper for playfield-aware rectangles
 def draw_play_rect(x, y, w, h, r, g, b):
-    # clamp to play area (avoid drawing into HUD)
+    """
+    Draw a filled rectangle restricted to the play area (leaving HUD untouched).
+
+    Args:
+        x, y, w, h (int): Rectangle position and size.
+        r, g, b (int): Color.
+    """
     x1 = x
     y1 = y
     x2 = x + w - 1
@@ -422,9 +575,9 @@ game_over = False
 
 # ---------- Colors ----------
 COLORS_BRIGHT = [
-    (255, 0, 0),    # Red
-    (0, 255, 0),    # Green
-    (0, 0, 255),    # Blue
+    (255, 0, 0),  # Red
+    (0, 255, 0),  # Green
+    (0, 0, 255),  # Blue
     (255, 255, 0),  # Yellow
 ]
 # Pre-computed to avoid list comprehension allocations during import
@@ -443,7 +596,7 @@ inactive_colors = (
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
-RED   = (255, 0, 0)
+RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 
 # ---------- Joystick directions ----------
@@ -461,82 +614,136 @@ JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 # MemoryError during import. We define them inside functions (lazy) to avoid
 # any allocation until first use.
 
+
 def _get_char_dict():
+    """
+    Return a mapping of characters to their 8x8 hex font rows.
+
+    This is defined lazily to avoid allocating large tables at import time
+    on memory-constrained MicroPython targets.
+    """
     return {
-        "A": "3078ccccfccccc00","B": "fc66667c6666fc00","C": "3c66c0c0c0663c00","D": "f86c6666666cf800",
-        "E": "fe6268786862fe00","F": "fe6268786860f000","G": "3c66c0c0ce663e00","H": "ccccccfccccccc00",
-        "I": "7830303030307800","J": "1e0c0c0ccccc7800","K": "f6666c786c66f600","L": "f06060606266fe00",
-        "M": "c6eefefed6c6c600","N": "c6e6f6decec6c600","O": "386cc6c6c66c3800","P": "fc66667c6060f000",
-        "Q": "78ccccccdc781c00","R": "fc66667c6c66f600","S": "78cce0380ccc7800","T": "fcb4303030307800",
-        "U": "ccccccccccccfc00","V": "cccccccccc783000","W": "c6c6c6d6feeec600","X": "c6c66c38386cc600",
-        "Y": "cccccc7830307800","Z": "fec68c183266fe00",
-        "0": "78ccdcfceccc7c00","1": "307030303030fc00","2": "78cc0c3860ccfc00","3": "78cc0c380ccc7800",
-        "4": "1c3c6cccfe0c1e00","5": "fcc0f80c0ccc7800","6": "3860c0f8cccc7800","7": "fccc0c1830303000",
-        "8": "78cccc78cccc7800","9": "78cccc7c0c187000",
-        "!": "3078783030003000","#": "6c6cfe6cfe6c6c00","$": "307cc0780cf83000","%": "00c6cc183066c600",
-        "&": "386c3876dccc7600","?": "78cc0c1830003000"," ": "0000000000000000",".": "0000000000003000",
-        ":": "0030000000300000","(": "0c18303030180c00",")": "6030180c18306000","-": "000000fc00000000",
+        "A": "3078ccccfccccc00",
+        "B": "fc66667c6666fc00",
+        "C": "3c66c0c0c0663c00",
+        "D": "f86c6666666cf800",
+        "E": "fe6268786862fe00",
+        "F": "fe6268786860f000",
+        "G": "3c66c0c0ce663e00",
+        "H": "ccccccfccccccc00",
+        "I": "7830303030307800",
+        "J": "1e0c0c0ccccc7800",
+        "K": "f6666c786c66f600",
+        "L": "f06060606266fe00",
+        "M": "c6eefefed6c6c600",
+        "N": "c6e6f6decec6c600",
+        "O": "386cc6c6c66c3800",
+        "P": "fc66667c6060f000",
+        "Q": "78ccccccdc781c00",
+        "R": "fc66667c6c66f600",
+        "S": "78cce0380ccc7800",
+        "T": "fcb4303030307800",
+        "U": "ccccccccccccfc00",
+        "V": "cccccccccc783000",
+        "W": "c6c6c6d6feeec600",
+        "X": "c6c66c38386cc600",
+        "Y": "cccccc7830307800",
+        "Z": "fec68c183266fe00",
+        "0": "78ccdcfceccc7c00",
+        "1": "307030303030fc00",
+        "2": "78cc0c3860ccfc00",
+        "3": "78cc0c380ccc7800",
+        "4": "1c3c6cccfe0c1e00",
+        "5": "fcc0f80c0ccc7800",
+        "6": "3860c0f8cccc7800",
+        "7": "fccc0c1830303000",
+        "8": "78cccc78cccc7800",
+        "9": "78cccc7c0c187000",
+        "!": "3078783030003000",
+        "#": "6c6cfe6cfe6c6c00",
+        "$": "307cc0780cf83000",
+        "%": "00c6cc183066c600",
+        "&": "386c3876dccc7600",
+        "?": "78cc0c1830003000",
+        " ": "0000000000000000",
+        ".": "0000000000003000",
+        ":": "0030000000300000",
+        "(": "0c18303030180c00",
+        ")": "6030180c18306000",
+        "-": "000000fc00000000",
     }
+
 
 def _get_nums_dict():
+    """
+    Return the 5x5 bitmap font definitions used for small-text rendering.
+
+    The mapping is defined lazily to avoid allocating the full table at
+    import time on memory-constrained MicroPython targets.
+    """
     return {
-        "0": ["01110","10001","10001","10001","01110"],
-        "1": ["00100","01100","00100","00100","01110"],
-        "2": ["11110","00001","01110","10000","11111"],
-        "3": ["11110","00001","00110","00001","11110"],
-        "4": ["10000","10010","10010","11111","00010"],
-        "5": ["11111","10000","11110","00001","11110"],
-        "6": ["01110","10000","11110","10001","01110"],
-        "7": ["11111","00010","00100","01000","10000"],
-        "8": ["01110","10001","01110","10001","01110"],
-        "9": ["01110","10001","01111","00001","01110"],
-        "A": ["01110","10001","10001","11111","10001"],
-        "B": ["11110","10001","11110","10001","11110"],
-        "C": ["01110","10001","10000","10001","01110"],
-        "D": ["11100","10010","10001","10010","11100"],
-        "E": ["11111","10000","11110","10000","11111"],
-        "F": ["11111","10000","11110","10000","10000"],
-        "G": ["01110","10000","10111","10001","01110"],
-        "H": ["10001","10001","11111","10001","10001"],
-        "I": ["01110","00100","00100","00100","01110"],
-        "J": ["00111","00010","00010","10010","01100"],
-        "K": ["10010","10100","11000","10100","10010"],
-        "L": ["10000","10000","10000","10000","11111"],
-        "M": ["10001","11011","10101","10001","10001"],
-        "N": ["10001","11001","10101","10011","10001"],
-        "O": ["01110","10001","10001","10001","01110"],
-        "P": ["11110","10001","11110","10000","10000"],
-        "Q": ["01110","10001","10001","10011","01111"],
-        "R": ["11110","10001","11110","10010","10001"],
-        "S": ["01111","10000","01110","00001","11110"],
-        "T": ["11111","00100","00100","00100","00100"],
-        "U": ["10001","10001","10001","10001","01110"],
-        "V": ["10001","10001","10001","01010","00100"],
-        "W": ["10001","10001","10101","11011","10001"],
-        "X": ["10001","01010","00100","01010","10001"],
-        "Y": ["10001","01010","00100","00100","00100"],
-        "Z": ["11111","00010","00100","01000","11111"],
-        " ": ["00000","00000","00000","00000","00000"],
-        ".": ["00000","00000","00000","00000","00001"],
-        ":": ["00000","00100","00000","00100","00000"],
-        "/": ["00001","00010","00100","01000","10000"],
-        "|": ["00100","00100","00100","00100","00100"],
-        "-": ["00000","00000","11111","00000","00000"],
-        "=": ["00000","11111","00000","11111","00000"],
-        "+": ["00000","00100","01110","00100","00000"],
-        "*": ["00000","10101","01110","10101","00000"],
-        "(": ["00010","00100","00100","00100","00010"],
-        ")": ["00100","00010","00010","00010","00100"],
+        "0": ["01110", "10001", "10001", "10001", "01110"],
+        "1": ["00100", "01100", "00100", "00100", "01110"],
+        "2": ["11110", "00001", "01110", "10000", "11111"],
+        "3": ["11110", "00001", "00110", "00001", "11110"],
+        "4": ["10000", "10010", "10010", "11111", "00010"],
+        "5": ["11111", "10000", "11110", "00001", "11110"],
+        "6": ["01110", "10000", "11110", "10001", "01110"],
+        "7": ["11111", "00010", "00100", "01000", "10000"],
+        "8": ["01110", "10001", "01110", "10001", "01110"],
+        "9": ["01110", "10001", "01111", "00001", "01110"],
+        "A": ["01110", "10001", "10001", "11111", "10001"],
+        "B": ["11110", "10001", "11110", "10001", "11110"],
+        "C": ["01110", "10001", "10000", "10001", "01110"],
+        "D": ["11100", "10010", "10001", "10010", "11100"],
+        "E": ["11111", "10000", "11110", "10000", "11111"],
+        "F": ["11111", "10000", "11110", "10000", "10000"],
+        "G": ["01110", "10000", "10111", "10001", "01110"],
+        "H": ["10001", "10001", "11111", "10001", "10001"],
+        "I": ["01110", "00100", "00100", "00100", "01110"],
+        "J": ["00111", "00010", "00010", "10010", "01100"],
+        "K": ["10010", "10100", "11000", "10100", "10010"],
+        "L": ["10000", "10000", "10000", "10000", "11111"],
+        "M": ["10001", "11011", "10101", "10001", "10001"],
+        "N": ["10001", "11001", "10101", "10011", "10001"],
+        "O": ["01110", "10001", "10001", "10001", "01110"],
+        "P": ["11110", "10001", "11110", "10000", "10000"],
+        "Q": ["01110", "10001", "10001", "10011", "01111"],
+        "R": ["11110", "10001", "11110", "10010", "10001"],
+        "S": ["01111", "10000", "01110", "00001", "11110"],
+        "T": ["11111", "00100", "00100", "00100", "00100"],
+        "U": ["10001", "10001", "10001", "10001", "01110"],
+        "V": ["10001", "10001", "10001", "01010", "00100"],
+        "W": ["10001", "10001", "10101", "11011", "10001"],
+        "X": ["10001", "01010", "00100", "01010", "10001"],
+        "Y": ["10001", "01010", "00100", "00100", "00100"],
+        "Z": ["11111", "00010", "00100", "01000", "11111"],
+        " ": ["00000", "00000", "00000", "00000", "00000"],
+        ".": ["00000", "00000", "00000", "00000", "00001"],
+        ":": ["00000", "00100", "00000", "00100", "00000"],
+        "/": ["00001", "00010", "00100", "01000", "10000"],
+        "|": ["00100", "00100", "00100", "00100", "00100"],
+        "-": ["00000", "00000", "11111", "00000", "00000"],
+        "=": ["00000", "11111", "00000", "11111", "00000"],
+        "+": ["00000", "00100", "01110", "00100", "00000"],
+        "*": ["00000", "10101", "01110", "10101", "00000"],
+        "(": ["00010", "00100", "00100", "00100", "00010"],
+        ")": ["00100", "00010", "00010", "00010", "00100"],
     }
 
+
 def _hex_to_bytes(hex_str):
+    """
+    Convert a hex string to bytes, with a fallback for Python versions
+    that don't provide `bytes.fromhex`.
+    """
     try:
         return bytes.fromhex(hex_str)
     except AttributeError:
         out = bytearray(len(hex_str) // 2)
         oi = 0
         for i in range(0, len(hex_str), 2):
-            out[oi] = int(hex_str[i:i+2], 16)
+            out[oi] = int(hex_str[i : i + 2], 16)
             oi += 1
         return bytes(out)
 
@@ -603,22 +810,37 @@ def _get_font5(ch):
     cache[ch] = out
     return out
 
+
 # ---------- Drawing ----------
 def draw_rectangle(x1, y1, x2, y2, r, g, b):
-    if x1 > x2: x1, x2 = x2, x1
-    if y1 > y2: y1, y2 = y2, y1
+    """
+    Draw a filled rectangle between two coordinates on the full display.
+    Handles out-of-bounds clipping to the display extents.
+    """
+    if x1 > x2:
+        x1, x2 = x2, x1
+    if y1 > y2:
+        y1, y2 = y2, y1
     if x2 < 0 or y2 < 0 or x1 >= WIDTH or y1 >= HEIGHT:
         return
-    if x1 < 0: x1 = 0
-    if y1 < 0: y1 = 0
-    if x2 >= WIDTH: x2 = WIDTH - 1
-    if y2 >= HEIGHT: y2 = HEIGHT - 1
+    if x1 < 0:
+        x1 = 0
+    if y1 < 0:
+        y1 = 0
+    if x2 >= WIDTH:
+        x2 = WIDTH - 1
+    if y2 >= HEIGHT:
+        y2 = HEIGHT - 1
     sp = display.set_pixel
     for y in range(y1, y2 + 1):
         for x in range(x1, x2 + 1):
             sp(x, y, r, g, b)
 
+
 def draw_character(x, y, ch, r, g, b):
+    """
+    Draw an 8x8 character at the given coordinates using the 8x8 font.
+    """
     rows = _get_font8(ch)
     if not rows:
         return
@@ -635,13 +857,21 @@ def draw_character(x, y, ch, r, g, b):
                 if 0 <= xx < WIDTH:
                     sp(xx, yy, r, g, b)
 
+
 def draw_text(x, y, text, r, g, b):
+    """
+    Draw a string using the 8x8 font. Characters are spaced by 9 pixels.
+    """
     ox = x
     for ch in text:
         draw_character(ox, y, ch, r, g, b)
         ox += 9
 
+
 def draw_character_small(x, y, ch, r, g, b):
+    """
+    Draw a 5x5 (small) character at the given coordinates using the 5x5 font.
+    """
     rows = _get_font5(ch)
     if not rows:
         return
@@ -657,18 +887,30 @@ def draw_character_small(x, y, ch, r, g, b):
                 if 0 <= xx < WIDTH:
                     sp(xx, yy, r, g, b)
 
+
 def draw_text_small(x, y, text, r, g, b):
+    """
+    Draw a string using the small 5x5 font. Characters are spaced by 6 pixels.
+    """
     ox = x
     for ch in text:
         draw_character_small(ox, y, ch, r, g, b)
         ox += 6
+
 
 # ---------- HUD ----------
 _hud_last_ms = 0
 _hud_time_str = "00:00"
 _hud_last_text = None
 
+
 def display_score_and_time(score, force=False):
+    """
+    Update and render the HUD (score and clock) when values change.
+
+    Redraws only when the displayed text differs or when `force` is True
+    to minimize unnecessary framebuffer updates.
+    """
     global _hud_last_ms, _hud_time_str, _hud_last_text, global_score
     global_score = int(score or 0)
 
@@ -697,12 +939,20 @@ def display_score_and_time(score, force=False):
     except Exception:
         pass
 
+
 # ---------- Grid (nibble-packed) for Maze/Qix ----------
-#GRID_W = WIDTH
-#GRID_H = PLAY_HEIGHT
+# GRID_W = WIDTH
+# GRID_H = PLAY_HEIGHT
 grid = None  # lazy-allocated to reduce import-time RAM usage on MicroPython
 
+
 def initialize_grid():
+    """
+    Allocate or reset the nibble-packed grid used by grid-based games.
+
+    The grid stores two 4-bit cells per byte to reduce memory usage on
+    constrained targets.
+    """
     global grid
     size = (GRID_W * GRID_H + 1) // 2
     if grid is None or len(grid) != size:
@@ -711,13 +961,26 @@ def initialize_grid():
         for i in range(size):
             grid[i] = 0
 
+
 def _ensure_grid():
+    """
+    Ensure the global `grid` bytearray exists (lazy allocation).
+
+    Avoids allocating the large grid at import time on memory-constrained
+    MicroPython targets; allocates on first use.
+    """
     # Small helper to avoid allocating at import-time.
     global grid
     if grid is None:
         grid = bytearray((GRID_W * GRID_H + 1) // 2)
 
+
 def get_grid_value(x, y):
+    """
+    Return the 4-bit value stored at grid coordinate (x, y).
+
+    Treats out-of-bounds coordinates as walls (returns 1).
+    """
     _ensure_grid()
     if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
         return 1  # treat out-of-bounds as wall/border
@@ -727,7 +990,13 @@ def get_grid_value(x, y):
         return (b >> 4) & 0x0F
     return b & 0x0F
 
+
 def set_grid_value(x, y, value):
+    """
+    Set the 4-bit value at grid coordinate (x, y) in the nibble-packed buffer.
+
+    Performs bounds checking and masks the value to 4 bits.
+    """
     _ensure_grid()
     if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
         return
@@ -738,7 +1007,14 @@ def set_grid_value(x, y, value):
     else:
         grid[bi] = (grid[bi] & 0xF0) | (value & 0x0F)
 
+
 def flood_fill(x, y, accessible_mark=3, max_steps=9000):
+    """
+    Flood-fill from (x, y) marking reachable empty cells with `accessible_mark`.
+
+    Uses a packed integer stack ((y << 8) | x) to reduce tuple allocations
+    and limit memory pressure on embedded targets.
+    """
     # use packed integer stack to reduce tuple allocations and memory pressure
     # pack: (y << 8) | x  -- works for WIDTH, GRID_H < 256
     if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
@@ -771,7 +1047,13 @@ def flood_fill(x, y, accessible_mark=3, max_steps=9000):
             stack.append((ny << 8) | px)
     return bool(stack)
 
+
 def count_cells_with_mark(mark, width, height):
+    """
+    Count how many cells in a width*height nibble-packed grid equal `mark`.
+
+    Operates directly on the packed bytearray representation.
+    """
     cells = width * height
     nbytes = (cells + 1) // 2
     last_has_high = (cells & 1) == 0  # even -> last high nibble used
@@ -786,16 +1068,31 @@ def count_cells_with_mark(mark, width, height):
             cnt += 1
     return cnt
 
+
 # ---------- Control exception ----------
 class RestartProgram(Exception):
+    """
+    Special exception used to trigger a soft restart of the program.
+    Raised by input handlers on special button combinations.
+    """
+
     pass
 
- # ---------- Nunchuk / Joystick ----------
-NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
+
+# ---------- Nunchuk / Joystick ----------
+NEW_CONTROLLER_SIGNATURE = b"\xa0\x20\x10\x00\xff\xff\x00\x00"
 
 if IS_MICROPYTHON:
-    class Nunchuck:
+
+    class NunchuckMicro:
         def __init__(self, i2c, poll=True, poll_interval=50):
+            """
+            Initialize the Nunchuck controller wrapper.
+
+            Performs initial I2C setup and attempts to auto-detect the newer
+            controller variant by reading a fixed signature; adjusts read
+            length and decoding accordingly.
+            """
             self.i2c = i2c
             self.address = 0x52
             self.is_new_controller = False
@@ -824,10 +1121,18 @@ if IS_MICROPYTHON:
             self.polling_threshold = poll_interval if poll else -1
 
         def update(self):
+            """
+            Read the latest controller packet into the internal buffer.
+            """
             self.i2c.writeto(self.address, b"\x00")
             self.i2c.readfrom_into(self.address, self.buffer)
 
         def _new_decode(self):
+            """
+            Decode button bitfields from the new (8-byte) controller packet.
+
+            Returns a tuple of booleans for (up, down, left, right, A, B, start, select).
+            """
             # New controller mapping derived from captured packets.
             # Active-low bitfields:
             # byte4: right(bit7), down(bit6), select(bit4), start(bit2)
@@ -846,11 +1151,24 @@ if IS_MICROPYTHON:
             return up, down, left, right, a_btn, b_btn, start, select
 
         def __poll(self):
-            if self.polling_threshold > 0 and ticks_diff(ticks_ms(), self.last_poll) > self.polling_threshold:
+            """
+            Poll the controller when the polling threshold has elapsed.
+
+            This method is called internally to refresh the input buffer at
+            a regular interval controlled by `polling_threshold`.
+            """
+            if (
+                self.polling_threshold > 0
+                and ticks_diff(ticks_ms(), self.last_poll) > self.polling_threshold
+            ):
                 self.update()
                 self.last_poll = ticks_ms()
 
         def buttons(self):
+            """
+            Return the current button state as a tuple (c_button, z_button).
+            May raise `RestartProgram` on special restart combinations.
+            """
             self.__poll()
             if not self.is_new_controller:
                 c_button = not (self.buffer[5] & 0x02)
@@ -871,6 +1189,10 @@ if IS_MICROPYTHON:
             return c_button, z_button
 
         def joystick(self):
+            """
+            Return a 2-tuple (x, y) representing analog joystick position (0-255).
+            For new digital controllers this synthesizes values from the D-pad.
+            """
             self.__poll()
             if not self.is_new_controller:
                 return (self.buffer[0], self.buffer[1])
@@ -891,12 +1213,22 @@ if IS_MICROPYTHON:
                 y = 0
             return (x, y)
 
-    class Joystick:
+    class JoystickMicro:
         def __init__(self):
+            """Initialize a MicroPython I2C Nunchuck-backed joystick wrapper.
+
+            This wrapper provides a `read_direction()` helper compatible with the
+            desktop joystick API by delegating to a connected Wii Nunchuck over
+            I2C.
+            """
             self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
             self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=50)
 
         def read_direction(self, possible_directions, debounce=True):
+            """
+            Map raw analog joystick values into one of the named directions.
+            Returns a direction string from the possible_directions set.
+            """
             x, y = self.nunchuck.joystick()
 
             # diagonals first
@@ -920,18 +1252,32 @@ if IS_MICROPYTHON:
             return None
 
         def is_pressed(self):
+            """Return whether the primary action button is pressed.
+
+            Delegates to the underlying `Nunchuck.buttons()` tuple and
+            returns the `z` (primary) button state.
+            """
             _, z = self.nunchuck.buttons()
             return z
 else:
-    class Nunchuck:
+
+    class NunchuckDesktop:
         # Desktop keyboard input emulating the nunchuck API.
         def __init__(self):
+            """Initialize a keyboard-driven Nunchuck emulator for desktop.
+
+            Maps arrow keys and common letter keys to the Nunchuck API used
+            by the rest of the code so desktop testing matches embedded input.
+            """
             self._z = False
             self._c = False
             self._x = 128
             self._y = 128
 
         def _poll(self):
+            """
+            Poll keyboard state via PyGame and update emulated joystick/buttons.
+            """
             try:
                 import pygame  # type: ignore
             except Exception:
@@ -944,7 +1290,9 @@ else:
             down = keys[pygame.K_DOWN]
 
             # Z button: z/space/enter
-            self._z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN])
+            self._z = bool(
+                keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN]
+            )
             # C button: x/escape
             self._c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE])
 
@@ -962,20 +1310,35 @@ else:
             self._y = y
 
         def buttons(self):
+            """
+            Return emulated (c_button, z_button) from keyboard input.
+            Raises `RestartProgram` when the restart combo is pressed.
+            """
             self._poll()
             if self._c and self._z:
                 raise RestartProgram()
             return self._c, self._z
 
         def joystick(self):
+            """
+            Return emulated analog joystick coordinates (x, y) from keyboard
+            directional keys.
+            """
             self._poll()
             return (self._x, self._y)
 
-    class Joystick:
+    class JoystickDesktop:
         def __init__(self):
+            """Initialize the desktop `Joystick` wrapper using `Nunchuck`.
+
+            Provides `read_direction()` compatible API for desktop testing.
+            """
             self.nunchuck = Nunchuck()
 
         def read_direction(self, possible_directions, debounce=True):
+            """
+            Convert emulated joystick analog values to a direction string.
+            """
             x, y = self.nunchuck.joystick()
 
             # diagonals first
@@ -999,11 +1362,36 @@ else:
             return None
 
         def is_pressed(self):
+            """Return whether the primary action is pressed (desktop).
+
+            Delegates to the underlying `Nunchuck.buttons()` emulation.
+            """
             _, z = self.nunchuck.buttons()
             return z
 
+
+# Expose platform-appropriate names to the rest of the code.
+if IS_MICROPYTHON:
+    Nunchuck = NunchuckMicro
+    Joystick = JoystickMicro
+else:
+    Nunchuck = NunchuckDesktop
+    Joystick = JoystickDesktop
+
+
 # ---------- Color helper ----------
 def hsb_to_rgb(hue, saturation, brightness):
+    """
+    Convert HSB/HSV color to RGB tuple with each component in 0-255 range.
+
+    Args:
+        hue (float): Hue angle in degrees.
+        saturation (float): Saturation (0.0-1.0).
+        brightness (float): Brightness/value (0.0-1.0).
+
+    Returns:
+        tuple: (r, g, b) each in 0-255.
+    """
     hue_normalized = (hue % 360) / 60
     i = int(hue_normalized)
     f = hue_normalized - i
@@ -1027,8 +1415,11 @@ def hsb_to_rgb(hue, saturation, brightness):
 
     return int(r * 255), int(g * 255), int(b * 255)
 
+
 def hypot(x, y):
-    return math.sqrt(x*x + y*y)
+    """Return the Euclidean distance sqrt(x*x + y*y)."""
+    return math.sqrt(x * x + y * y)
+
 
 # ---------- Highscores ----------
 try:
@@ -1036,14 +1427,27 @@ try:
 except ImportError:
     import json
 
+
 class HighScores:
+    """
+    Manage persistent high scores stored in a JSON file.
+
+    Provides load/save and lookup helpers used by menus and games.
+    """
+
     FILE = "highscores.json"
 
     def __init__(self):
+        """Initialize high score storage and load existing scores from disk."""
         self.scores = {}
         self.load()
 
     def load(self):
+        """Load high scores from the configured JSON file.
+
+        On any error (missing file, parse error) the scores dictionary is
+        reset to an empty mapping.
+        """
         try:
             with open(self.FILE, "r") as f:
                 self.scores = json.load(f)
@@ -1051,6 +1455,10 @@ class HighScores:
             self.scores = {}
 
     def save(self):
+        """Persist the current high scores to disk as JSON.
+
+        Errors during write are ignored to avoid crashing the running game.
+        """
         try:
             with open(self.FILE, "w") as f:
                 json.dump(self.scores, f)
@@ -1058,6 +1466,11 @@ class HighScores:
             pass
 
     def best(self, game):
+        """Return the best score (integer) for the named game.
+
+        Safely handles older score formats where the entry may be a plain
+        integer or a dict with a `score` key.
+        """
         try:
             v = self.scores.get(game, 0)
             if isinstance(v, dict):
@@ -1067,6 +1480,10 @@ class HighScores:
             return 0
 
     def best_name(self, game):
+        """Return the 3-character name associated with the best score.
+
+        If no name is present, returns the placeholder "---".
+        """
         try:
             v = self.scores.get(game)
             if isinstance(v, dict):
@@ -1078,6 +1495,11 @@ class HighScores:
         return "---"
 
     def update(self, game, score, name=None):
+        """Update the stored high score for `game` if `score` is higher.
+
+        Optionally store a 3-character `name` alongside the score.
+        Returns True when the stored value changed.
+        """
         score = int(score or 0)
         if score > self.best(game):
             if isinstance(name, str) and name:
@@ -1090,8 +1512,18 @@ class HighScores:
 
 
 class InitialsEntryMenu:
-    """3-letter initials entry for highscores."""
+    """
+    3-letter initials entry UI used when a new highscore is achieved.
+
+    Navigates letters with the joystick and returns a 3-letter name.
+    """
+
     def __init__(self, joystick, score, best, best_name="---", title="NEW HS"):
+        """Create a 3-letter initials entry menu for a new high score.
+
+        `joystick` is used to navigate letters; `score`, `best` and `best_name`
+        are shown to the player. `title` is the top-line label.
+        """
         self.joystick = joystick
         self.score = score
         self.best = best
@@ -1101,6 +1533,7 @@ class InitialsEntryMenu:
         self.idx = 0
 
     def run(self):
+        """Run the initials entry loop and return the entered 3-char name."""
         last_move = ticks_ms()
         move_delay = 140
 
@@ -1116,19 +1549,22 @@ class InitialsEntryMenu:
             draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
 
             # letters
-            x0 = 10
             y0 = 28
             for i in range(3):
                 col = (255, 255, 255) if i == self.idx else (120, 120, 120)
                 draw_text(10 + i * 18, y0, self.letters[i], *col)
                 if i == self.idx:
-                    draw_rectangle(8 + i * 18, y0 + 13, 20 + i * 18, y0 + 14, 255, 255, 255)
+                    draw_rectangle(
+                        8 + i * 18, y0 + 13, 20 + i * 18, y0 + 14, 255, 255, 255
+                    )
 
             draw_text_small(2, 50, "A=OK B=BACK", 120, 120, 120)
 
             now = ticks_ms()
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                )
                 if d == JOYSTICK_LEFT and self.idx > 0:
                     self.idx -= 1
                     last_move = now
@@ -1166,17 +1602,26 @@ class InitialsEntryMenu:
 
             sleep_ms(20)
 
+
 # ======================================================================
 #                                 GAMES
 # ======================================================================
 
+
 class SimonGame:
-    """Simon: memory game — repeat the color sequence shown."""
+    """
+    Simple Simon memory game: repeat an increasing color sequence.
+
+    Uses joystick input for color selection and highlights the sequence.
+    """
+
     def __init__(self):
+        """Initialize Simon game state (sequence and user input buffer)."""
         self.sequence = []
         self.user_input = []
 
     def draw_quad_screen(self):
+        """Draw the four colored quadrants used by the Simon game."""
         hw = WIDTH // 2
         hh = PLAY_HEIGHT // 2
         draw_rectangle(0, 0, hw - 1, hh - 1, *inactive_colors[0])
@@ -1185,6 +1630,7 @@ class SimonGame:
         draw_rectangle(hw, hh, WIDTH - 1, PLAY_HEIGHT - 1, *inactive_colors[3])
 
     def flash_color(self, idx, duration_ms=250):
+        """Temporarily highlight the quadrant at index `idx` for `duration_ms`."""
         x = idx % 2
         y = idx // 2
         hw = WIDTH // 2
@@ -1201,22 +1647,41 @@ class SimonGame:
         draw_rectangle(x1, y1, x2, y2, *inactive_colors[idx])
 
     def play_sequence(self):
+        """Play back the stored color sequence with delays."""
         for c in self.sequence:
             self.flash_color(c, 300)
             sleep_ms(200)
 
     def get_user_input(self, joystick):
+        """Read a single directional input from `joystick`, blocking briefly.
+
+        Returns one of the diagonal direction constants.
+        """
         while True:
-            d = joystick.read_direction([JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT])
+            d = joystick.read_direction(
+                [
+                    JOYSTICK_UP_LEFT,
+                    JOYSTICK_UP_RIGHT,
+                    JOYSTICK_DOWN_LEFT,
+                    JOYSTICK_DOWN_RIGHT,
+                ]
+            )
             if d:
                 return d
             sleep_ms(30)
 
     def translate(self, direction):
-        m = {JOYSTICK_UP_LEFT: 0, JOYSTICK_UP_RIGHT: 1, JOYSTICK_DOWN_LEFT: 2, JOYSTICK_DOWN_RIGHT: 3}
+        """Map a diagonal direction constant to a quadrant index (0-3)."""
+        m = {
+            JOYSTICK_UP_LEFT: 0,
+            JOYSTICK_UP_RIGHT: 1,
+            JOYSTICK_DOWN_LEFT: 2,
+            JOYSTICK_DOWN_RIGHT: 3,
+        }
         return m.get(direction, None)
 
     def main_loop(self, joystick):
+        """Run the main game loop for Simon, returning when the game exits."""
         global game_over, global_score
         game_over = False
         self.sequence = []
@@ -1243,7 +1708,7 @@ class SimonGame:
                 self.flash_color(sel, 120)
                 self.user_input.append(sel)
                 # check prefix
-                if self.user_input != self.sequence[:len(self.user_input)]:
+                if self.user_input != self.sequence[: len(self.user_input)]:
                     global_score = len(self.sequence) - 1
                     game_over = True
                     return
@@ -1251,12 +1716,20 @@ class SimonGame:
             sleep_ms(300)
             maybe_collect(120)
 
+
 class SnakeGame:
-    """Snake: classic snake game, collect targets and grow."""
+    """
+    Classic Snake implementation on the LED matrix playfield.
+
+    Manages snake movement, food spawning, and collision detection.
+    """
+
     def __init__(self):
+        """Initialize snake game state and start a fresh round."""
         self.restart_game()
 
     def restart_game(self):
+        """Reset snake position, length, direction, and spawn targets."""
         self.snake = [(WIDTH // 2, PLAY_HEIGHT // 2)]
         self.snake_length = 3
         self.snake_direction = JOYSTICK_UP
@@ -1270,18 +1743,22 @@ class SnakeGame:
         display_score_and_time(0, force=True)
 
     def random_target(self):
+        """Return a random valid target coordinate within the play area."""
         return (random.randint(1, WIDTH - 2), random.randint(1, PLAY_HEIGHT - 2))
 
     def place_target(self):
+        """Place the primary (red) target on the display and record it."""
         self.target = self.random_target()
         display.set_pixel(self.target[0], self.target[1], 255, 0, 0)
 
     def place_green_target(self):
+        """Spawn a temporary green target with a decay counter."""
         x, y = random.randint(1, WIDTH - 2), random.randint(1, PLAY_HEIGHT - 2)
         self.green_targets.append((x, y, 256))
         display.set_pixel(x, y, 0, 255, 0)
 
     def update_green_targets(self):
+        """Decrease life counters for green targets and clear expired ones."""
         new_list = []
         for x, y, life in self.green_targets:
             if life > 1:
@@ -1291,6 +1768,7 @@ class SnakeGame:
         self.green_targets = new_list
 
     def check_self_collision(self):
+        """Detect collisions of the snake head with its body and end game."""
         global game_over, global_score
         hx, hy = self.snake[0]
         body = self.snake[1:]
@@ -1309,6 +1787,10 @@ class SnakeGame:
                 game_over = True
 
     def update_snake_position(self):
+        """Advance the snake head according to direction and handle wrapping.
+
+        Also handles growth and collision detection with tail/body.
+        """
         hx, hy = self.snake[0]
         if self.snake_direction == JOYSTICK_UP:
             hy -= 1
@@ -1342,6 +1824,10 @@ class SnakeGame:
             display.set_pixel(tx, ty, 0, 0, 0)
 
     def check_target_collision(self):
+        """Handle collision with the primary target (red).
+
+        Grow the snake, increment score, and place a new target.
+        """
         hx, hy = self.snake[0]
         if (hx, hy) == self.target:
             self.snake_length += 2
@@ -1349,6 +1835,7 @@ class SnakeGame:
             self.place_target()
 
     def check_green_target_collision(self):
+        """Handle collision with green targets (halve length and remove)."""
         hx, hy = self.snake[0]
         for x, y, life in self.green_targets:
             if (hx, hy) == (x, y):
@@ -1358,13 +1845,21 @@ class SnakeGame:
                 break
 
     def draw_snake(self):
+        """Render the snake segments on the display.
+
+        Head is drawn with a different color from the body.
+        """
         hue = 0
-        for (x, y) in self.snake[:self.snake_length]:
+        for x, y in self.snake[: self.snake_length]:
             hue = (hue + 7) % 360
             r, g, b = hsb_to_rgb(hue, 1, 1)
             display.set_pixel(x, y, r, g, b)
 
     def main_loop(self, joystick, mode="single"):
+        """Run the Snake main loop until exit or restart.
+
+        `mode` may change behavior for single/multi variations.
+        """
         global game_over
         game_over = False
         self.restart_game()
@@ -1383,7 +1878,9 @@ class SnakeGame:
                 self.place_green_target()
             self.update_green_targets()
 
-            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            direction = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             if direction:
                 self.snake_direction = direction
 
@@ -1404,9 +1901,16 @@ class SnakeGame:
             sleep_ms(delay)
             maybe_collect(120)
 
+
 class PongGame:
-    """Pong: two-player paddle game (AI-controlled opponent)."""
+    """
+    Minimal Pong clone with two paddles and a bouncing ball.
+
+    Supports single-player AI and basic scoring/hud display.
+    """
+
     def __init__(self):
+        """Initialize Pong game state: paddles, ball, scores and lives."""
         self.paddle_height = 10
         self.paddle_speed = 2
         self.left_paddle_y = PLAY_HEIGHT // 2 - self.paddle_height // 2
@@ -1420,10 +1924,12 @@ class PongGame:
         self.right_paddle_v = 0
 
     def reset_ball(self):
+        """Center the ball and reset its velocity for a new rally."""
         self.ball_position = [WIDTH // 2, PLAY_HEIGHT // 2]
         self.ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
 
     def draw_paddles(self):
+        """Render both paddles into the left and right columns of playfield."""
         # Clear columns only in playfield
         for y in range(PLAY_HEIGHT):
             display.set_pixel(0, y, 0, 0, 0)
@@ -1438,16 +1944,19 @@ class PongGame:
                 display.set_pixel(WIDTH - 1, y, 255, 255, 255)
 
     def clear_ball(self):
+        """Clear the ball's previous pixel from the display."""
         x, y = self.ball_position
         if 0 <= y < PLAY_HEIGHT:
             display.set_pixel(x, y, 0, 0, 0)
 
     def draw_ball(self):
+        """Draw the ball at its current integer position."""
         x, y = self.ball_position
         if 0 <= y < PLAY_HEIGHT:
             display.set_pixel(x, y, 255, 255, 255)
 
     def update_paddles(self, joystick):
+        """Update left paddle from input and compute AI for right paddle."""
         d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
         # update left paddle and record velocity
         if d == JOYSTICK_UP:
@@ -1455,7 +1964,9 @@ class PongGame:
             self.left_paddle_v = new_y - self.left_paddle_y
             self.left_paddle_y = new_y
         elif d == JOYSTICK_DOWN:
-            new_y = min(self.left_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+            new_y = min(
+                self.left_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height
+            )
             self.left_paddle_v = new_y - self.left_paddle_y
             self.left_paddle_y = new_y
         else:
@@ -1470,13 +1981,17 @@ class PongGame:
             self.right_paddle_v = new_y - self.right_paddle_y
             self.right_paddle_y = new_y
         elif by > pc:
-            new_y = min(self.right_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+            new_y = min(
+                self.right_paddle_y + self.paddle_speed,
+                PLAY_HEIGHT - self.paddle_height,
+            )
             self.right_paddle_v = new_y - self.right_paddle_y
             self.right_paddle_y = new_y
         else:
             self.right_paddle_v = 0
 
     def update_ball(self):
+        """Move the ball, handle wall and paddle collisions, and scoring."""
         global game_over, global_score
         self.clear_ball()
 
@@ -1503,7 +2018,10 @@ class PongGame:
             self.ball_speed[1] = max(-2, min(2, self.ball_speed[1]))
 
         # right paddle hit
-        if x == WIDTH - 2 and self.right_paddle_y <= y < self.right_paddle_y + self.paddle_height:
+        if (
+            x == WIDTH - 2
+            and self.right_paddle_y <= y < self.right_paddle_y + self.paddle_height
+        ):
             self.ball_speed[0] = -self.ball_speed[0]
             # apply spin from right paddle
             try:
@@ -1533,6 +2051,7 @@ class PongGame:
         self.draw_ball()
 
     def main_loop(self, joystick):
+        """Run the Pong game loop until the player exits or loses."""
         global game_over
         game_over = False
         display.clear()
@@ -1554,6 +2073,7 @@ class PongGame:
             sleep_ms(45)
             maybe_collect(150)
 
+
 # ---------- Breakout ----------
 PADDLE_WIDTH = const(12)
 PADDLE_HEIGHT = const(2)
@@ -1563,9 +2083,16 @@ BRICK_HEIGHT = const(4)
 BRICK_ROWS = const(5)
 BRICK_COLS = const(8)
 
+
 class BreakoutGame:
-    """Breakout: destroy bricks with a bouncing ball and paddle."""
+    """
+    Breakout-style block-breaking game with a paddle and ball.
+
+    Handles brick layout, ball physics, and level progression.
+    """
+
     def __init__(self):
+        """Set up breakout state: paddle, ball, bricks and scoring."""
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = PLAY_HEIGHT - PADDLE_HEIGHT
         self.ball_x = WIDTH // 2
@@ -1579,6 +2106,7 @@ class BreakoutGame:
         self.paddle_v = 0
 
     def create_bricks(self):
+        """Build the initial brick layout as a list of (x,y,w,h,color)."""
         bricks = []
         for row in range(BRICK_ROWS):
             for col in range(BRICK_COLS):
@@ -1588,24 +2116,50 @@ class BreakoutGame:
         return bricks
 
     def draw_paddle(self):
-        draw_rectangle(self.paddle_x, self.paddle_y, self.paddle_x + PADDLE_WIDTH - 1, self.paddle_y + PADDLE_HEIGHT - 1, 255, 255, 255)
+        """Render the player's paddle as a filled rectangle."""
+        draw_rectangle(
+            self.paddle_x,
+            self.paddle_y,
+            self.paddle_x + PADDLE_WIDTH - 1,
+            self.paddle_y + PADDLE_HEIGHT - 1,
+            255,
+            255,
+            255,
+        )
 
     def clear_paddle(self):
-        draw_rectangle(self.paddle_x, self.paddle_y, self.paddle_x + PADDLE_WIDTH - 1, self.paddle_y + PADDLE_HEIGHT - 1, 0, 0, 0)
+        """Erase the paddle area by drawing a black rectangle over it."""
+        draw_rectangle(
+            self.paddle_x,
+            self.paddle_y,
+            self.paddle_x + PADDLE_WIDTH - 1,
+            self.paddle_y + PADDLE_HEIGHT - 1,
+            0,
+            0,
+            0,
+        )
 
     def draw_ball(self):
-        draw_rectangle(self.ball_x, self.ball_y, self.ball_x + 1, self.ball_y + 1, 255, 255, 255)
+        """Draw the ball as a filled rectangle of size BALL_SIZE."""
+        draw_rectangle(
+            self.ball_x, self.ball_y, self.ball_x + 1, self.ball_y + 1, 255, 255, 255
+        )
 
     def clear_ball(self):
-        draw_rectangle(self.ball_x, self.ball_y, self.ball_x + 1, self.ball_y + 1, 0, 0, 0)
+        """Erase the ball's previous rectangle from the display."""
+        draw_rectangle(
+            self.ball_x, self.ball_y, self.ball_x + 1, self.ball_y + 1, 0, 0, 0
+        )
 
     def draw_bricks(self):
+        """Draw all bricks with a color based on their row position."""
         for x, y in self.bricks:
             hue = (y * 360) // max(1, (BRICK_ROWS * BRICK_HEIGHT))
             r, g, b = hsb_to_rgb(hue, 1, 1)
             draw_rectangle(x, y, x + BRICK_WIDTH - 1, y + BRICK_HEIGHT - 1, r, g, b)
 
     def update_ball(self):
+        """Advance the ball, handle collisions with walls, bricks and paddle."""
         global game_over, global_score
         self.clear_ball()
         self.ball_x += self.ball_dx
@@ -1641,6 +2195,7 @@ class BreakoutGame:
         self.draw_ball()
 
     def check_collision_with_bricks(self):
+        """Detect and handle collisions between the ball and any brick."""
         global global_score
         bx = self.ball_x
         by = self.ball_y
@@ -1657,6 +2212,7 @@ class BreakoutGame:
                 break
 
     def update_paddle(self, joystick):
+        """Move the player's paddle according to left/right input."""
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if d == JOYSTICK_LEFT:
             self.clear_paddle()
@@ -1673,6 +2229,7 @@ class BreakoutGame:
         self.draw_paddle()
 
     def main_loop(self, joystick):
+        """Run the Breakout game loop until exit or game over."""
         global game_over, global_score
         game_over = False
         self.score = 0
@@ -1708,16 +2265,25 @@ class BreakoutGame:
             sleep_ms(35)
             maybe_collect(150)
 
+
 # ---------- Asteroids ----------
 SHIP_COOLDOWN = const(10)
 FPS = const(20)
 PIXEL_WIDTH = WIDTH
 PIXEL_HEIGHT = PLAY_HEIGHT
 
+
 class AsteroidGame:
+    """
+    Asteroids-like shooter with player ship, asteroids, and projectiles.
+
+    Includes simple physics for movement and collision handling.
+    """
+
     """Asteroids: pilot a ship, shoot asteroids and survive."""
     class Projectile:
         def __init__(self, x, y, angle, speed):
+            """Create a projectile at (x,y) moving at `angle` with `speed`."""
             self.x = x
             self.y = y
             self.angle = angle
@@ -1725,6 +2291,7 @@ class AsteroidGame:
             self.lifetime = 12
 
         def update(self):
+            """Advance the projectile and decrement its lifetime."""
             self.x += math.cos(math.radians(self.angle)) * self.speed
             self.y -= math.sin(math.radians(self.angle)) * self.speed
             self.x %= PIXEL_WIDTH
@@ -1732,9 +2299,11 @@ class AsteroidGame:
             self.lifetime -= 1
 
         def is_alive(self):
+            """Return True while the projectile still has lifetime left."""
             return self.lifetime > 0
 
         def draw_line(self, start, end, color):
+            """Draw a line between two points (used for simple beam rendering)."""
             x0, y0 = int(start[0]), int(start[1])
             x1, y1 = int(end[0]), int(end[1])
             dx = abs(x1 - x0)
@@ -1764,12 +2333,17 @@ class AsteroidGame:
             sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
 
         def draw(self):
+            """Render the projectile as a short line segment in its direction."""
             ex = self.x + math.cos(math.radians(self.angle))
             ey = self.y - math.sin(math.radians(self.angle))
             self.draw_line((self.x, self.y), (ex, ey), (255, 0, 0))
 
     class Asteroid:
         def __init__(self, x=None, y=None, size=None, start=False):
+            """Create an asteroid optionally at (x,y) with given `size`.
+
+            When `start` is True, ensure it spawns outside the player area.
+            """
             self.x = 32 if x is None else x
             self.y = 24 if y is None else y
             if start:
@@ -1781,12 +2355,14 @@ class AsteroidGame:
             self.size = size if size is not None else random.randint(4, 8)
 
         def update(self):
+            """Advance asteroid position and wrap around screen edges."""
             self.x += math.cos(math.radians(self.angle)) * self.speed
             self.y -= math.sin(math.radians(self.angle)) * self.speed
             self.x %= PIXEL_WIDTH
             self.y %= PIXEL_HEIGHT
 
         def draw(self):
+            """Render the asteroid as a ring of pixels around its center."""
             sp = display.set_pixel
             for deg in range(0, 360, 12):
                 rad = math.radians(deg)
@@ -1796,6 +2372,7 @@ class AsteroidGame:
 
     class Ship:
         def __init__(self):
+            """Create the player's ship centered on the playfield."""
             self.x = PIXEL_WIDTH / 2
             self.y = PIXEL_HEIGHT / 2
             self.angle = 0
@@ -1805,6 +2382,7 @@ class AsteroidGame:
             self.cooldown = 0
 
         def draw_line(self, start, end, color):
+            """Draw a line between two fractional coordinates."""
             x0, y0 = int(start[0]), int(start[1])
             x1, y1 = int(end[0]), int(end[1])
             dx = abs(x1 - x0)
@@ -1834,6 +2412,10 @@ class AsteroidGame:
             sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
 
         def update(self, direction):
+            """Update ship angle, speed and position based on input.
+
+            `direction` comes from joystick helper constants.
+            """
             if direction == JOYSTICK_LEFT:
                 self.angle = (self.angle + 6) % 360
             elif direction == JOYSTICK_RIGHT:
@@ -1853,14 +2435,21 @@ class AsteroidGame:
                 self.cooldown -= 1
 
         def draw(self):
+            """Render the ship as a triangular sprite oriented by `angle`."""
             a = self.angle
             s = self.size
-            p0 = (self.x + math.cos(math.radians(a)) * s,
-                  self.y - math.sin(math.radians(a)) * s)
-            p1 = (self.x + math.cos(math.radians(a + 120)) * s,
-                  self.y - math.sin(math.radians(a + 120)) * s)
-            p2 = (self.x + math.cos(math.radians(a - 120)) * s,
-                  self.y - math.sin(math.radians(a - 120)) * s)
+            p0 = (
+                self.x + math.cos(math.radians(a)) * s,
+                self.y - math.sin(math.radians(a)) * s,
+            )
+            p1 = (
+                self.x + math.cos(math.radians(a + 120)) * s,
+                self.y - math.sin(math.radians(a + 120)) * s,
+            )
+            p2 = (
+                self.x + math.cos(math.radians(a - 120)) * s,
+                self.y - math.sin(math.radians(a - 120)) * s,
+            )
 
             if self.speed > 0:
                 self.draw_line(p1, p2, RED)
@@ -1868,6 +2457,7 @@ class AsteroidGame:
             self.draw_line(p2, p0, WHITE)
 
         def shoot(self):
+            """Fire a projectile if cooldown allows and return it, else None."""
             if self.cooldown == 0:
                 self.cooldown = SHIP_COOLDOWN
                 bullet_speed = 4
@@ -1877,12 +2467,14 @@ class AsteroidGame:
             return None
 
     def __init__(self):
+        """Initialize AsteroidGame state with a player ship and asteroids."""
         self.ship = self.Ship()
         self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
         self.projectiles = []
         self.score = 0
 
     def check_collisions(self):
+        """Detect and resolve collisions between projectiles, asteroids, and ship."""
         global game_over, global_score
         # projectile vs asteroid
         for p in self.projectiles[:]:
@@ -1896,7 +2488,9 @@ class AsteroidGame:
                     self.score += 10
                     if a.size > 3:
                         for _ in range(2):
-                            self.asteroids.append(self.Asteroid(a.x, a.y, max(2, a.size // 2)))
+                            self.asteroids.append(
+                                self.Asteroid(a.x, a.y, max(2, a.size // 2))
+                            )
                     break
 
         # ship vs asteroid
@@ -1908,6 +2502,7 @@ class AsteroidGame:
                 return
 
     def main_loop(self, joystick):
+        """Run the Asteroid game loop handling input, updates and rendering."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -1930,7 +2525,9 @@ class AsteroidGame:
             if game_over:
                 return
 
-            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            direction = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             self.ship.update(direction)
 
             if z_button:
@@ -1970,10 +2567,18 @@ class AsteroidGame:
 
             maybe_collect(140)
 
+
 # ---------- Qix ----------
 class QixGame:
+    """
+    Qix-like territory-capturing game using a nibble-packed grid.
+
+    Players draw lines to capture areas while avoiding enemies.
+    """
+
     """Qix-like: draw lines to claim area while avoiding opponents."""
     def __init__(self):
+        """Initialize QixGame grid, player and opponent state for a level."""
         self.height = PLAY_HEIGHT
         self.width = WIDTH
         self.player_x = 0
@@ -1986,6 +2591,7 @@ class QixGame:
         self.prev_player_pos = 1
 
     def initialize_game(self):
+        """Prepare a new game: reset display, grid and place entities."""
         display.clear()
         initialize_grid()
         self.draw_frame()
@@ -1995,6 +2601,7 @@ class QixGame:
         display_score_and_time(0, force=True)
 
     def place_opponents(self, n):
+        """Place `n` opponents at random interior coordinates and mark them."""
         # place n opponents at random interior positions
         self.opponents = []
         for _ in range(n):
@@ -2006,6 +2613,7 @@ class QixGame:
             display.set_pixel(ox, oy, 255, 0, 0)
 
     def draw_frame(self):
+        """Draw the solid frame/border on the grid and display."""
         for x in range(self.width):
             set_grid_value(x, 0, 1)
             set_grid_value(x, self.height - 1, 1)
@@ -2019,19 +2627,24 @@ class QixGame:
             display.set_pixel(self.width - 1, y, 0, 0, 255)
 
     def place_player(self):
-        edges = ([(x, 0) for x in range(self.width)] +
-                 [(x, self.height - 1) for x in range(self.width)] +
-                 [(0, y) for y in range(self.height)] +
-                 [(self.width - 1, y) for y in range(self.height)])
+        """Randomly choose a border cell and place the player there."""
+        edges = (
+            [(x, 0) for x in range(self.width)]
+            + [(x, self.height - 1) for x in range(self.width)]
+            + [(0, y) for y in range(self.height)]
+            + [(self.width - 1, y) for y in range(self.height)]
+        )
         self.player_x, self.player_y = random.choice(edges)
         display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
 
     def place_opponent(self):
+        """Place a single opponent at a random interior location."""
         self.opponent_x = random.randint(1, self.width - 2)
         self.opponent_y = random.randint(1, self.height - 2)
         display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
 
     def move_opponent(self):
+        """Advance all opponents, bouncing off frame and ending the game on capture."""
         global game_over, global_score
         # move each opponent independently
         for op in self.opponents:
@@ -2063,7 +2676,9 @@ class QixGame:
             # recompute target after possible bounce
             nx = ox + dx
             ny = oy + dy
-            if get_grid_value(nx, ny) == 4 or (nx == self.player_x and ny == self.player_y):
+            if get_grid_value(nx, ny) == 4 or (
+                nx == self.player_x and ny == self.player_y
+            ):
                 global_score = int(self.level * 100) + int(self.occupied_percentage)
                 game_over = True
                 return
@@ -2077,15 +2692,22 @@ class QixGame:
             display.set_pixel(nx, ny, 255, 0, 0)
 
     def move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        """Move the player according to joystick input and leave a trail."""
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
 
         nx, ny = self.player_x, self.player_y
-        if d == JOYSTICK_UP: ny -= 1
-        elif d == JOYSTICK_DOWN: ny += 1
-        elif d == JOYSTICK_LEFT: nx -= 1
-        elif d == JOYSTICK_RIGHT: nx += 1
+        if d == JOYSTICK_UP:
+            ny -= 1
+        elif d == JOYSTICK_DOWN:
+            ny += 1
+        elif d == JOYSTICK_LEFT:
+            nx -= 1
+        elif d == JOYSTICK_RIGHT:
+            nx += 1
 
         if nx < 0 or nx >= self.width or ny < 0 or ny >= self.height:
             return
@@ -2104,6 +2726,7 @@ class QixGame:
         display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
 
     def close_area(self, x, y):
+        """Convert the player's trail into a solid border and fill enclosed area."""
         # convert trail to border/filled
         set_grid_value(x, y, 1)
         display.set_pixel(x, y, 0, 0, 255)
@@ -2132,11 +2755,13 @@ class QixGame:
         self.calculate_occupied_percentage()
 
     def calculate_occupied_percentage(self):
+        """Recalculate and store the percentage of the grid occupied by filled area."""
         occ = count_cells_with_mark(2, self.width, self.height)
         self.occupied_percentage = (occ / (self.width * self.height)) * 100
         display_score_and_time(int(self.occupied_percentage))
 
     def main_loop(self, joystick):
+        """Run the Qix game loop handling input, opponent movement and scoring."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -2174,39 +2799,55 @@ class QixGame:
             sleep_ms(45)
             maybe_collect(180)
 
+
 # ---------- Tetris ----------
 class TetrisGame:
+    """
+    Tetris implementation with falling pieces and line clearing.
+
+    Includes piece rotation, gravity, and scoring rules.
+    """
+
     """Tetris: falling blocks puzzle with line clears and scoring."""
+
     GRID_WIDTH = const(16)
     GRID_HEIGHT = const(13)
     BLOCK_SIZE = const(4)
 
     COLORS = [
-        (0, 255, 255),(255, 0, 0),(0, 255, 0),(0, 0, 255),
-        (255, 255, 0),(255, 165, 0),(128, 0, 128),
+        (0, 255, 255),
+        (255, 0, 0),
+        (0, 255, 0),
+        (0, 0, 255),
+        (255, 255, 0),
+        (255, 165, 0),
+        (128, 0, 128),
     ]
 
     TETRIMINOS = [
-        [[1,1,1,1]],                 # I
-        [[1,1,1],[0,1,0]],           # T
-        [[1,1,0],[0,1,1]],           # S
-        [[0,1,1],[1,1,0]],           # Z
-        [[1,1],[1,1]],               # O
-        [[1,1,1],[1,0,0]],           # L
-        [[1,1,1],[0,0,1]],           # J
+        [[1, 1, 1, 1]],  # I
+        [[1, 1, 1], [0, 1, 0]],  # T
+        [[1, 1, 0], [0, 1, 1]],  # S
+        [[0, 1, 1], [1, 1, 0]],  # Z
+        [[1, 1], [1, 1]],  # O
+        [[1, 1, 1], [1, 0, 0]],  # L
+        [[1, 1, 1], [0, 0, 1]],  # J
     ]
 
     class Piece:
         def __init__(self):
+            """Create a random tetromino piece at the top center of the grid."""
             self.shape = random.choice(TetrisGame.TETRIMINOS)
             self.color = random.choice(TetrisGame.COLORS)
             self.x = TetrisGame.GRID_WIDTH // 2 - len(self.shape[0]) // 2
             self.y = 0
 
         def rotate(self):
+            """Rotate the current piece clockwise by transposing and reversing."""
             self.shape = [list(row) for row in zip(*self.shape[::-1])]
 
     def __init__(self):
+        """Initialize Tetris board state, current piece and timing counters."""
         self.locked = {}  # (x,y)->color
         self.current = TetrisGame.Piece()
         self.score = 0
@@ -2216,6 +2857,7 @@ class TetrisGame:
         self.input_ms = 120
 
     def valid(self, piece, dx=0, dy=0, rotated_shape=None):
+        """Return True if `piece` at offset (dx,dy) would fit on the board."""
         shape = rotated_shape if rotated_shape is not None else piece.shape
         for y, row in enumerate(shape):
             for x, cell in enumerate(row):
@@ -2232,6 +2874,7 @@ class TetrisGame:
         return True
 
     def lock_piece(self, piece):
+        """Lock `piece` into the board's locked block map; return False on overflow."""
         for y, row in enumerate(piece.shape):
             for x, cell in enumerate(row):
                 if cell:
@@ -2243,6 +2886,7 @@ class TetrisGame:
         return True
 
     def clear_rows(self):
+        """Remove any full rows, collapse above rows down, and return count."""
         full_rows = []
         for y in range(self.GRID_HEIGHT):
             ok = True
@@ -2273,11 +2917,15 @@ class TetrisGame:
         return len(full_rows)
 
     def draw_block(self, gx, gy, color):
+        """Draw a single Tetris block at grid coordinates (gx,gy)."""
         x1 = gx * self.BLOCK_SIZE
         y1 = gy * self.BLOCK_SIZE
-        draw_rectangle(x1, y1, x1 + self.BLOCK_SIZE - 1, y1 + self.BLOCK_SIZE - 1, *color)
+        draw_rectangle(
+            x1, y1, x1 + self.BLOCK_SIZE - 1, y1 + self.BLOCK_SIZE - 1, *color
+        )
 
     def render(self):
+        """Render the entire Tetris board including locked blocks and current piece."""
         display.clear()
         # locked
         for (x, y), col in self.locked.items():
@@ -2292,6 +2940,7 @@ class TetrisGame:
                         self.draw_block(px, py, self.current.color)
 
     def main_loop(self, joystick):
+        """Run the Tetris main loop processing input, gravity and rendering."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -2306,7 +2955,9 @@ class TetrisGame:
 
             # input
             if ticks_diff(now, self.last_input) >= self.input_ms:
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT and self.valid(self.current, dx=-1):
                     self.current.x -= 1
                 elif d == JOYSTICK_RIGHT and self.valid(self.current, dx=1):
@@ -2352,9 +3003,17 @@ class TetrisGame:
             sleep_ms(35)
             maybe_collect(140)
 
+
 # ---------- Maze ----------
 class MazeGame:
+    """
+    Top-down maze game using a packed grid representation.
+
+    Supports flood-fill, pathing, and maze-rendering helpers.
+    """
+
     """Maze explorer: find gems, avoid enemies, with fog-of-war."""
+
     WALL = 0
     PATH = 1
     PLAYER = 2
@@ -2366,6 +3025,7 @@ class MazeGame:
     BORDER = 2
 
     def __init__(self):
+        """Initialize maze state: player, enemies, gems and exploration set."""
         self.projectiles = []
         self.gems = []
         self.enemies = []
@@ -2374,6 +3034,7 @@ class MazeGame:
         self.explored = set()
 
     def generate_maze(self):
+        """Generate a randomized maze using DFS-backed carving."""
         stack = []
         visited = set()
 
@@ -2384,19 +3045,28 @@ class MazeGame:
         visited.add((start_x, start_y))
         set_grid_value(start_x, start_y, self.PATH)
 
-        dirs = [(0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0)]
+        dirs = [
+            (0, self.MazeWaySize),
+            (0, -self.MazeWaySize),
+            (self.MazeWaySize, 0),
+            (-self.MazeWaySize, 0),
+        ]
 
         while stack:
             x, y = stack[-1]
             mixed = dirs[:]
-            for i in range(len(mixed)-1, 0, -1):
+            for i in range(len(mixed) - 1, 0, -1):
                 j = random.randint(0, i)
                 mixed[i], mixed[j] = mixed[j], mixed[i]
 
             found = False
             for dx, dy in mixed:
                 nx, ny = x + dx, y + dy
-                if self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER and (nx, ny) not in visited:
+                if (
+                    self.BORDER <= nx < WIDTH - self.BORDER
+                    and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER
+                    and (nx, ny) not in visited
+                ):
                     # carve
                     step_x = dx // self.MazeWaySize
                     step_y = dy // self.MazeWaySize
@@ -2414,6 +3084,7 @@ class MazeGame:
                 stack.pop()
 
     def place_player(self):
+        """Choose a random walkable cell and place the player, mark explored."""
         while True:
             self.player_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
             self.player_y = random.randint(self.BORDER, PLAY_HEIGHT - self.BORDER - 1)
@@ -2424,6 +3095,7 @@ class MazeGame:
                 break
 
     def place_gems(self, n=10):
+        """Scatter `n` gems on random path cells."""
         self.gems = []
         for _ in range(n):
             while True:
@@ -2435,6 +3107,7 @@ class MazeGame:
                     break
 
     def place_enemies(self, n=3):
+        """Place `n` enemies randomly on path cells."""
         self.enemies = []
         for _ in range(n):
             while True:
@@ -2446,10 +3119,11 @@ class MazeGame:
                     break
 
     def get_visible_cells(self):
+        """Return the set of cells visible from the player's position (line-of-sight)."""
         vis = set()
         x, y = self.player_x, self.player_y
         vis.add((x, y))
-        dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+        dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         for dx, dy in dirs:
             nx, ny = x, y
             while True:
@@ -2467,6 +3141,7 @@ class MazeGame:
         return vis
 
     def render(self):
+        """Render the maze with fog-of-war: explored dim, visible highlighted."""
         display.clear()
         vis = self.get_visible_cells()
 
@@ -2495,15 +3170,22 @@ class MazeGame:
                 display.set_pixel(x, y, 255, 255, 0)
 
     def move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        """Move the player and collect gems / trigger interactions."""
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
 
         nx, ny = self.player_x, self.player_y
-        if d == JOYSTICK_UP: ny -= 1
-        elif d == JOYSTICK_DOWN: ny += 1
-        elif d == JOYSTICK_LEFT: nx -= 1
-        elif d == JOYSTICK_RIGHT: nx += 1
+        if d == JOYSTICK_UP:
+            ny -= 1
+        elif d == JOYSTICK_DOWN:
+            ny += 1
+        elif d == JOYSTICK_LEFT:
+            nx -= 1
+        elif d == JOYSTICK_RIGHT:
+            nx += 1
 
         if not (0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT):
             return
@@ -2521,12 +3203,17 @@ class MazeGame:
                 self.score += 10
 
     def move_enemies(self):
+        """Advance each enemy randomly along available path tiles."""
         new_enemies = []
-        for (ex, ey) in self.enemies:
+        for ex, ey in self.enemies:
             moves = []
-            for dx, dy in [(0,-1),(0,1),(-1,0),(1,0)]:
+            for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
                 nx, ny = ex + dx, ey + dy
-                if 0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT and get_grid_value(nx, ny) == self.PATH:
+                if (
+                    0 <= nx < WIDTH
+                    and 0 <= ny < PLAY_HEIGHT
+                    and get_grid_value(nx, ny) == self.PATH
+                ):
                     moves.append((nx, ny))
             set_grid_value(ex, ey, self.PATH)
             if moves:
@@ -2536,6 +3223,7 @@ class MazeGame:
         self.enemies = new_enemies
 
     def handle_shooting(self, joystick):
+        """Handle firing a projectile from the player when the button is pressed."""
         _, z_button = joystick.nunchuck.buttons()
         if not z_button:
             return
@@ -2564,6 +3252,7 @@ class MazeGame:
         self.projectiles.append(proj)
 
     def update_projectiles(self):
+        """Advance projectiles, handle collisions and remove expired ones."""
         for p in self.projectiles[:]:
             # restore previous cell
             set_grid_value(p["x"], p["y"], p["prev"])
@@ -2572,7 +3261,9 @@ class MazeGame:
             p["y"] += p["dy"]
             p["lifetime"] -= 1
 
-            if p["lifetime"] <= 0 or not (0 <= p["x"] < WIDTH and 0 <= p["y"] < PLAY_HEIGHT):
+            if p["lifetime"] <= 0 or not (
+                0 <= p["x"] < WIDTH and 0 <= p["y"] < PLAY_HEIGHT
+            ):
                 self.projectiles.remove(p)
                 continue
 
@@ -2593,6 +3284,7 @@ class MazeGame:
             set_grid_value(p["x"], p["y"], self.PROJECTILE)
 
     def main_loop(self, joystick):
+        """Run the Maze game main loop handling input, updates and rendering."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -2638,13 +3330,23 @@ class MazeGame:
             sleep_ms(90)
             maybe_collect(140)
 
+
 # ---------- FLAPPY ----------
 class FlappyGame:
+    """
+    Flappy Bird-like one-button game where the player avoids obstacles.
+
+    Handles gravity, pipe spawning, and score tracking.
+    """
+
     """Flappy: navigate between pipes; flap to gain altitude."""
+
     def __init__(self):
+        """Initialize FlappyGame and prepare first pipes and state."""
         self.reset()
 
     def reset(self):
+        """Reset player position, velocity, pipes and score for a new run."""
         self.bx = 12
         self.by = PLAY_HEIGHT // 2
         self.vy = 0
@@ -2660,16 +3362,19 @@ class FlappyGame:
             self.add_pipe(WIDTH + i * 24)
 
     def add_pipe(self, x):
+        """Insert a vertical pipe with a gap centered at `gy` located at x."""
         min_y = self.gap_h // 2 + 2
         max_y = PLAY_HEIGHT - self.gap_h // 2 - 3
         gy = random.randint(min_y, max_y)
         self.pipes.append({"x": x, "gy": gy, "passed": False})
 
     def flap(self):
+        """Give the bird an upward impulse (triggered by button press)."""
         # compatibility for Z button: give an upward velocity impulse
         self.vy = -4
 
     def collide(self):
+        """Return True if the player collides with pipes or boundaries."""
         # out of bounds
         if self.by < 0 or self.by > PLAY_HEIGHT - 2:
             return True
@@ -2685,6 +3390,7 @@ class FlappyGame:
         return False
 
     def draw(self):
+        """Render game frame: pipes, player and score."""
         display.clear()
 
         # draw pipes
@@ -2699,13 +3405,16 @@ class FlappyGame:
                 draw_rectangle(x, 0, x + self.pipe_w - 1, top_end, 0, 200, 0)
             # bottom
             if bot_start < PLAY_HEIGHT - 1:
-                draw_rectangle(x, bot_start, x + self.pipe_w - 1, PLAY_HEIGHT - 1, 0, 200, 0)
+                draw_rectangle(
+                    x, bot_start, x + self.pipe_w - 1, PLAY_HEIGHT - 1, 0, 200, 0
+                )
 
         # bird (2x2)
         y = int(self.by)
         draw_rectangle(self.bx, y, self.bx + 1, y + 1, 255, 255, 0)
 
     def main_loop(self, joystick):
+        """Run the Flappy game loop managing input, physics and spawning."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -2770,7 +3479,14 @@ class FlappyGame:
 
             maybe_collect(140)
 
+
 class RTypeGame:
+    """
+    Side-scrolling shooter inspired by R-Type with enemies and pickups.
+
+    Manages player ship, enemy waves, and scrolling background.
+    """
+
     """
     R-TYPE / Gradius-style mini endless side-scroller (shoot 'em up).
 
@@ -2779,15 +3495,18 @@ class RTypeGame:
       - Z: fire
       - C: back to menu / cancel
     """
+
     # Small sine lookup table (±4) used for simple "wobble" enemy motion
     # without calling `math.sin` to reduce CPU and avoid floating-point cost
     # on constrained MicroPython targets.
     _SIN = (0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1)
 
     def __init__(self):
+        """Initialize RTypeGame and prepare initial game state."""
         self.reset()
 
     def reset(self):
+        """Reset game state: player, bullets, enemies and timers."""
         self.score = 0
 
         # Player
@@ -2797,10 +3516,10 @@ class RTypeGame:
         self.py = PLAY_HEIGHT // 2
 
         # Projectiles
-        self.bullets = []     # [x,y]
-        self.ebullets = []    # [x,y]
+        self.bullets = []  # [x,y]
+        self.ebullets = []  # [x,y]
         self.fire_cd = 0
-        self.power_t = 0      # frames power-up active
+        self.power_t = 0  # frames power-up active
 
         # Enemies: [x, y, typ, hp, phase, cd, basey]
         self.enemies = []
@@ -2815,19 +3534,25 @@ class RTypeGame:
         # Stars background
         self.stars = []
         for _ in range(18):
-            self.stars.append([random.randint(0, WIDTH - 1),
-                               random.randint(0, PLAY_HEIGHT - 1),
-                               random.randint(1, 3)])
+            self.stars.append(
+                [
+                    random.randint(0, WIDTH - 1),
+                    random.randint(0, PLAY_HEIGHT - 1),
+                    random.randint(1, 3),
+                ]
+            )
 
         self.frame = 0
         self.last_logic = ticks_ms()
         self.logic_ms = 35  # ~28fps
 
     def _rect_play(self, x, y, w, h, r, g, b):
+        """Draw a rectangle clipped to the playfield using shared helper."""
         # reuse shared helper to draw playfield rectangles
         draw_play_rect(x, y, w, h, r, g, b)
 
     def _overlap(self, ax1, ay1, ax2, ay2, bx1, by1, bx2, by2):
+        """Return True if two axis-aligned rectangles overlap."""
         if ax2 < bx1 or bx2 < ax1:
             return False
         if ay2 < by1 or by2 < ay1:
@@ -2835,6 +3560,7 @@ class RTypeGame:
         return True
 
     def _spawn_enemy(self):
+        """Spawn a randomized enemy with type-specific properties."""
         # typ 0: drone, typ 1: wobble, typ 2: shooter
         r = random.randint(0, 99)
         if r < 55:
@@ -2859,6 +3585,7 @@ class RTypeGame:
         self.enemies.append([x, y, typ, hp, phase, cd, y])
 
     def _difficulty_update(self):
+        """Adjust spawn timing based on current score to increase difficulty."""
         # schnelleres Spawning mit Score
         # score steigt typischerweise in 10ern, das passt gut
         s = self.score // 10
@@ -2867,6 +3594,7 @@ class RTypeGame:
             self.spawn_ms = 170
 
     def _update_stars(self):
+        """Scroll the background starfield and respawn off-screen stars."""
         for st in self.stars:
             st[0] -= st[2]
             if st[0] < 0:
@@ -2875,6 +3603,7 @@ class RTypeGame:
                 st[2] = random.randint(1, 3)
 
     def _update_powerups(self):
+        """Advance powerups leftwards and remove expired ones."""
         # move left, expire
         for p in self.powerups[:]:
             p[0] -= 1
@@ -2884,13 +3613,17 @@ class RTypeGame:
                 continue
 
             # collect
-            if abs(p[0] - (self.px + self.pw // 2)) <= 2 and abs(p[1] - (self.py + 1)) <= 2:
+            if (
+                abs(p[0] - (self.px + self.pw // 2)) <= 2
+                and abs(p[1] - (self.py + 1)) <= 2
+            ):
                 self.powerups.remove(p)
                 self.power_t = 240  # ~8 Sekunden
                 # kleines Bonus
                 self.score += 5
 
     def _update_bullets(self):
+        """Advance player and enemy bullets, removing those off-screen."""
         # player bullets
         for b in self.bullets[:]:
             b[0] += 4
@@ -2904,6 +3637,7 @@ class RTypeGame:
                 self.ebullets.remove(b)
 
     def _update_enemies(self):
+        """Update enemy positions, behaviors and handle firing."""
         global game_over, global_score
 
         for e in self.enemies[:]:
@@ -2916,8 +3650,10 @@ class RTypeGame:
                 e[0] -= 1
                 e[4] = (e[4] + 1) & 15
                 e[1] = e[6] + self._SIN[e[4]]
-                if e[1] < 1: e[1] = 1
-                if e[1] > PLAY_HEIGHT - 6: e[1] = PLAY_HEIGHT - 6
+                if e[1] < 1:
+                    e[1] = 1
+                if e[1] > PLAY_HEIGHT - 6:
+                    e[1] = PLAY_HEIGHT - 6
             else:
                 e[0] -= 1
                 e[5] -= 1
@@ -2961,6 +3697,7 @@ class RTypeGame:
                 return
 
     def _bullet_hits(self):
+        """Process bullet collisions with enemies and apply damage/score."""
         # bullets vs enemies
         for b in self.bullets[:]:
             bx, by = b[0], b[1]
@@ -2986,7 +3723,7 @@ class RTypeGame:
                         self.enemies.remove(hit)
                     # score
                     typ = hit[2]
-                    self.score += (10 + typ * 7)
+                    self.score += 10 + typ * 7
                     # chance for powerup
                     if random.randint(0, 99) < 12:
                         self.powerups.append([hit[0], hit[1], 400])
@@ -2994,6 +3731,7 @@ class RTypeGame:
                     self.score += 1  # hit bonus
 
     def _draw(self):
+        """Render the R-Type playfield: stars, powerups, player, bullets and enemies."""
         display.clear()
         sp = display.set_pixel
 
@@ -3004,7 +3742,8 @@ class RTypeGame:
 
         # powerups
         for p in self.powerups:
-            x = int(p[0]); y = int(p[1])
+            x = int(p[0])
+            y = int(p[1])
             if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
                 sp(x, y, 0, 255, 0)
                 if x + 1 < WIDTH:
@@ -3030,7 +3769,9 @@ class RTypeGame:
 
         # enemies
         for e in self.enemies:
-            x = int(e[0]); y = int(e[1]); typ = e[2]
+            x = int(e[0])
+            y = int(e[1])
+            typ = e[2]
             if typ == 0:
                 self._rect_play(x, y, 4, 3, 255, 60, 60)
             elif typ == 1:
@@ -3047,6 +3788,7 @@ class RTypeGame:
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Run the R-Type game loop: logic tick, input handling and rendering."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -3073,7 +3815,9 @@ class RTypeGame:
                 self.power_t -= 1
 
             # input
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             step = 2
             if d == JOYSTICK_UP:
                 self.py -= step
@@ -3085,10 +3829,14 @@ class RTypeGame:
                 self.px += step
 
             # bounds
-            if self.px < 0: self.px = 0
-            if self.px > WIDTH - self.pw - 1: self.px = WIDTH - self.pw - 1
-            if self.py < 0: self.py = 0
-            if self.py > PLAY_HEIGHT - self.ph: self.py = PLAY_HEIGHT - self.ph
+            if self.px < 0:
+                self.px = 0
+            if self.px > WIDTH - self.pw - 1:
+                self.px = WIDTH - self.pw - 1
+            if self.py < 0:
+                self.py = 0
+            if self.py > PLAY_HEIGHT - self.ph:
+                self.py = PLAY_HEIGHT - self.ph
 
             # shoot
             if self.fire_cd > 0:
@@ -3104,7 +3852,10 @@ class RTypeGame:
 
             # spawn
             self._difficulty_update()
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms and len(self.enemies) < 8:
+            if (
+                ticks_diff(now, self.last_spawn) >= self.spawn_ms
+                and len(self.enemies) < 8
+            ):
                 self.last_spawn = now
                 self._spawn_enemy()
 
@@ -3124,13 +3875,20 @@ class RTypeGame:
 
 class PacmanGame:
     """
+    Simplified Pac-Man clone with pellets, ghosts, and maze navigation.
+
+    Implements ghost AI states and pellet/fruit scoring.
+    """
+
+    """
     PACMAN-lite (Maze + Pellets + 2 Ghosts)
     Steuerung:
       - Stick: Richtung
       - C: zurück ins Menü
     """
-    #W = 16
-    #H = 14
+
+    # W = 16
+    # H = 14
     CELL = 4
     OFF_X = 0
     OFF_Y = 1
@@ -3159,14 +3917,16 @@ class PacmanGame:
 
     # dirs: 0 U, 1 D, 2 L, 3 R
     DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
-    OPP  = (1, 0, 3, 2)
+    OPP = (1, 0, 3, 2)
 
     def __init__(self):
+        """Initialize Pacman game and prepare map, pellets, and ghosts."""
         self.reset()
 
     def reset(self):
-        self.wall = bytearray(self.Width * self.Height)      # 1 if wall
-        self.pel = bytearray(self.Width * self.Height)       # 0 none, 1 pellet, 2 power
+        """Reset board arrays, player position and ghost state for a run."""
+        self.wall = bytearray(self.Width * self.Height)  # 1 if wall
+        self.pel = bytearray(self.Width * self.Height)  # 0 none, 1 pellet, 2 power
         self.wall_list = []
 
         self.px = 1
@@ -3222,14 +3982,17 @@ class PacmanGame:
         self.prev_ghosts = [(g[0], g[1]) for g in self.ghosts]
 
     def _idx(self, x, y):
+        """Return the linear buffer index for coordinates (x,y)."""
         return y * self.Width + x
 
     def _can_move(self, x, y):
+        """Return True if the cell (x,y) is walkable (not a wall)."""
         if x < 0 or x >= self.Width or y < 0 or y >= self.Height:
             return False
         return self.wall[self._idx(x, y)] == 0
 
     def _eat(self):
+        """Consume a pellet/power at the player's position and update score."""
         i = self._idx(self.px, self.py)
         v = self.pel[i]
         if v:
@@ -3243,6 +4006,7 @@ class PacmanGame:
             self._dirty = True
 
     def _move_player(self):
+        """Move the player one step following `want_dir` or current direction."""
         # attempt desired direction first
         dx, dy = self.DIRS[self.want_dir]
         nx = self.px + dx
@@ -3262,6 +4026,7 @@ class PacmanGame:
         self._dirty = True
 
     def _ghost_moves(self, g):
+        """Return a list of possible movement directions for ghost `g`."""
         # returns list of possible dirs
         x, y, d, hx, hy = g
         moves = []
@@ -3276,6 +4041,7 @@ class PacmanGame:
         return moves
 
     def _ghost_pick(self, g):
+        """Pick the next movement direction for ghost `g` using heuristics."""
         x, y, d, hx, hy = g
         moves = self._ghost_moves(g)
         if not moves:
@@ -3291,7 +4057,7 @@ class PacmanGame:
         best = moves[0]
         bestv = None
 
-        frightened = (self.power_timer > 0)
+        frightened = self.power_timer > 0
         for nd in moves:
             dx, dy = self.DIRS[nd]
             nx = x + dx
@@ -3311,6 +4077,7 @@ class PacmanGame:
         return best
 
     def _move_ghosts(self):
+        """Advance ghosts on their scheduled ticks using chosen directions."""
         # ghost speed: every 2nd logic tick
         self.ghost_tick = (self.ghost_tick + 1) & 1
         if self.ghost_tick == 1:
@@ -3325,6 +4092,7 @@ class PacmanGame:
             self._dirty = True
 
     def _check_collisions(self):
+        """Check for collisions between player and ghosts and handle outcomes."""
         global game_over, global_score
         for g in self.ghosts:
             if g[0] == self.px and g[1] == self.py:
@@ -3341,11 +4109,13 @@ class PacmanGame:
         return False
 
     def _draw_cell(self, cx, cy, r, g, b):
+        """Draw a mapped cell at grid coords (`cx`,`cy`) with color (r,g,b)."""
         x1 = self.OFF_X + cx * self.CELL
         y1 = self.OFF_Y + cy * self.CELL
         draw_rectangle(x1, y1, x1 + self.CELL - 1, y1 + self.CELL - 1, r, g, b)
 
     def _draw_bg_cell(self, x, y):
+        """Draw background cell at (x,y): wall, floor and possible pellet."""
         i = self._idx(x, y)
         if self.wall[i]:
             self._draw_cell(x, y, 0, 0, 140)
@@ -3365,12 +4135,22 @@ class PacmanGame:
                 draw_rectangle(cx, cy, cx + 1, cy + 1, 255, 215, 0)
 
     def _draw_player(self):
+        """Draw the player sprite at its current grid position.
+
+        Calculates pixel coordinates from the player's grid position
+        and draws a 2x2 rectangle representing Pac-Man.
+        """
         px = self.OFF_X + self.px * self.CELL
         py = self.OFF_Y + self.py * self.CELL
         draw_rectangle(px, py, px + 2, py + 2, 255, 255, 0)
 
     def _draw_ghosts(self):
-        frightened = (self.power_timer > 0)
+        """Draw all ghosts, using different colors and frightened state.
+
+        When the player has an active power-up, ghosts are drawn in
+        a frightened blue color; otherwise ghosts have distinct colors.
+        """
+        frightened = self.power_timer > 0
         for gi, g in enumerate(self.ghosts):
             gx = self.OFF_X + g[0] * self.CELL
             gy = self.OFF_Y + g[1] * self.CELL
@@ -3381,9 +4161,14 @@ class PacmanGame:
             draw_rectangle(gx, gy, gx + 2, gy + 2, *col)
 
     def _draw_background(self):
+        """Clear and draw the static background: walls and pellets.
+
+        This draws the maze walls and the remaining pellets. Sets
+        `_drawn_bg` to True after the background has been rendered.
+        """
         display.clear()
         # walls
-        for (x, y) in self.wall_list:
+        for x, y in self.wall_list:
             self._draw_cell(x, y, 0, 0, 140)
 
         # pellets
@@ -3400,6 +4185,11 @@ class PacmanGame:
         self._drawn_bg = True
 
     def _draw(self):
+        """Render the full game frame (background, player, ghosts).
+
+        This method draws the background if needed and then the
+        dynamic entities (player and ghosts) for the current frame.
+        """
         if not self._drawn_bg:
             self._draw_background()
         self._draw_player()
@@ -3409,11 +4199,16 @@ class PacmanGame:
         self._dirty = False
 
     def _draw_dirty_cells(self, dirty):
+        """Draw only cells marked as dirty and restore their background.
+
+        Restores the background for every coordinate in `dirty`, then
+        redraws dynamic sprites and the score/time HUD on top.
+        """
         if not self._drawn_bg:
             self._draw_background()
 
         # restore background for dirty cells first
-        for (x, y) in dirty:
+        for x, y in dirty:
             if 0 <= x < self.Width and 0 <= y < self.Height:
                 self._draw_bg_cell(x, y)
 
@@ -3423,6 +4218,11 @@ class PacmanGame:
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Main game loop: process input, update state, and render frames.
+
+        The loop runs until `game_over` becomes True. `joystick` is the
+        input provider used to read player controls each iteration.
+        """
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -3444,7 +4244,9 @@ class PacmanGame:
             now = ticks_ms()
 
             # read input often
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             if d == JOYSTICK_UP:
                 self.want_dir = 0
             elif d == JOYSTICK_DOWN:
@@ -3511,17 +4313,34 @@ class PacmanGame:
             else:
                 sleep_ms(8)
 
+
 class CaveFlyGame:
+    """
+    Cave flyer where the player navigates through a tight tunnel.
+
+    Generates procedural cave walls and collision detection.
+    """
+
     """
     CAVE FLYER (wie Flappy in Höhle)
     Steuerung:
       - Z oder Stick UP: Schub nach oben
       - C: zurück ins Menü
     """
+
     def __init__(self):
+        """Initialize the CaveFly game and set starting state.
+
+        Calls `reset()` to initialize score, player position and tunnel.
+        """
         self.reset()
 
     def reset(self):
+        """Reset the game variables to their initial values.
+
+        Sets score, frame counter, player position, tunnel parameters
+        and initializes the ringbuffer that stores wall positions.
+        """
         self.score = 0
         self.frame = 0
 
@@ -3546,18 +4365,37 @@ class CaveFlyGame:
             self._gen_row_at((self.head + y) % PLAY_HEIGHT)
 
         # Ensure player starts in the middle of the opening
-        mid = (int(self.left_wall[self._idx_row(self.by)]) + int(self.right_wall[self._idx_row(self.by)])) // 2
+        mid = (
+            int(self.left_wall[self._idx_row(self.by)])
+            + int(self.right_wall[self._idx_row(self.by)])
+        ) // 2
         self.bx = self._clamp(mid, 1, WIDTH - 3)
 
     def _clamp(self, v, lo, hi):
-        if v < lo: return lo
-        if v > hi: return hi
+        """Clamp `v` into the inclusive range [lo, hi].
+
+        Returns `lo` if `v` is below the range and `hi` if above.
+        """
+        if v < lo:
+            return lo
+        if v > hi:
+            return hi
         return v
 
     def _idx_row(self, y):
+        """Return the ringbuffer index for the given visible row `y`.
+
+        Accounts for the current `head` offset in the ringbuffer.
+        """
         return (self.head + y) % PLAY_HEIGHT
 
     def _gen_row_at(self, idx):
+        """Generate tunnel wall positions for ringbuffer index `idx`.
+
+        The function narrows the tunnel over time, applies a slight
+        random drift to the center, clamps values and writes left and
+        right wall positions into the ringbuffer arrays.
+        """
         # tunnel tightens over time: starts wide, narrows progressively
         self.gap = self.base_gap - int(self.score / 60)
         if self.gap < self.min_gap:
@@ -3565,7 +4403,9 @@ class CaveFlyGame:
 
         # center drift (keep within bounds)
         self.center += random.randint(-2, 2)
-        self.center = self._clamp(self.center, (self.gap // 2) + 3, WIDTH - (self.gap // 2) - 4)
+        self.center = self._clamp(
+            self.center, (self.gap // 2) + 3, WIDTH - (self.gap // 2) - 4
+        )
 
         left = self.center - (self.gap // 2)
         right = self.center + (self.gap // 2)
@@ -3577,12 +4417,22 @@ class CaveFlyGame:
         self.right_wall[idx] = right
 
     def _step_scroll(self):
+        """Advance the tunnel by one row and generate the new bottom row.
+
+        Moves the ringbuffer `head` and calls `_gen_row_at` for the
+        newly visible bottom row.
+        """
         # scroll upward: advance head so y=0 becomes previous y=1
         self.head = (self.head + 1) % PLAY_HEIGHT
         # generate new bottom row
         self._gen_row_at(self._idx_row(PLAY_HEIGHT - 1))
 
     def _collide(self):
+        """Check collision between the 2x2 player and tunnel walls.
+
+        Returns True when the player overlaps a wall or leaves the
+        vertical bounds, False otherwise.
+        """
         # bird 2x2 at (bx,by)
         x = self.bx
         for yy in (self.by, self.by + 1):
@@ -3598,6 +4448,7 @@ class CaveFlyGame:
         return False
 
     def _draw(self):
+        """Render the tunnel and the player for the CaveFly frame."""
         display.clear()
         sp = display.set_pixel
 
@@ -3621,13 +4472,19 @@ class CaveFlyGame:
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Main loop for CaveFly: handle input and advance the tunnel.
+
+        Reads joystick input, updates the player position and tunnel
+        scroll, checks collisions, and updates score until the user
+        cancels (C button).
+        """
         global game_over, global_score
         game_over = False
         global_score = 0
 
         self.reset()
         display_score_and_time(0, force=True)
-        
+
         # 2 second preview of cave
         self._draw()
         sleep_ms(2000)
@@ -3673,16 +4530,25 @@ class CaveFlyGame:
 
 class PitfallGame:
     """
+    Platformer-style runner inspired by Pitfall: avoid obstacles and collect items.
+
+    Manages simple physics, tile-based levels, and scoring.
+    """
+
+    """
     PITFALL MINI (Endlos-Runner)
     Steuerung:
       - Links/Rechts: laufen
       - Z oder Stick UP: springen
       - C: zurück ins Menü
     """
+
     def __init__(self):
+        """Initialize PitfallGame and reset to starting conditions."""
         self.reset()
 
     def reset(self):
+        """Reset player physics, spawn state, and scoring variables."""
         self.ground_y = PLAY_HEIGHT - 4
         self.pw = 3
         self.ph = 5
@@ -3711,7 +4577,11 @@ class PitfallGame:
         self._safe_distance = 20.0
 
     def _spawn_one(self, x_start):
+        """Spawn a single obstacle or treasure at horizontal start `x_start`.
 
+        Chooses obstacle kind probabilistically and appends a dictionary
+        describing the obstacle to `self.obstacles`.
+        """
         # At the start, spawn only treasures to avoid immediate frustration.
         if self.distance < self._safe_distance:
             kind = "TREASURE"
@@ -3720,7 +4590,11 @@ class PitfallGame:
             kind = "PIT" if r < 45 else ("SNAKE" if r < 75 else "TREASURE")
 
         # nicht zu viele pits hintereinander
-        if kind == "PIT" and self.last_spawn_kind == "PIT" and random.randint(0, 99) < 55:
+        if (
+            kind == "PIT"
+            and self.last_spawn_kind == "PIT"
+            and random.randint(0, 99) < 55
+        ):
             kind = "SNAKE"
 
         if kind == "PIT":
@@ -3731,11 +4605,25 @@ class PitfallGame:
             self.obstacles.append({"kind": "SNAKE", "x": float(x_start), "w": w})
         else:
             ty = self.ground_y - random.choice([12, 16, 20])
-            self.obstacles.append({"kind": "TREASURE", "x": float(x_start), "y": ty, "w": 2, "h": 2, "got": False})
+            self.obstacles.append(
+                {
+                    "kind": "TREASURE",
+                    "x": float(x_start),
+                    "y": ty,
+                    "w": 2,
+                    "h": 2,
+                    "got": False,
+                }
+            )
 
         self.last_spawn_kind = kind
 
     def _ensure_obstacles(self):
+        """Ensure there are enough obstacles ahead of the player.
+
+        Extends `self.obstacles` with spawned objects until a safe
+        distance ahead of the player is populated.
+        """
         max_right = -999
         for o in self.obstacles:
             w = o.get("w", 1)
@@ -3750,6 +4638,7 @@ class PitfallGame:
             max_right = spawn_x + self.obstacles[-1].get("w", 1)
 
     def _player_in_pit(self):
+        """Return True if the player's horizontal foot is inside a pit."""
         foot = self.px + (self.pw // 2)
         for o in self.obstacles:
             if o["kind"] == "PIT":
@@ -3758,6 +4647,10 @@ class PitfallGame:
         return False
 
     def _check_snake_collision(self):
+        """Detect collision with snake obstacles near ground level.
+
+        Only counts as a hit when the player is close to ground height.
+        """
         # nur gefährlich, wenn Spieler nahe am Boden ist
         player_bottom = int(self.py) + self.ph - 1
         if player_bottom < (self.ground_y - 2):
@@ -3785,6 +4678,10 @@ class PitfallGame:
         return False
 
     def _check_treasure(self):
+        """Detect and collect treasure items within the player's hitbox.
+
+        Marks collected treasures and increases the bonus score.
+        """
         px1 = self.px
         px2 = self.px + self.pw - 1
         py1 = int(self.py)
@@ -3808,20 +4705,33 @@ class PitfallGame:
             self.bonus += 25
 
     def _rect_play(self, x, y, w, h, r, g, b):
+        """Draw a rectangle within the playfield using shared helper.
+
+        Wrapper around `draw_play_rect` to centralize playfield drawing.
+        """
         # reuse shared helper to draw playfield rectangles
         draw_play_rect(x, y, w, h, r, g, b)
 
     def _render(self):
+        """Render the full Pitfall playfield and obstacles.
+
+        Draws ground, pits, snakes, treasures and the player to the
+        display buffer for the current frame.
+        """
         display.clear()
 
         # Boden-Band
-        self._rect_play(0, self.ground_y, WIDTH, PLAY_HEIGHT - self.ground_y, 40, 90, 40)
+        self._rect_play(
+            0, self.ground_y, WIDTH, PLAY_HEIGHT - self.ground_y, 40, 90, 40
+        )
 
         # Pits (Löcher)
         for o in self.obstacles:
             if o["kind"] == "PIT":
                 x = int(o["x"])
-                self._rect_play(x, self.ground_y, o["w"], PLAY_HEIGHT - self.ground_y, 0, 0, 0)
+                self._rect_play(
+                    x, self.ground_y, o["w"], PLAY_HEIGHT - self.ground_y, 0, 0, 0
+                )
 
         # Schlangen
         for o in self.obstacles:
@@ -3852,6 +4762,12 @@ class PitfallGame:
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Main loop for Pitfall: advance world, handle input and collisions.
+
+        Runs until `game_over` or the player cancels. Reads joystick
+        input, updates physics and obstacles, checks collisions, and
+        renders each frame.
+        """
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -3885,11 +4801,15 @@ class PitfallGame:
                     o["x"] -= self.speed
 
                 # cleanup
-                self.obstacles = [o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2]
+                self.obstacles = [
+                    o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2
+                ]
                 self._ensure_obstacles()
 
                 # move
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT:
                     self.px = max(0, self.px - 2)
                 elif d == JOYSTICK_RIGHT:
@@ -3898,8 +4818,8 @@ class PitfallGame:
                 # jump with variable height
                 if self.jump_cd > 0:
                     self.jump_cd -= 1
-                
-                jump_pressed = (z_button or d == JOYSTICK_UP)
+
+                jump_pressed = z_button or d == JOYSTICK_UP
                 if jump_pressed and self.on_ground and self.jump_cd == 0:
                     if not self.jump_charging:
                         self.jump_charging = True
@@ -3960,7 +4880,14 @@ class PitfallGame:
             except RestartProgram:
                 return
 
+
 class MonkeyBallLiteGame:
+    """
+    Lightweight Monkey Ball inspired tilt-and-roll maze game.
+
+    Uses simple physics to move a ball through obstacles to the goal.
+    """
+
     """
     Monkey Ball Lite – Top-Down Marble Maze
     Steuerung:
@@ -3982,22 +4909,22 @@ class MonkeyBallLiteGame:
     MB_H = const(14)
 
     # Tile codes (bytes)
-    T_WALL  = ord('#')
-    T_FLOOR = ord('.')
-    T_START = ord('S')
-    T_GOAL  = ord('G')
-    T_HOLE  = ord('o')
-    T_COIN  = ord('*')
+    T_WALL = ord("#")
+    T_FLOOR = ord(".")
+    T_START = ord("S")
+    T_GOAL = ord("G")
+    T_HOLE = ord("o")
+    T_COIN = ord("*")
 
     # Colors (tweak if you like)
-    COL_WALL  = (0, 0, 120)
+    COL_WALL = (0, 0, 120)
     COL_FLOOR = (0, 0, 0)
-    COL_GOAL  = (0, 255, 0)
-    COL_HOLE  = (200, 0, 200)
-    COL_COIN  = (255, 220, 0)
+    COL_GOAL = (0, 255, 0)
+    COL_HOLE = (200, 0, 200)
+    COL_COIN = (255, 220, 0)
 
-    COL_BALL  = (255, 255, 255)
-    COL_SHAD  = (40, 40, 40)
+    COL_BALL = (255, 255, 255)
+    COL_SHAD = (40, 40, 40)
 
     # Levels: 14x14, keep borders walled.
     MB_LEVELS = [
@@ -4053,8 +4980,8 @@ class MonkeyBallLiteGame:
 
     # Physics tuning (Q8.8-ish numbers)
     # acceleration = tilt * ACC
-    ACC = const(10)          # base accel per tick (in FP units)
-    ACC_BOOST = const(18)    # accel when Z held
+    ACC = const(10)  # base accel per tick (in FP units)
+    ACC_BOOST = const(18)  # accel when Z held
 
     # friction v = v * FRICTION_NUM / FRICTION_DEN
     FRICTION_NUM = const(235)  # ~0.918
@@ -4067,10 +4994,17 @@ class MonkeyBallLiteGame:
     R = const(1)  # radius in pixels (visual is 2x2)
 
     def __init__(self, ctx=None):
+        """Initialize the game context wrapper and bind runtime symbols.
+
+        `ctx` may supply platform-specific functions (display, timing,
+        helpers). Missing symbols are looked up in globals().
+        """
         # context can provide runtime symbols (display, helpers, timing)
         if ctx is None:
             ctx = {}
+
         def _g(n):
+            """Return symbol `n` from `ctx` or fallback to globals()."""
             return getattr(ctx, n, globals().get(n))
 
         self.display = _g("display")
@@ -4109,6 +5043,7 @@ class MonkeyBallLiteGame:
     # Level / Map
     # -----------------
     def reset_level(self, reset_score=False):
+        """Reset the current level map and optionally the score."""
         if reset_score:
             self.score = 0
             self.level_idx = 0
@@ -4137,8 +5072,8 @@ class MonkeyBallLiteGame:
         self.goal_tx, self.goal_ty = gx, gy
 
         # Ball state in pixel space inside map area
-        self.x = ((self.MB_OFF_X + sx * self.MB_TILE + (self.MB_TILE // 2)) << self.FP)
-        self.y = ((self.MB_OFF_Y + sy * self.MB_TILE + (self.MB_TILE // 2)) << self.FP)
+        self.x = (self.MB_OFF_X + sx * self.MB_TILE + (self.MB_TILE // 2)) << self.FP
+        self.y = (self.MB_OFF_Y + sy * self.MB_TILE + (self.MB_TILE // 2)) << self.FP
         self.vx = 0
         self.vy = 0
 
@@ -4153,25 +5088,39 @@ class MonkeyBallLiteGame:
 
         # tiny level label (optional)
         try:
-            self.draw_text(2, 2, "MB" + str((self.level_idx % len(self.MB_LEVELS)) + 1), 255, 255, 255)
+            self.draw_text(
+                2,
+                2,
+                "MB" + str((self.level_idx % len(self.MB_LEVELS)) + 1),
+                255,
+                255,
+                255,
+            )
         except Exception:
             pass
 
     def _tile_at(self, tx, ty):
+        """Return the tile value at tile coordinates (tx, ty).
+
+        Out-of-bounds coordinates are treated as walls.
+        """
         if tx < 0 or tx >= self.MB_W or ty < 0 or ty >= self.MB_H:
             return self.T_WALL
         return self.map[ty][tx]
 
     def _set_tile(self, tx, ty, val):
+        """Set the tile at (tx, ty) to `val` if within bounds."""
         if 0 <= tx < self.MB_W and 0 <= ty < self.MB_H:
             self.map[ty][tx] = val
 
     def _pixel_to_tile(self, px, py):
+        """Convert pixel coordinates to tile coordinates within the map."""
         tx = (px - self.MB_OFF_X) // self.MB_TILE
         ty = (py - self.MB_OFF_Y) // self.MB_TILE
         return tx, ty
 
     def _draw_tile(self, tx, ty):
+        """Draw a single map tile at tile coordinates (tx, ty)."""
         t = self._tile_at(tx, ty)
         x1 = self.MB_OFF_X + tx * self.MB_TILE
         y1 = self.MB_OFF_Y + ty * self.MB_TILE
@@ -4185,18 +5134,22 @@ class MonkeyBallLiteGame:
             self.draw_rectangle(x1, y1, x2, y2, *self.COL_FLOOR)
             if t == self.T_GOAL:
                 # goal highlight (center)
-                cx = x1 + 1; cy = y1 + 1
+                cx = x1 + 1
+                cy = y1 + 1
                 self.draw_rectangle(cx, cy, x2 - 1, y2 - 1, *self.COL_GOAL)
             elif t == self.T_HOLE:
                 # hole dot
-                cx = x1 + 1; cy = y1 + 1
+                cx = x1 + 1
+                cy = y1 + 1
                 self.draw_rectangle(cx, cy, x2 - 1, y2 - 1, *self.COL_HOLE)
             elif t == self.T_COIN:
                 # coin pixel cluster
-                cx = x1 + 1; cy = y1 + 1
+                cx = x1 + 1
+                cy = y1 + 1
                 self.draw_rectangle(cx, cy, cx + 1, cy + 1, *self.COL_COIN)
 
     def _draw_static_map(self):
+        """Draw the static, tile-based portion of the current map."""
         for ty in range(self.MB_H):
             for tx in range(self.MB_W):
                 self._draw_tile(tx, ty)
@@ -4205,6 +5158,11 @@ class MonkeyBallLiteGame:
     # Dirty repair under ball
     # -----------------
     def _repair_under_ball(self, px, py):
+        """Restore map tiles potentially covered by the moving ball.
+
+        Calculates the tile region possibly affected by the ball and
+        redraws those tiles only.
+        """
         # redraw only the tiles the ball could have overwritten (<= 4 tiles)
         # ball footprint ~ 2x2 plus shadow 1px
         minx = px - 1
@@ -4220,6 +5178,7 @@ class MonkeyBallLiteGame:
                 self._draw_tile(tx, ty)
 
     def _draw_ball(self, px, py):
+        """Draw the ball and its shadow at pixel position (px, py)."""
         sp = self.display.set_pixel
 
         # shadow (below-right)
@@ -4241,15 +5200,21 @@ class MonkeyBallLiteGame:
     # Collision helpers
     # -----------------
     def _is_wall_pixel(self, px, py):
+        """Return True when the given pixel lies on a wall tile."""
         tx, ty = self._pixel_to_tile(px, py)
         return self._tile_at(tx, ty) == self.T_WALL
 
     def _touch_hole_or_goal_or_coin(self, cx, cy):
+        """Handle collision of the ball with holes, goal or coins.
+
+        Returns a tuple (hole_hit, goal_reached, coin_collected).
+        """
         tx, ty = self._pixel_to_tile(cx, cy)
         t = self._tile_at(tx, ty)
         return tx, ty, t
 
     def _collides_ball_at(self, x_fp, y_fp):
+        """Return True if the ball at fixed-point coords collides with walls."""
         # check 4 corners of ball bbox in pixel coords
         px = x_fp >> self.FP
         py = y_fp >> self.FP
@@ -4262,7 +5227,7 @@ class MonkeyBallLiteGame:
             (px - r, py + r + 1),
             (px + r + 1, py + r + 1),
         )
-        for (cx, cy) in corners:
+        for cx, cy in corners:
             if self._is_wall_pixel(cx, cy):
                 return True
         return False
@@ -4271,6 +5236,11 @@ class MonkeyBallLiteGame:
     # Main loop
     # -----------------
     def main_loop(self, joystick):
+        """Main loop for the marble/mini-bomber physics-driven level.
+
+        Handles input tilt, ball physics, collision detection and
+        level progression until the player quits or reaches the goal.
+        """
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -4297,10 +5267,18 @@ class MonkeyBallLiteGame:
             self.frame += 1
 
             # -------- input -> tilt --------
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-            ])
+            d = joystick.read_direction(
+                [
+                    JOYSTICK_UP,
+                    JOYSTICK_DOWN,
+                    JOYSTICK_LEFT,
+                    JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT,
+                    JOYSTICK_UP_RIGHT,
+                    JOYSTICK_DOWN_LEFT,
+                    JOYSTICK_DOWN_RIGHT,
+                ]
+            )
 
             tx = 0
             ty = 0
@@ -4326,10 +5304,14 @@ class MonkeyBallLiteGame:
             self.vy = (self.vy * self.FRICTION_NUM) // self.FRICTION_DEN
 
             # clamp speed
-            if self.vx > self.VMAX: self.vx = self.VMAX
-            if self.vx < -self.VMAX: self.vx = -self.VMAX
-            if self.vy > self.VMAX: self.vy = self.VMAX
-            if self.vy < -self.VMAX: self.vy = -self.VMAX
+            if self.vx > self.VMAX:
+                self.vx = self.VMAX
+            if self.vx < -self.VMAX:
+                self.vx = -self.VMAX
+            if self.vy > self.VMAX:
+                self.vy = self.VMAX
+            if self.vy < -self.VMAX:
+                self.vy = -self.VMAX
 
             # -------- move + axis-separated collision --------
             nx = self.x + self.vx
@@ -4383,7 +5365,14 @@ class MonkeyBallLiteGame:
 
                 display.clear()
                 draw_text(6, 16, "GOAL", 0, 255, 0)
-                draw_text(6, 30, "LVL " + str((self.level_idx % len(self.MB_LEVELS)) + 1), 255, 255, 0)
+                draw_text(
+                    6,
+                    30,
+                    "LVL " + str((self.level_idx % len(self.MB_LEVELS)) + 1),
+                    255,
+                    255,
+                    0,
+                )
                 display_score_and_time(global_score, force=True)
                 sleep_ms(1200)
 
@@ -4409,62 +5398,80 @@ class MonkeyBallLiteGame:
                 except Exception:
                     pass
 
+
 # ---- 2048 ----
 # 2048 constants moved into `Game2048` as class attributes to avoid
 # module-level namespace collisions with other inlined games.
 
+
 class Game2048:
+    """
+    2048 puzzle game implementation adapted for the LED matrix.
+
+    Handles merging tiles, spawning, and win/lose detection.
+    """
+
     # 2048 visual and timing constants (class-scoped)
     TILE_PX = const(12)
-    COL_BG      = (0, 0, 0)
-    COL_EMPTY   = (10, 10, 30)
-    COL_FRAME   = (0, 50, 120)
-    COL_TXT     = (200, 200, 200)
-    COL_CURSOR  = (255, 255, 0)
+    COL_BG = (0, 0, 0)
+    COL_EMPTY = (10, 10, 30)
+    COL_FRAME = (0, 50, 120)
+    COL_TXT = (200, 200, 200)
+    COL_CURSOR = (255, 255, 0)
 
     COL_VAL = {
-          2: (238, 228, 218),
-          4: (237, 224, 200),
-          8: (242, 177, 121),
-         16: (245, 149,  99),
-         32: (246, 124,  95),
-         64: (246,  94,  59),
+        2: (238, 228, 218),
+        4: (237, 224, 200),
+        8: (242, 177, 121),
+        16: (245, 149, 99),
+        32: (246, 124, 95),
+        64: (246, 94, 59),
         128: (237, 207, 114),
-        256: (237, 204,  97),
-        512: (237, 200,  80),
-       1024: (237, 197,  63),
-       2048: (237, 194,  46),
+        256: (237, 204, 97),
+        512: (237, 200, 80),
+        1024: (237, 197, 63),
+        2048: (237, 194, 46),
     }
 
     INPUT_MS = const(120)
     A_LONG_MS = const(420)
+
     def __init__(self, ctx=None):
+        """Initialize the 2048 game wrapper and bind runtime helpers.
+
+        Supports `ctx` being either a dict or an object that provides
+        runtime symbols (display, timing, helpers). Falls back to
+        module-level globals when symbols are missing.
+        """
         # bind runtime symbols into module globals for legacy code paths
         if ctx is None:
             ctx = {}
+
         def _g(name):
+            """Return a symbol by name from `ctx` or from globals()."""
             if isinstance(ctx, dict):
                 return ctx.get(name, globals().get(name))
             return getattr(ctx, name, globals().get(name))
+
         try:
-            self.display = _g('display')
-            self.draw_text = _g('draw_text')
-            self.draw_rectangle = _g('draw_rectangle')
-            self.display_score_and_time = _g('display_score_and_time')
-            self.ticks_ms = _g('ticks_ms')
-            self.ticks_diff = _g('ticks_diff')
-            self.sleep_ms = _g('sleep_ms')
-            self.Data = _g('Data')
+            self.display = _g("display")
+            self.draw_text = _g("draw_text")
+            self.draw_rectangle = _g("draw_rectangle")
+            self.display_score_and_time = _g("display_score_and_time")
+            self.ticks_ms = _g("ticks_ms")
+            self.ticks_diff = _g("ticks_diff")
+            self.sleep_ms = _g("sleep_ms")
+            self.Data = _g("Data")
         except Exception:
             # fall back to module globals if lookup fails
-            self.display = globals().get('display')
-            self.draw_text = globals().get('draw_text')
-            self.draw_rectangle = globals().get('draw_rectangle')
-            self.display_score_and_time = globals().get('display_score_and_time')
-            self.ticks_ms = globals().get('ticks_ms')
-            self.ticks_diff = globals().get('ticks_diff')
-            self.sleep_ms = globals().get('sleep_ms')
-            self.Data = globals().get('Data')
+            self.display = globals().get("display")
+            self.draw_text = globals().get("draw_text")
+            self.draw_rectangle = globals().get("draw_rectangle")
+            self.display_score_and_time = globals().get("display_score_and_time")
+            self.ticks_ms = globals().get("ticks_ms")
+            self.ticks_diff = globals().get("ticks_diff")
+            self.sleep_ms = globals().get("sleep_ms")
+            self.Data = globals().get("Data")
 
         # use fixed 4x4 grid for 2048 (avoid conflicts with global GRID_W/GIRD_H)
         self.GRID_W = 4
@@ -4493,14 +5500,17 @@ class Game2048:
         self.reset()
 
     def _idx(self, x, y):
+        """Return linear index into the GRID from tile coordinates (x, y)."""
         return y * self.GRID_W + x
 
     def _tile_rect(self, x, y):
+        """Return pixel rectangle for tile (x, y) in grid coordinates."""
         x1 = self.off_x + x * self.TILE_PX
         y1 = self.off_y + y * self.TILE_PX
         return x1, y1, x1 + self.TILE_PX - 1, y1 + self.TILE_PX - 1
 
     def reset(self):
+        """Reset the 2048 board and spawn the initial tiles."""
         for i in range(self.GRID_W * self.GRID_H):
             self.grid[i] = 0
         self.score = 0
@@ -4516,6 +5526,7 @@ class Game2048:
             self.display_score_and_time(self.score, force=True)
 
     def _spawn_random(self):
+        """Spawn a new tile (2 or 4) at a random empty grid position."""
         free = [i for i, v in enumerate(self.grid) if v == 0]
         if not free:
             return
@@ -4523,6 +5534,10 @@ class Game2048:
         self.grid[pos] = 4 if random.random() < 0.1 else 2
 
     def _compress_line(self, line):
+        """Compress and merge a single row/column for a 2048 move.
+
+        Returns the new line and the score delta from merges.
+        """
         out = []
         score_delta = 0
         skip = False
@@ -4541,10 +5556,15 @@ class Game2048:
         if len(out) < self.GRID_W:
             out += [0] * (self.GRID_W - len(out))
         elif len(out) > self.GRID_W:
-            out = out[:self.GRID_W]
+            out = out[: self.GRID_W]
         return out, score_delta
 
     def _move(self, dir_idx):
+        """Perform a move in one of four directions (dir_idx 0-3).
+
+        Returns a tuple (changed, score_gain) indicating whether the
+        board changed and how much score was gained from merges.
+        """
         changed = False
         score_gain = 0
 
@@ -4586,6 +5606,7 @@ class Game2048:
         return changed
 
     def _any_moves_possible(self):
+        """Return True if any move (or spawn) is possible on the board."""
         if any(v == 0 for v in self.grid):
             return True
         for y in range(self.GRID_H):
@@ -4598,6 +5619,7 @@ class Game2048:
         return False
 
     def _draw_tile(self, x, y):
+        """Draw an individual 2048 tile at grid position (x, y)."""
         val = self.grid[self._idx(x, y)]
         x1, y1, x2, y2 = self._tile_rect(x, y)
         col = self.COL_EMPTY if val == 0 else self.COL_VAL.get(val, (255, 255, 255))
@@ -4619,7 +5641,7 @@ class Game2048:
                 if lvl <= 9:
                     txt = str(lvl)
                 else:
-                    txt = chr(ord('A') + (lvl - 10))
+                    txt = chr(ord("A") + (lvl - 10))
                 tw = 4  # single char width
                 tx = x1 + (self.TILE_PX - tw) // 2
                 ty = y1 + (self.TILE_PX - 6) // 2
@@ -4629,6 +5651,7 @@ class Game2048:
                 pass
 
     def _draw_board(self, full=False):
+        """Draw the full 2048 board or only the changed tiles."""
         if full:
             for y in range(self.GRID_H):
                 for x in range(self.GRID_W):
@@ -4640,12 +5663,13 @@ class Game2048:
             self.display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Main loop for 2048: process input and apply moves."""
         global game_over, global_score
         game_over = False
         global_score = 0
 
         self.reset()
-        last_ms = self.ticks_ms()
+        self.ticks_ms()
 
         while True:
             c_button, z_button = joystick.nunchuck.buttons()
@@ -4657,7 +5681,10 @@ class Game2048:
                 if self._z_down_ms is None:
                     self._z_down_ms = now
                     self._z_armed = True
-                elif self._z_armed and self.ticks_diff(now, self._z_down_ms) >= self.A_LONG_MS:
+                elif (
+                    self._z_armed
+                    and self.ticks_diff(now, self._z_down_ms) >= self.A_LONG_MS
+                ):
                     self._z_armed = False
                     self.reset()
             else:
@@ -4669,13 +5696,18 @@ class Game2048:
                 self.sleep_ms(5)
                 continue
 
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT
-            ])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT]
+            )
             if d is not None:
                 # Map JOYSTICK_* tokens to numeric directions expected by
                 # _move(): 0=UP, 1=RIGHT, 2=DOWN, 3=LEFT
-                dir_map = {JOYSTICK_UP: 0, JOYSTICK_RIGHT: 1, JOYSTICK_DOWN: 2, JOYSTICK_LEFT: 3}
+                dir_map = {
+                    JOYSTICK_UP: 0,
+                    JOYSTICK_RIGHT: 1,
+                    JOYSTICK_DOWN: 2,
+                    JOYSTICK_LEFT: 3,
+                }
                 dir_idx = dir_map.get(d, None)
                 if dir_idx is not None:
                     moved = self._move(dir_idx)
@@ -4712,12 +5744,26 @@ class Game2048:
             if (now & 0x3FF) == 0:
                 gc.collect()
 
+
 try:
     from micropython import const
 except ImportError:
-    def const(x): return x
+    def const(x):
+        """Fallback `const` implementation for non-MicroPython builds.
+
+        Returns the input value unchanged. Used to allow the code to
+        run under CPython during development.
+        """
+        return x
+
 
 class LocoMotionGame:
+    """
+    Loco-Motion style puzzle/slide game adapted for the LED matrix.
+
+    Handles tile sliding, movement rules, and goal detection.
+    """
+
     # LocoMotion constants
     RL_TILE = const(8)
     RL_W = const(8)
@@ -4730,35 +5776,35 @@ class LocoMotionGame:
     S = const(4)
     W = const(8)
 
-    TFLAG_NONE  = const(0x00)
+    TFLAG_NONE = const(0x00)
     TFLAG_START = const(0x10)
-    TFLAG_END   = const(0x20)
+    TFLAG_END = const(0x20)
     TFLAG_EMPTY = const(0x30)
 
-    COL_BG      = (0, 0, 0)
+    COL_BG = (0, 0, 0)
     COL_TILE_BG = (0, 0, 0)
-    COL_RAIL    = (180, 180, 180)
-    COL_RAIL2   = (80, 80, 80)
-    COL_START   = (0, 255, 0)
-    COL_END     = (255, 200, 0)
-    COL_CURSOR  = (255, 255, 0)
-    COL_TRAIN   = (255, 60, 60)
-    COL_SHADOW  = (40, 40, 40)
+    COL_RAIL = (180, 180, 180)
+    COL_RAIL2 = (80, 80, 80)
+    COL_START = (0, 255, 0)
+    COL_END = (255, 200, 0)
+    COL_CURSOR = (255, 255, 0)
+    COL_TRAIN = (255, 60, 60)
+    COL_SHADOW = (40, 40, 40)
 
     EDIT_INPUT_MS = const(120)
-    FRAME_MS_RUN  = const(35)
-    Z_LONG_MS     = const(420)
+    FRAME_MS_RUN = const(35)
+    Z_LONG_MS = const(420)
 
     SYM_BITS = {
-        ord('.'): 0,
-        ord('-'): E | W,
-        ord('|'): N | S,
-        ord('L'): N | E,
-        ord('J'): E | S,
-        ord('7'): S | W,
-        ord('F'): W | N,
-        ord('+'): N | E | S | W,
-        ord('T'): N | E | W,
+        ord("."): 0,
+        ord("-"): E | W,
+        ord("|"): N | S,
+        ord("L"): N | E,
+        ord("J"): E | S,
+        ord("7"): S | W,
+        ord("F"): W | N,
+        ord("+"): N | E | S | W,
+        ord("T"): N | E | W,
     }
 
     LEVELS = [
@@ -4789,24 +5835,51 @@ class LocoMotionGame:
             b"....L-J.",
             b"........",
         ),
+        (
+            b"SL..L..E",
+            b".|..|..|",
+            b".|..|..|",
+            b".L--J..|",
+            b"..-.F--J",
+            b"..-.....",
+            b"..---...",
+        ),
+        (
+            b"SL.L..E.",
+            b"---J..|.",
+            b".T..L.|.",
+            b".L--JLL.",
+            b"..|.--.|",
+            b"..L-JJ..",
+            b"........",
+        ),
     ]
+
     def __init__(self, ctx=None):
+        """Initialize LocoMotionGame and bind optional runtime symbols.
+
+        `ctx` may be a dict or object providing platform helpers; missing
+        symbols are left to module globals.
+        """
         if ctx is None:
             ctx = {}
+
         def _g(name):
+            """Return symbol `name` from `ctx` or fallback to globals()."""
             if isinstance(ctx, dict):
                 return ctx.get(name, globals().get(name))
             return getattr(ctx, name, globals().get(name))
+
         g = globals()
         try:
-            g['display'] = _g('display')
-            g['draw_text'] = _g('draw_text')
-            g['draw_rectangle'] = _g('draw_rectangle')
-            g['display_score_and_time'] = _g('display_score_and_time')
-            g['ticks_ms'] = _g('ticks_ms')
-            g['ticks_diff'] = _g('ticks_diff')
-            g['sleep_ms'] = _g('sleep_ms')
-            g['Data'] = _g('Data')
+            g["display"] = _g("display")
+            g["draw_text"] = _g("draw_text")
+            g["draw_rectangle"] = _g("draw_rectangle")
+            g["display_score_and_time"] = _g("display_score_and_time")
+            g["ticks_ms"] = _g("ticks_ms")
+            g["ticks_diff"] = _g("ticks_diff")
+            g["sleep_ms"] = _g("sleep_ms")
+            g["Data"] = _g("Data")
         except Exception:
             pass
 
@@ -4841,54 +5914,71 @@ class LocoMotionGame:
         self.load_level(self.level_idx, reset_score=True)
 
     def _idx(self, x, y):
+        """Return linear index for loco-motion grid coordinates (x, y)."""
         return y * self.RL_W + x
 
     @classmethod
     def _rot_cw(cls, bits):
+        """Rotate a 4-bit direction mask clockwise and return new mask."""
         oldN = bits & cls.N
         oldE = bits & cls.E
         oldS = bits & cls.S
         oldW = bits & cls.W
         nb = 0
-        if oldW: nb |= cls.N
-        if oldN: nb |= cls.E
-        if oldE: nb |= cls.S
-        if oldS: nb |= cls.W
+        if oldW:
+            nb |= cls.N
+        if oldN:
+            nb |= cls.E
+        if oldE:
+            nb |= cls.S
+        if oldS:
+            nb |= cls.W
         return nb & 0x0F
 
     @staticmethod
     def _opp_dir(d):
+        """Return the opposite direction for a 0-3 direction index."""
         return (d + 2) & 3
 
     @classmethod
     def _dir_to_bit(cls, d):
+        """Convert a direction index (0-3) to the corresponding bit mask."""
         return (cls.N, cls.E, cls.S, cls.W)[d & 3]
 
     @classmethod
     def _bit_to_dir(cls, bit):
-        if bit == cls.N: return 0
-        if bit == cls.E: return 1
-        if bit == cls.S: return 2
+        """Convert a direction bit mask to a 0-3 direction index."""
+        if bit == cls.N:
+            return 0
+        if bit == cls.E:
+            return 1
+        if bit == cls.S:
+            return 2
         return 3
 
     @staticmethod
     def _right_dir(d):
+        """Return the direction index to the right of `d`."""
         return (d + 1) & 3
 
     @staticmethod
     def _left_dir(d):
+        """Return the direction index to the left of `d`."""
         return (d + 3) & 3
 
     def _get(self, x, y):
+        """Return the tile flags/value at (x, y) or empty if out of bounds."""
         if x < 0 or x >= self.RL_W or y < 0 or y >= self.RL_H:
-            return (self.TFLAG_EMPTY | 0)
+            return self.TFLAG_EMPTY | 0
         return self.tiles[self._idx(x, y)]
 
     def _set(self, x, y, v):
+        """Set tile flags/value at (x, y) when inside the grid."""
         if 0 <= x < self.RL_W and 0 <= y < self.RL_H:
             self.tiles[self._idx(x, y)] = v & 0x3F
 
     def load_level(self, level_idx, reset_score=False):
+        """Load the specified level and initialize runtime flags."""
         if reset_score:
             self.score = 0
         self.level_idx = level_idx % len(self.LEVELS)
@@ -4907,15 +5997,15 @@ class LocoMotionGame:
                 bits = 0
                 flag = self.TFLAG_NONE
 
-                if ch == ord('S'):
+                if ch == ord("S"):
                     flag = self.TFLAG_START
                     bits = self.E
                     sx, sy = x, y
-                elif ch == ord('E'):
+                elif ch == ord("E"):
                     flag = self.TFLAG_END
                     bits = self.W
                     ex, ey = x, y
-                elif ch == ord('.'):
+                elif ch == ord("."):
                     flag = self.TFLAG_EMPTY
                     bits = 0
                 else:
@@ -4936,11 +6026,13 @@ class LocoMotionGame:
         display_score_and_time(self.score, force=True)
 
     def _tile_rect(self, tx, ty):
+        """Return pixel rectangle for loco-motion tile (tx, ty)."""
         x1 = self.rl_off_x + tx * self.RL_TILE
         y1 = self.rl_off_y + ty * self.RL_TILE
         return x1, y1, x1 + self.RL_TILE - 1, y1 + self.RL_TILE - 1
 
     def _draw_tile(self, tx, ty):
+        """Draw a single loco-motion tile including rails and switches."""
         v = self._get(tx, ty)
         flag = v & 0xF0
         bits = v & 0x0F
@@ -4964,6 +6056,7 @@ class LocoMotionGame:
         sp(cx, cy, *self.COL_RAIL)
 
         def rail_to(px, py, col):
+            """Draw a rail segment from the tile center to (px, py)."""
             if px == cx:
                 sy = 1 if py > cy else -1
                 y = cy
@@ -4988,10 +6081,14 @@ class LocoMotionGame:
         left = x1 + 1
         right = x2 - 1
 
-        if bits & self.N: rail_to(cx, top, self.COL_RAIL)
-        if bits & self.S: rail_to(cx, bot, self.COL_RAIL)
-        if bits & self.W: rail_to(left, cy, self.COL_RAIL)
-        if bits & self.E: rail_to(right, cy, self.COL_RAIL)
+        if bits & self.N:
+            rail_to(cx, top, self.COL_RAIL)
+        if bits & self.S:
+            rail_to(cx, bot, self.COL_RAIL)
+        if bits & self.W:
+            rail_to(left, cy, self.COL_RAIL)
+        if bits & self.E:
+            rail_to(right, cy, self.COL_RAIL)
 
         if flag == self.TFLAG_START:
             sp(x1 + 1, y1 + 1, *self.COL_START)
@@ -5003,11 +6100,13 @@ class LocoMotionGame:
             sp(x2 - 1, y1 + 2, *self.COL_END)
 
     def _draw_board_full(self):
+        """Draw the entire loco-motion board (all tiles)."""
         for y in range(self.RL_H):
             for x in range(self.RL_W):
                 self._draw_tile(x, y)
 
     def _draw_cursor(self):
+        """Draw the selection cursor around the current tile."""
         x1, y1, x2, y2 = self._tile_rect(self.cur_x, self.cur_y)
         draw_rectangle(x1, y1, x2, y1, *self.COL_CURSOR)
         draw_rectangle(x1, y2, x2, y2, *self.COL_CURSOR)
@@ -5015,10 +6114,12 @@ class LocoMotionGame:
         draw_rectangle(x2, y1, x2, y2, *self.COL_CURSOR)
 
     def _repair_cursor_area(self, oldx, oldy):
+        """Redraw tiles affected by moving the cursor from (oldx, oldy)."""
         self._draw_tile(oldx, oldy)
         self._draw_tile(self.cur_x, self.cur_y)
 
     def _hud(self):
+        """Draw the HUD below the playfield with level and mode info."""
         try:
             # Draw HUD in bottom area to avoid overlaying the playfield
             by = PLAY_HEIGHT + 1
@@ -5033,6 +6134,7 @@ class LocoMotionGame:
             pass
 
     def _rotate_tile_at_cursor(self):
+        """Rotate the tile under the cursor clockwise and update view."""
         x, y = self.cur_x, self.cur_y
         v = self._get(x, y)
         flag = v & 0xF0
@@ -5048,6 +6150,7 @@ class LocoMotionGame:
         self._hud()
 
     def _find_start_direction(self):
+        """Return an initial direction from the start tile's rails."""
         v = self._get(self.start_x, self.start_y)
         bits = v & 0x0F
         for d in (0, 1, 2, 3):
@@ -5056,6 +6159,7 @@ class LocoMotionGame:
         return 1
 
     def _start_run(self):
+        """Begin a run: set running mode and initialize train position."""
         self.mode_run = True
         self.tr_cx = self.start_x
         self.tr_cy = self.start_y
@@ -5070,6 +6174,7 @@ class LocoMotionGame:
         self._hud()
 
     def _abort_run(self):
+        """Abort a running train and restore editing UI state."""
         self.mode_run = False
         self.last_tr_px = None
         self.last_tr_py = None
@@ -5078,6 +6183,11 @@ class LocoMotionGame:
         self._hud()
 
     def _choose_next_dir(self, bits, incoming_dir, prev_move_dir):
+        """Choose the next direction for the train given tile bits.
+
+        Prefers continuing in `prev_move_dir` when available, otherwise
+        chooses a sensible alternate using right/left preference.
+        """
         inc_bit = self._dir_to_bit(incoming_dir)
         if not (bits & inc_bit):
             return None
@@ -5104,6 +6214,7 @@ class LocoMotionGame:
         return outs[0]
 
     def _train_pixel_pos(self):
+        """Return the pixel position of the train given its tile and progress."""
         x1, y1, x2, y2 = self._tile_rect(self.tr_cx, self.tr_cy)
         cx = x1 + (self.RL_TILE // 2)
         cy = y1 + (self.RL_TILE // 2)
@@ -5118,6 +6229,7 @@ class LocoMotionGame:
         return cx + p, cy
 
     def _repair_under_train(self, px, py):
+        """Restore the tiles that the train may have overwritten around (px,py)."""
         minx = px - 1
         miny = py - 1
         maxx = px + 2
@@ -5128,16 +6240,21 @@ class LocoMotionGame:
         tx1 = (maxx - self.rl_off_x) // self.RL_TILE
         ty1 = (maxy - self.rl_off_y) // self.RL_TILE
 
-        if tx0 < 0: tx0 = 0
-        if ty0 < 0: ty0 = 0
-        if tx1 >= self.RL_W: tx1 = self.RL_W - 1
-        if ty1 >= self.RL_H: ty1 = self.RL_H - 1
+        if tx0 < 0:
+            tx0 = 0
+        if ty0 < 0:
+            ty0 = 0
+        if tx1 >= self.RL_W:
+            tx1 = self.RL_W - 1
+        if ty1 >= self.RL_H:
+            ty1 = self.RL_H - 1
 
         for ty in range(ty0, ty1 + 1):
             for tx in range(tx0, tx1 + 1):
                 self._draw_tile(tx, ty)
 
     def _draw_train(self, px, py):
+        """Draw the train sprite and its shadow at pixel (px, py)."""
         sp = display.set_pixel
 
         sx = px + 1
@@ -5154,6 +6271,11 @@ class LocoMotionGame:
                         sp(xx, yy, *self.COL_TRAIN)
 
     def _step_train(self):
+        """Advance the train along the rails one logical step.
+
+        Returns True while the train is still running, False when it
+        reaches the end or an error occurs.
+        """
         global game_over, global_score
 
         self.tr_prog += self.tr_speed
@@ -5170,10 +6292,14 @@ class LocoMotionGame:
 
         nx = self.tr_cx
         ny = self.tr_cy
-        if self.tr_dir == 0: ny -= 1
-        elif self.tr_dir == 2: ny += 1
-        elif self.tr_dir == 3: nx -= 1
-        else: nx += 1
+        if self.tr_dir == 0:
+            ny -= 1
+        elif self.tr_dir == 2:
+            ny += 1
+        elif self.tr_dir == 3:
+            nx -= 1
+        else:
+            nx += 1
 
         if nx < 0 or nx >= self.RL_W or ny < 0 or ny >= self.RL_H:
             return False
@@ -5210,6 +6336,7 @@ class LocoMotionGame:
         return True
 
     def _fail_derail(self):
+        """Handle a derail failure: display message and abort run."""
         global game_over, global_score
         global_score = self.score
 
@@ -5221,6 +6348,7 @@ class LocoMotionGame:
         self._abort_run()
 
     def main_loop(self, joystick):
+        """Main loop for LocoMotion: handle editing and running modes."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -5243,7 +6371,10 @@ class LocoMotionGame:
                     self._z_down_ms = now
                     self._z_armed = True
                 else:
-                    if self._z_armed and ticks_diff(now, self._z_down_ms) >= self.Z_LONG_MS:
+                    if (
+                        self._z_armed
+                        and ticks_diff(now, self._z_down_ms) >= self.Z_LONG_MS
+                    ):
                         self._z_armed = False
                         if not self.mode_run:
                             self._start_run()
@@ -5292,9 +6423,9 @@ class LocoMotionGame:
                 sleep_ms(5)
                 continue
 
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT
-            ])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             if not d:
                 sleep_ms(5)
                 continue
@@ -5322,12 +6453,21 @@ class LocoMotionGame:
 try:
     from micropython import const
 except ImportError:
-    def const(x): return x
+    def const(x):
+        """Fallback `const` for non-MicroPython environments."""
+        return x
 
 # Othello constants (moved into class as attributes)
 # BOARD_OFF_* depend on runtime WIDTH/PLAY_HEIGHT; computed per-instance
 
+
 class OthelloGame:
+    """
+    Othello/Reversi board game implementation with simple AI.
+
+    Manages moves, flipping logic, and score calculation.
+    """
+
     BOARD_SIZE = const(8)
     CELL_SIZE = const(6)
     BOARD_W = BOARD_SIZE * CELL_SIZE
@@ -5337,22 +6477,26 @@ class OthelloGame:
     P2 = const(2)
 
     def __init__(self, ctx=None):
+        """Initialize Othello game and bind optional runtime helpers."""
         if ctx is None:
             ctx = {}
+
         def _g(name):
+            """Return a runtime symbol from `ctx` or fallback to globals()."""
             if isinstance(ctx, dict):
                 return ctx.get(name, globals().get(name))
             return getattr(ctx, name, globals().get(name))
+
         g = globals()
         try:
-            g['display'] = _g('display')
-            g['draw_text'] = _g('draw_text')
-            g['draw_rectangle'] = _g('draw_rectangle')
-            g['display_score_and_time'] = _g('display_score_and_time')
-            g['ticks_ms'] = _g('ticks_ms')
-            g['ticks_diff'] = _g('ticks_diff')
-            g['sleep_ms'] = _g('sleep_ms')
-            g['Data'] = _g('Data')
+            g["display"] = _g("display")
+            g["draw_text"] = _g("draw_text")
+            g["draw_rectangle"] = _g("draw_rectangle")
+            g["display_score_and_time"] = _g("display_score_and_time")
+            g["ticks_ms"] = _g("ticks_ms")
+            g["ticks_diff"] = _g("ticks_diff")
+            g["sleep_ms"] = _g("sleep_ms")
+            g["Data"] = _g("Data")
         except Exception:
             pass
 
@@ -5370,6 +6514,7 @@ class OthelloGame:
             self.board_off_y = 0
 
     def reset(self):
+        """Reset the Othello board to the starting position."""
         for y in range(self.BOARD_SIZE):
             row = self.board[y]
             for x in range(self.BOARD_SIZE):
@@ -5392,16 +6537,28 @@ class OthelloGame:
         display_score_and_time(0, force=True)
 
     def inside(self, x, y):
+        """Return True when (x, y) lies inside the board bounds."""
         return 0 <= x < self.BOARD_SIZE and 0 <= y < self.BOARD_SIZE
 
     def directions(self):
+        """Return the eight direction vectors used for flipping logic."""
         return (
-            (-1, -1), (0, -1), (1, -1),
-            (-1,  0),          (1,  0),
-            (-1,  1), (0,  1), (1,  1),
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
         )
 
     def _captures_in_dir(self, x, y, dx, dy, player):
+        """Return a tuple of positions captured in direction (dx,dy).
+
+        Scans from (x+dx,y+dy) outward and returns captured enemy
+        positions when terminated by a friendly piece.
+        """
         enemy = self.P1 if player == self.P2 else self.P2
         cx = x + dx
         cy = y + dy
@@ -5426,6 +6583,7 @@ class OthelloGame:
                 return tuple(captured)
 
     def valid_moves_for(self, player):
+        """Return a list of valid moves (x,y) for `player`."""
         moves = []
         for y in range(self.BOARD_SIZE):
             for x in range(self.BOARD_SIZE):
@@ -5440,6 +6598,7 @@ class OthelloGame:
         return moves
 
     def is_valid_move(self, x, y, player):
+        """Return True when placing at (x,y) is a legal move for `player`."""
         if not self.inside(x, y):
             return False
         if self.board[y][x] != self.EMPTY:
@@ -5451,17 +6610,19 @@ class OthelloGame:
         return False
 
     def apply_move(self, x, y, player):
+        """Apply a move for `player` at (x,y) and flip captured discs."""
         self.board[y][x] = player
         total_flipped = 0
         for dx, dy in self.directions():
             caps = self._captures_in_dir(x, y, dx, dy, player)
             if caps:
-                for (cx, cy) in caps:
+                for cx, cy in caps:
                     self.board[cy][cx] = player
                 total_flipped += len(caps)
         return total_flipped
 
     def count_discs(self):
+        """Count discs for both players and return (p1, p2)."""
         p1 = 0
         p2 = 0
         for y in range(self.BOARD_SIZE):
@@ -5474,13 +6635,14 @@ class OthelloGame:
         return p1, p2
 
     def cpu_move(self):
+        """Simple CPU move: pick the move with the highest immediate gain."""
         moves = self.valid_moves_for(self.P2)
         if not moves:
             return False
 
         best = None
         best_score = -1
-        for (x, y, gain) in moves:
+        for x, y, gain in moves:
             if gain > best_score:
                 best_score = gain
                 best = (x, y)
@@ -5493,6 +6655,7 @@ class OthelloGame:
         return True
 
     def _draw_cell(self, x, y):
+        """Draw a single board cell (empty or player disc)."""
         v = self.board[y][x]
         x1 = self.board_off_x + x * self.CELL_SIZE
         y1 = self.board_off_y + y * self.CELL_SIZE
@@ -5517,6 +6680,7 @@ class OthelloGame:
             display.set_pixel(cx - 1, cy - 1, 255, 255, 255)
 
     def render(self, full=False):
+        """Render the Othello board and HUD; `full` forces a full redraw."""
         if full:
             for y in range(self.BOARD_SIZE):
                 for x in range(self.BOARD_SIZE):
@@ -5528,10 +6692,14 @@ class OthelloGame:
 
         for x in range(self.BOARD_SIZE + 1):
             px = self.board_off_x + x * self.CELL_SIZE
-            draw_rectangle(px, self.board_off_y, px, self.board_off_y + self.BOARD_H - 1, 0, 60, 0)
+            draw_rectangle(
+                px, self.board_off_y, px, self.board_off_y + self.BOARD_H - 1, 0, 60, 0
+            )
         for y in range(self.BOARD_SIZE + 1):
             py = self.board_off_y + y * self.CELL_SIZE
-            draw_rectangle(self.board_off_x, py, self.board_off_x + self.BOARD_W - 1, py, 0, 60, 0)
+            draw_rectangle(
+                self.board_off_x, py, self.board_off_x + self.BOARD_W - 1, py, 0, 60, 0
+            )
 
         cx1 = self.board_off_x + self.cur_x * self.CELL_SIZE
         cy1 = self.board_off_y + self.cur_y * self.CELL_SIZE
@@ -5547,6 +6715,7 @@ class OthelloGame:
         display_score_and_time(self.score)
 
     def check_game_end(self):
+        """Return True when neither player has a valid move (game over)."""
         moves_p1 = self.valid_moves_for(self.P1)
         moves_p2 = self.valid_moves_for(self.P2)
         if moves_p1 or moves_p2:
@@ -5558,6 +6727,7 @@ class OthelloGame:
         return True
 
     def main_loop(self, joystick):
+        """Main loop for Othello: handle input, apply moves, and update."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -5592,10 +6762,9 @@ class OthelloGame:
                 return
 
             if self.current_player == self.P1:
-                d = joystick.read_direction([
-                    JOYSTICK_UP, JOYSTICK_DOWN,
-                    JOYSTICK_LEFT, JOYSTICK_RIGHT
-                ])
+                d = joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                )
 
                 if d == JOYSTICK_LEFT and self.cur_x > 0:
                     self.cur_x -= 1
@@ -5611,14 +6780,16 @@ class OthelloGame:
                     self.current_player = self.P2
 
             else:
-                did_move = self.cpu_move()
+                self.cpu_move()
                 self.current_player = self.P1
                 sleep_ms(120)
 
             if not self.valid_moves_for(self.current_player):
                 if self.check_game_end():
                     continue
-                self.current_player = self.P1 if self.current_player == self.P2 else self.P2
+                self.current_player = (
+                    self.P1 if self.current_player == self.P2 else self.P2
+                )
 
             self.render(full=True)
             global_score = self.score
@@ -5628,7 +6799,10 @@ class OthelloGame:
 try:
     from micropython import const
 except ImportError:
-    def const(x): return x
+    def const(x):
+        """Fallback `const` for non-MicroPython builds."""
+        return x
+
 
 SOK_TILE = const(4)
 SOK_W = const(16)
@@ -5692,37 +6866,68 @@ SOK_LEVELS = [
         b"#..............#",
         b"################",
     ),
+    (
+        b"################",
+        b"#..............#",
+        b"#..............#",
+        b"#....#####.....#",
+        b"#..###...#..GG.#",
+        b"#..#...B.#.....#",
+        b"#..#..B..#.....#",
+        b"#..#..P..#####.#",
+        b"#..#......#....##",
+        b"#..####.####...#",
+        b"#..............#",
+        b"#..............#",
+        b"#..............#",
+        b"################",
+    ),
 ]
 
 # Colors (tweak to taste)
-COL_BG    = (0, 0, 0)
-COL_WALL  = (0, 0, 140)
+COL_BG = (0, 0, 0)
+COL_WALL = (0, 0, 140)
 COL_FLOOR = (0, 0, 0)
-COL_GOAL  = (0, 120, 0)
-COL_BOX   = (220, 140, 0)
-COL_BOXG  = (255, 220, 0)
-COL_PLYR  = (255, 255, 255)
+COL_GOAL = (0, 120, 0)
+COL_BOX = (220, 140, 0)
+COL_BOXG = (255, 220, 0)
+COL_PLYR = (255, 255, 255)
 COL_PLYRG = (180, 255, 180)
-COL_GRID  = (0, 35, 0)
+COL_GRID = (0, 35, 0)
+
 
 class SokobanGame:
+    """
+    Classic Sokoban crate-pushing puzzles on a small grid.
+
+    Tracks player position, box movement, and level completion.
+    """
+
     def __init__(self, ctx=None):
+        """Initialize SokobanGame and bind optional runtime helpers.
+
+        `ctx` may provide platform-specific functions; missing symbols
+        fall back to module globals. Initializes level state and offsets.
+        """
         if ctx is None:
             ctx = {}
+
         def _g(name):
+            """Return a runtime symbol from `ctx` or fallback to globals()."""
             if isinstance(ctx, dict):
                 return ctx.get(name, globals().get(name))
             return getattr(ctx, name, globals().get(name))
+
         g = globals()
         try:
-            g['display'] = _g('display')
-            g['draw_text'] = _g('draw_text')
-            g['draw_rectangle'] = _g('draw_rectangle')
-            g['display_score_and_time'] = _g('display_score_and_time')
-            g['ticks_ms'] = _g('ticks_ms')
-            g['ticks_diff'] = _g('ticks_diff')
-            g['sleep_ms'] = _g('sleep_ms')
-            g['Data'] = _g('Data')
+            g["display"] = _g("display")
+            g["draw_text"] = _g("draw_text")
+            g["draw_rectangle"] = _g("draw_rectangle")
+            g["display_score_and_time"] = _g("display_score_and_time")
+            g["ticks_ms"] = _g("ticks_ms")
+            g["ticks_diff"] = _g("ticks_diff")
+            g["sleep_ms"] = _g("sleep_ms")
+            g["Data"] = _g("Data")
         except Exception:
             pass
 
@@ -5740,12 +6945,19 @@ class SokobanGame:
         self.reset_level(reset_all=True)
 
     def _idx(self, x, y):
+        """Return linear index for the Sokoban level grid at (x, y)."""
         return y * SOK_W + x
 
     def _inside(self, x, y):
+        """Return True when (x, y) lies within the Sokoban map bounds."""
         return 0 <= x < SOK_W and 0 <= y < SOK_H
 
     def reset_level(self, reset_all=False):
+        """Load and initialize the current Sokoban level.
+
+        When `reset_all` is True, resets `level_idx` to zero as well.
+        Initializes walls, goals, boxes and player position arrays.
+        """
         if reset_all:
             self.level_idx = 0
         self.moves = 0
@@ -5765,16 +6977,16 @@ class SokobanGame:
                 i = self._idx(x, y)
                 if ch == 35:
                     self.walls[i] = 1
-                elif ch == ord('G'):
+                elif ch == ord("G"):
                     self.goals[i] = 1
-                elif ch == ord('B'):
+                elif ch == ord("B"):
                     self.boxes[i] = 1
-                elif ch == ord('*'):
+                elif ch == ord("*"):
                     self.goals[i] = 1
                     self.boxes[i] = 1
-                elif ch == ord('P'):
+                elif ch == ord("P"):
                     px, py = x, y
-                elif ch == ord('+'):
+                elif ch == ord("+"):
                     px, py = x, y
                     self.goals[i] = 1
 
@@ -5784,18 +6996,27 @@ class SokobanGame:
         display_score_and_time(self.moves, force=True)
 
     def _is_wall(self, x, y):
+        """Return True when the tile at (x,y) is a wall."""
         return self.walls[self._idx(x, y)] != 0
 
     def _has_box(self, x, y):
+        """Return True when a box occupies tile (x,y)."""
         return self.boxes[self._idx(x, y)] != 0
 
     def _set_box(self, x, y, v):
+        """Set or clear a box at tile (x,y) depending on truthiness of `v`."""
         self.boxes[self._idx(x, y)] = 1 if v else 0
 
     def _is_goal(self, x, y):
+        """Return True when the tile at (x,y) is a goal target."""
         return self.goals[self._idx(x, y)] != 0
 
     def _try_move(self, dx, dy):
+        """Attempt to move the player by (dx,dy); push boxes if possible.
+
+        Returns True on successful move (and updates state), False
+        when movement is blocked by walls or immovable boxes.
+        """
         x0, y0 = self.px, self.py
         x1, y1 = x0 + dx, y0 + dy
         if not self._inside(x1, y1) or self._is_wall(x1, y1):
@@ -5803,7 +7024,11 @@ class SokobanGame:
 
         if self._has_box(x1, y1):
             x2, y2 = x1 + dx, y1 + dy
-            if not self._inside(x2, y2) or self._is_wall(x2, y2) or self._has_box(x2, y2):
+            if (
+                not self._inside(x2, y2)
+                or self._is_wall(x2, y2)
+                or self._has_box(x2, y2)
+            ):
                 return False
             self._set_box(x1, y1, 0)
             self._set_box(x2, y2, 1)
@@ -5822,6 +7047,7 @@ class SokobanGame:
         return True
 
     def _undo(self):
+        """Undo the last player move, restoring box positions if needed."""
         if not self.undo:
             return False
         rec = self.undo.pop()
@@ -5838,6 +7064,7 @@ class SokobanGame:
         return True
 
     def _is_solved(self):
+        """Return True when all boxes are on goal tiles (level solved)."""
         b = self.boxes
         g = self.goals
         for i in range(SOK_W * SOK_H):
@@ -5846,6 +7073,7 @@ class SokobanGame:
         return True
 
     def _draw_tile(self, x, y):
+        """Draw a single Sokoban tile including walls, goals and boxes."""
         i = self._idx(x, y)
         x1 = self.sok_off_x + x * SOK_TILE
         y1 = self.sok_off_y + y * SOK_TILE
@@ -5866,12 +7094,14 @@ class SokobanGame:
             draw_rectangle(x1 + 1, y1 + 1, x2 - 1, y2 - 1, *col)
 
     def _draw_player(self):
+        """Draw the player at its current tile position with goal highlight."""
         x = self.sok_off_x + self.px * SOK_TILE
         y = self.sok_off_y + self.py * SOK_TILE
         col = COL_PLYRG if self._is_goal(self.px, self.py) else COL_PLYR
         draw_rectangle(x + 1, y + 1, x + 2, y + 2, *col)
 
     def render(self, full=False):
+        """Render Sokoban level and HUD; `full` forces full redraw."""
         for y in range(SOK_H):
             for x in range(SOK_W):
                 self._draw_tile(x, y)
@@ -5879,6 +7109,7 @@ class SokobanGame:
         display_score_and_time(self.moves)
 
     def main_loop(self, joystick):
+        """Main loop for Sokoban: handle input, moves, undo, and rendering."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -5906,18 +7137,22 @@ class SokobanGame:
                 sleep_ms(5)
                 continue
 
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT
-            ])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             if not d:
                 sleep_ms(5)
                 continue
 
             dx = dy = 0
-            if d == JOYSTICK_LEFT: dx = -1
-            elif d == JOYSTICK_RIGHT: dx = 1
-            elif d == JOYSTICK_UP: dy = -1
-            elif d == JOYSTICK_DOWN: dy = 1
+            if d == JOYSTICK_LEFT:
+                dx = -1
+            elif d == JOYSTICK_RIGHT:
+                dx = 1
+            elif d == JOYSTICK_UP:
+                dy = -1
+            elif d == JOYSTICK_DOWN:
+                dy = 1
 
             moved = False
             if dx or dy:
@@ -5931,7 +7166,14 @@ class SokobanGame:
                     global_score = self.moves
                     display.clear()
                     draw_text(4, 16, "SOLVED", 0, 255, 0)
-                    draw_text(4, 30, "LVL " + str((self.level_idx % len(SOK_LEVELS)) + 1), 255, 255, 0)
+                    draw_text(
+                        4,
+                        30,
+                        "LVL " + str((self.level_idx % len(SOK_LEVELS)) + 1),
+                        255,
+                        255,
+                        0,
+                    )
                     display_score_and_time(self.moves, force=True)
                     sleep_ms(1300)
 
@@ -5943,9 +7185,12 @@ class SokobanGame:
 
             maybe_collect(140)
 
+
 class DemosGame:
     """Zero-player demos: simple animations and cellular automata."""
+
     def __init__(self):
+        """Initialize demo list, timing and reset internal demo state."""
         # TRON removed; new demos added: ANTS, FLOOD, FIRE
         self.demos = ["SNAKE", "LIFE", "ANTS", "FLOOD", "FIRE"]
         self.idx = 0
@@ -5955,6 +7200,7 @@ class DemosGame:
         self._reset_demo_state()
 
     def _reset_demo_state(self):
+        """Reset internal state used by the demos (LIFE/ANTS/FLOOD/FIRE)."""
         # shared
         self._init = False
         self._frame = 0
@@ -5998,7 +7244,7 @@ class DemosGame:
         # SNAKE
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
         self._snake_length = 3
-        self._snake_dir = 'UP'
+        self._snake_dir = "UP"
         self._snake_score = 0
         self._snake_target = (WIDTH // 2, HEIGHT // 2)
         self._snake_green_targets = []  # list of (x,y,lifespan)
@@ -6007,6 +7253,7 @@ class DemosGame:
 
     @staticmethod
     def _shuffle_in_place(seq):
+        """Shuffle a sequence in place using Fisher–Yates algorithm."""
         # Fisher-Yates; avoids relying on random.shuffle (not present on some MicroPython builds)
         n = len(seq)
         for i in range(n - 1, 0, -1):
@@ -6014,6 +7261,10 @@ class DemosGame:
             seq[i], seq[j] = seq[j], seq[i]
 
     def _life_step(self, w, h, cur, nxt):
+        """Advance one step of Conway's Game of Life on grid (w,h).
+
+        `cur` and `nxt` are bytearrays of size w*h; this updates `nxt`.
+        """
         for y in range(h):
             ym1 = (y - 1) % h
             yp1 = (y + 1) % h
@@ -6025,9 +7276,14 @@ class DemosGame:
                 xp1 = (x + 1) % w
                 i = row + x
                 n = (
-                    cur[rowm1 + xm1] + cur[rowm1 + x] + cur[rowm1 + xp1] +
-                    cur[row + xm1] + cur[row + xp1] +
-                    cur[rowp1 + xm1] + cur[rowp1 + x] + cur[rowp1 + xp1]
+                    cur[rowm1 + xm1]
+                    + cur[rowm1 + x]
+                    + cur[rowm1 + xp1]
+                    + cur[row + xm1]
+                    + cur[row + xp1]
+                    + cur[rowp1 + xm1]
+                    + cur[rowp1 + x]
+                    + cur[rowp1 + xp1]
                 )
                 if cur[i]:
                     nxt[i] = 1 if (n == 2 or n == 3) else 0
@@ -6035,6 +7291,7 @@ class DemosGame:
                     nxt[i] = 1 if (n == 3) else 0
 
     def _life_draw_diffs(self, w, h, cur, prev):
+        """Draw differences between current and previous LIFE generations."""
         # diff-draw
         for y in range(h):
             row = y * w
@@ -6051,6 +7308,7 @@ class DemosGame:
                 display.set_pixel(x, y, r, g, b)
 
     def _ants_init(self):
+        """Initialize Langton-ants demo state and color palettes."""
         # Match original "game_of_ants" look:
         # - dead: black
         # - alive base: (155,155,155)
@@ -6088,6 +7346,7 @@ class DemosGame:
             display.set_pixel(ant[0], ant[1], ant[3], ant[4], ant[5])
 
     def _ants_step(self):
+        """Advance the Langton-ants simulation by one step."""
         w = self._ants_w
         h = self._ants_h
         cells = self._ants_cells
@@ -6151,6 +7410,7 @@ class DemosGame:
             display.set_pixel(ant[0], ant[1], ant[3], ant[4], ant[5])
 
     def _flood_init(self):
+        """Initialize flood-fill demo buffers and queues for the grid."""
         # Closely matches hub75/floodfill_maze_on_hub75_128x128.py, optimized for 64x64.
         w = self._flood_w
         h = self._flood_h
@@ -6183,7 +7443,7 @@ class DemosGame:
         visited = self._flood_vis
 
         border = 24  # 48 @ 128 scaled to 64
-        step = 4      # 8 @ 128 scaled to 64
+        step = 4  # 8 @ 128 scaled to 64
 
         # Start near center like reference
         sx = random.randint(border // 2, min(w - 2, w - border // 2))
@@ -6195,19 +7455,23 @@ class DemosGame:
         sp = 0
 
         def stack_push(v):
+            """Push a 16-bit value `v` onto the DFS stack (little-endian)."""
             nonlocal sp
             stack[sp] = v & 0xFF
             stack[sp + 1] = (v >> 8) & 0xFF
             sp += 2
 
         def stack_top():
+            """Return the 16-bit value currently at the top of the stack."""
             return stack[sp - 2] | (stack[sp - 1] << 8)
 
         def stack_pop():
+            """Pop the top 16-bit value from the DFS stack (adjust pointer)."""
             nonlocal sp
             sp -= 2
 
         def mark_line(px, py, v=1):
+            """Set grid cell at (px,py) to `v` and draw it on the display."""
             g[py * w + px] = v
             display.set_pixel(px, py, 255, 255, 255)
 
@@ -6267,6 +7531,11 @@ class DemosGame:
         self._flood_q_tail += 1
 
     def _flood_step(self):
+        """Perform several steps of the flood-fill demo queue.
+
+        Dequeues positions and expands the fill; throttles for
+        visibility and restarts when finished or max steps exceeded.
+        """
         w = self._flood_w
         h = self._flood_h
         q = self._flood_q
@@ -6305,6 +7574,7 @@ class DemosGame:
 
             # neighbors
             def q_push_xy(px, py):
+                """Enqueue pixel (px,py) into the flood-fill queue if space."""
                 nonlocal tail
                 if tail >= w * h:
                     return
@@ -6330,6 +7600,7 @@ class DemosGame:
         self._flood_q_tail = tail
 
     def _fire_palette(self, v):
+        """Return an RGB tuple for a given fire intensity `v` (0..36)."""
         # v: 0..36 -> rgb
         if v <= 0:
             return (0, 0, 0)
@@ -6342,6 +7613,7 @@ class DemosGame:
         return (255, 120 + (v - 30) * 10 if (120 + (v - 30) * 10) < 255 else 255, 20)
 
     def _fire_init(self):
+        """Initialize fire buffers and force initial redraw."""
         w = self._fire_w
         h = self._fire_h
         if self._fire is None or len(self._fire) != w * h:
@@ -6357,6 +7629,7 @@ class DemosGame:
         display.clear()
 
     def _fire_step(self):
+        """Advance the fire simulation by one step and update seed row."""
         w = self._fire_w
         h = self._fire_h
         buf = self._fire
@@ -6403,10 +7676,11 @@ class DemosGame:
 
     # --- SNAKE (based on hub75/snake_on_hub75_zeroplayer.py) ---
     def _snake_restart(self):
+        """Restart the snake game and reset its state and counters."""
         self._snake_score = 0
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
         self._snake_length = 3
-        self._snake_dir = 'UP'
+        self._snake_dir = "UP"
         self._snake_green_targets = []
         self._snake_step_counter = 0
         self._snake_step_counter2 = 0
@@ -6414,9 +7688,11 @@ class DemosGame:
         self._snake_place_target()
 
     def _snake_random_target(self):
+        """Return a random valid target position inside the playfield."""
         return (random.randint(1, WIDTH - 2), random.randint(1, HEIGHT - 2))
 
     def _snake_place_target(self):
+        """Place a red target at a random free location for the snake to eat."""
         tries = 0
         while tries < 300:
             tries += 1
@@ -6437,6 +7713,7 @@ class DemosGame:
         display.set_pixel(self._snake_target[0], self._snake_target[1], 255, 0, 0)
 
     def _snake_place_green_target(self):
+        """Place a temporary green target with limited lifespan."""
         tries = 0
         while tries < 200:
             tries += 1
@@ -6450,6 +7727,7 @@ class DemosGame:
             return
 
     def _snake_update_green_targets(self):
+        """Advance lifetimes of green targets and remove expired ones."""
         new_targets = []
         for x, y, lifespan in self._snake_green_targets:
             if lifespan > 1:
@@ -6459,7 +7737,9 @@ class DemosGame:
         self._snake_green_targets = new_targets
 
     def _snake_find_nearest_target(self, head_x, head_y):
+        """Return the nearest attractive target (green or red) to the snake head."""
         def md(x1, y1, x2, y2):
+            """Manhattan distance helper function."""
             return abs(x1 - x2) + abs(y1 - y2)
 
         nearest_green = None
@@ -6477,47 +7757,49 @@ class DemosGame:
         return (tx, ty)
 
     def _snake_update_direction(self):
+        """Choose the snake's next direction aiming at the chosen target."""
         head_x, head_y = self._snake[0]
         target_x, target_y = self._snake_find_nearest_target(head_x, head_y)
 
-        opposite = {'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
+        opposite = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
         cur = self._snake_dir
         new_dir = cur
 
         if head_x == target_x:
-            if head_y < target_y and cur != 'UP':
-                new_dir = 'DOWN'
-            elif head_y > target_y and cur != 'DOWN':
-                new_dir = 'UP'
+            if head_y < target_y and cur != "UP":
+                new_dir = "DOWN"
+            elif head_y > target_y and cur != "DOWN":
+                new_dir = "UP"
         elif head_y == target_y:
-            if head_x < target_x and cur != 'LEFT':
-                new_dir = 'RIGHT'
-            elif head_x > target_x and cur != 'RIGHT':
-                new_dir = 'LEFT'
+            if head_x < target_x and cur != "LEFT":
+                new_dir = "RIGHT"
+            elif head_x > target_x and cur != "RIGHT":
+                new_dir = "LEFT"
         else:
             if abs(head_x - target_x) < abs(head_y - target_y):
-                if head_x < target_x and cur != 'LEFT':
-                    new_dir = 'RIGHT'
-                elif head_x > target_x and cur != 'RIGHT':
-                    new_dir = 'LEFT'
+                if head_x < target_x and cur != "LEFT":
+                    new_dir = "RIGHT"
+                elif head_x > target_x and cur != "RIGHT":
+                    new_dir = "LEFT"
             else:
-                if head_y < target_y and cur != 'UP':
-                    new_dir = 'DOWN'
-                elif head_y > target_y and cur != 'DOWN':
-                    new_dir = 'UP'
+                if head_y < target_y and cur != "UP":
+                    new_dir = "DOWN"
+                elif head_y > target_y and cur != "DOWN":
+                    new_dir = "UP"
 
         if new_dir == opposite.get(cur):
             new_dir = cur
         self._snake_dir = new_dir
 
     def _snake_check_self_collision(self):
+        """Detect imminent self-collisions and try to avoid or restart."""
         head_x, head_y = self._snake[0]
         body = self._snake[1:]
         potential = {
-            'UP': (head_x, (head_y - 1) % HEIGHT),
-            'DOWN': (head_x, (head_y + 1) % HEIGHT),
-            'LEFT': ((head_x - 1) % WIDTH, head_y),
-            'RIGHT': ((head_x + 1) % WIDTH, head_y)
+            "UP": (head_x, (head_y - 1) % HEIGHT),
+            "DOWN": (head_x, (head_y + 1) % HEIGHT),
+            "LEFT": ((head_x - 1) % WIDTH, head_y),
+            "RIGHT": ((head_x + 1) % WIDTH, head_y),
         }
         cur_next = potential[self._snake_dir]
         if cur_next in body:
@@ -6528,12 +7810,13 @@ class DemosGame:
                 self._snake_restart()
 
     def _snake_update_position(self):
+        """Move the snake head according to direction and trim tail as needed."""
         head_x, head_y = self._snake[0]
-        if self._snake_dir == 'UP':
+        if self._snake_dir == "UP":
             head_y -= 1
-        elif self._snake_dir == 'DOWN':
+        elif self._snake_dir == "DOWN":
             head_y += 1
-        elif self._snake_dir == 'LEFT':
+        elif self._snake_dir == "LEFT":
             head_x -= 1
         else:
             head_x += 1
@@ -6546,12 +7829,14 @@ class DemosGame:
             display.set_pixel(tx, ty, 0, 0, 0)
 
     def _snake_check_target_collision(self):
+        """Handle collision with the red target (grow and respawn target)."""
         if self._snake[0] == self._snake_target:
             self._snake_length += 2
             self._snake_place_target()
             self._snake_score += 1
 
     def _snake_check_green_target_collision(self):
+        """Handle collision with green targets (reduce length)."""
         hx, hy = self._snake[0]
         for x, y, lifespan in self._snake_green_targets:
             if (hx, hy) == (x, y):
@@ -6564,6 +7849,7 @@ class DemosGame:
                 break
 
     def _snake_draw(self):
+        """Draw the snake using a cycling hue per segment."""
         hue = 0
         for x, y in self._snake:
             hue = (hue + 5) % 360
@@ -6571,9 +7857,11 @@ class DemosGame:
             display.set_pixel(x, y, r, g, b)
 
     def _snake_init(self):
+        """Initialize snake game state."""
         self._snake_restart()
 
     def _snake_step(self):
+        """Perform one simulation step for the snake game (movement, targets)."""
         self._snake_step_counter += 1
         self._snake_step_counter2 += 1
         if (self._snake_step_counter2 & 1023) == 0:
@@ -6588,6 +7876,7 @@ class DemosGame:
         self._snake_draw()
 
     def main_loop(self, joystick):
+        """Main demo selection and event loop; returns on exit button."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -6650,9 +7939,13 @@ class DemosGame:
                 self._init = True
 
             if demo == "LIFE":
-                self._life_step(self._life_w, self._life_h, self._life_cur, self._life_nxt)
+                self._life_step(
+                    self._life_w, self._life_h, self._life_cur, self._life_nxt
+                )
                 self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
-                self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
+                self._life_draw_diffs(
+                    self._life_w, self._life_h, self._life_cur, self._life_prev
+                )
 
             elif demo == "ANTS":
                 self._ants_step()
@@ -6678,30 +7971,39 @@ class LunarLanderGame:
       - C: zurück ins Menü
     Ziel: weich & gerade auf dem grünen Pad landen.
     """
+
     _STEP = 5
     _LUT = None
 
     @classmethod
     def _ensure_lut(cls):
+        """Ensure the lookup table for angle vectors is initialized."""
         if cls._LUT is not None:
             return
         lut = []
         step = cls._STEP
         for a in range(0, 360, step):
-            lut.append((int(math.cos(math.radians(a)) * 256), int(math.sin(math.radians(a)) * 256)))
+            lut.append(
+                (
+                    int(math.cos(math.radians(a)) * 256),
+                    int(math.sin(math.radians(a)) * 256),
+                )
+            )
         cls._LUT = lut
 
     def __init__(self):
+        """Create a new Lunar Lander instance and initialize state."""
         self.level = 1
         self.total_score = 0
         self.reset()
 
     def reset(self, keep_level=False):
+        """Reset the lander for a new attempt; optionally keep current level."""
         # Multi-level system: keep level on successful landing, reset on crash
         if not keep_level:
             self.level = 1
             self.total_score = 0
-        
+
         self.terrain = self._make_terrain()
 
         # Pad gets smaller and fuel/gravity adjust per level
@@ -6729,6 +8031,7 @@ class LunarLanderGame:
         self.frame = 0
 
     def _make_terrain(self):
+        """Generate a random terrain heightmap for the playfield."""
         t = [0] * WIDTH
         y = random.randint(PLAY_HEIGHT - 18, PLAY_HEIGHT - 10)
         lo = PLAY_HEIGHT - 24
@@ -6749,17 +8052,23 @@ class LunarLanderGame:
         return t
 
     def _cos_sin256(self, angle_deg):
+        """Return (cos*256, sin*256) for a given angle in degrees using LUT."""
         angle_deg %= 360
         self._ensure_lut()
         idx = (angle_deg // self._STEP) % (360 // self._STEP)
         return self._LUT[idx]
 
     def _angle_diff(self, a, b):
+        """Return the smallest absolute difference between two angles (degrees)."""
         d = (a - b + 180) % 360 - 180
         return abs(d)
 
     def _line(self, x0, y0, x1, y1, r, g, b):
-        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+        """Draw a Bresenham line between two points with given color."""
+        x0 = int(x0)
+        y0 = int(y0)
+        x1 = int(x1)
+        y1 = int(y1)
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
@@ -6781,6 +8090,7 @@ class LunarLanderGame:
                 y0 += sy
 
     def _draw_ship(self, thrust_on=False):
+        """Draw the lander ship; optionally render thrust visuals when active."""
         size = 4
         cx, cy = self.x, self.y
 
@@ -6811,6 +8121,7 @@ class LunarLanderGame:
             self._line(fx0, fy0, fx1, fy1, 255, 80, 0)
 
     def _draw_terrain(self):
+        """Render the terrain and landing pad on the display."""
         sp = display.set_pixel
         for x in range(WIDTH):
             ty = self.terrain[x]
@@ -6826,6 +8137,7 @@ class LunarLanderGame:
                     sp(x, y + 1, 0, 200, 0)
 
     def _draw_fuel_bar(self):
+        """Draw the current fuel level as a horizontal bar."""
         bar_w = 22
         filled = int((self.fuel / float(self.fuel_max)) * bar_w)
         if filled < 0:
@@ -6838,6 +8150,7 @@ class LunarLanderGame:
             draw_rectangle(0, 0, filled - 1, 1, 255, 255, 0)
 
     def main_loop(self, joystick):
+        """Run the Lunar Lander game loop until exit or crash/land."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -6866,7 +8179,9 @@ class LunarLanderGame:
                     self.points += 1
 
                 # input
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT:
                     self.angle = (self.angle + 5) % 360
                 elif d == JOYSTICK_RIGHT:
@@ -6887,10 +8202,14 @@ class LunarLanderGame:
                 self.vy += ay
 
                 # clamp velocity
-                if self.vx > 2.2: self.vx = 2.2
-                if self.vx < -2.2: self.vx = -2.2
-                if self.vy > 3.0: self.vy = 3.0
-                if self.vy < -3.0: self.vy = -3.0
+                if self.vx > 2.2:
+                    self.vx = 2.2
+                if self.vx < -2.2:
+                    self.vx = -2.2
+                if self.vy > 3.0:
+                    self.vy = 3.0
+                if self.vy < -3.0:
+                    self.vy = -3.0
 
                 self.x += self.vx
                 self.y += self.vy
@@ -6911,37 +8230,43 @@ class LunarLanderGame:
                 ix = int(self.x)
                 gy = self.terrain[ix]
                 if self.y >= gy - 1:
-                    on_pad = (self.pad_x <= ix <= (self.pad_x + self.pad_w - 1))
-                    soft = (abs(self.vx) < 0.65 and abs(self.vy) < 1.2)
-                    upright = (self._angle_diff(self.angle, 90) <= 25)
+                    on_pad = self.pad_x <= ix <= (self.pad_x + self.pad_w - 1)
+                    soft = abs(self.vx) < 0.65 and abs(self.vy) < 1.2
+                    upright = self._angle_diff(self.angle, 90) <= 25
 
                     if on_pad and soft and upright:
                         # Successful landing: award points and advance level
-                        level_bonus = self.points + int(self.fuel) + 200 + (self.level * 150)
+                        level_bonus = (
+                            self.points + int(self.fuel) + 200 + (self.level * 150)
+                        )
                         self.total_score += level_bonus
                         global_score = self.total_score
-                        
+
                         display.clear()
                         draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
                         draw_text(2, 24, "DONE", 0, 255, 0)
                         display_score_and_time(global_score)
                         sleep_ms(1800)
-                        
+
                         # Next level
                         self.level += 1
                         self.reset(keep_level=True)
-                        
+
                         # Short preview of new terrain
                         display.clear()
                         self._draw_terrain()
                         draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
                         display_score_and_time(global_score)
                         sleep_ms(1500)
-                        
+
                         last_frame = ticks_ms()
                         continue
                     else:
-                        global_score = self.total_score if hasattr(self, 'total_score') else self.points
+                        global_score = (
+                            self.total_score
+                            if hasattr(self, "total_score")
+                            else self.points
+                        )
                         game_over = True
                         return
 
@@ -6968,10 +8293,13 @@ class UFODefenseGame:
       - Z: Rakete starten
       - C: zurück ins Menü
     """
+
     def __init__(self):
+        """Create UFO Defense game instance and initialize state."""
         self.reset()
 
     def reset(self):
+        """Reset game state: missiles, explosions, and cities."""
         self.score = 0
 
         self.base_x = WIDTH // 2
@@ -7002,7 +8330,11 @@ class UFODefenseGame:
         self._last_cross_move = ticks_ms()
 
     def _line(self, x0, y0, x1, y1, col):
-        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+        """Draw a colored line between two points (col is (r,g,b))."""
+        x0 = int(x0)
+        y0 = int(y0)
+        x1 = int(x1)
+        y1 = int(y1)
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
@@ -7025,18 +8357,21 @@ class UFODefenseGame:
                 y0 += sy
 
     def _cities_alive(self):
+        """Return True if any city is still alive."""
         for c in self.cities:
             if c["alive"]:
                 return True
         return False
 
     def _damage_city_at(self, x):
+        """Mark a city as destroyed if an explosion hits near x."""
         for c in self.cities:
             if c["alive"] and abs(c["x"] - x) <= 3:
                 c["alive"] = False
                 break
 
     def _spawn_enemy(self):
+        """Spawn a new enemy missile targeting a random alive city or base."""
         alive = [c for c in self.cities if c["alive"]]
         tgt = random.choice(alive)["x"] if alive else self.base_x
 
@@ -7052,16 +8387,23 @@ class UFODefenseGame:
         vx = dx / dist * spd
         vy = dy / dist * spd
 
-        self.enemy_missiles.append({
-            "x": float(sx), "y": float(sy),
-            "px": float(sx), "py": float(sy),
-            "tx": float(tx), "ty": float(ty),
-            "vx": vx, "vy": vy
-        })
+        self.enemy_missiles.append(
+            {
+                "x": float(sx),
+                "y": float(sy),
+                "px": float(sx),
+                "py": float(sy),
+                "tx": float(tx),
+                "ty": float(ty),
+                "vx": vx,
+                "vy": vy,
+            }
+        )
 
     def _enemy_cap(self, now):
+        """Return the allowed number of simultaneous enemy missiles based on time."""
         # time-based caps: 0-60s -> 2, 60-180s -> 4, 180-300s -> 6, afterwards 6
-        elapsed = ticks_diff(now, getattr(self, 'start_ms', now))
+        elapsed = ticks_diff(now, getattr(self, "start_ms", now))
         if elapsed < 60_000:
             return 2
         if elapsed < 180_000:
@@ -7069,6 +8411,7 @@ class UFODefenseGame:
         return 6
 
     def _fire_player(self):
+        """Launch a player missile towards current crosshair position."""
         sx = self.base_x
         sy = self.base_y
         tx = self.cx
@@ -7081,12 +8424,18 @@ class UFODefenseGame:
         vx = dx / dist * spd
         vy = dy / dist * spd
 
-        self.player_missiles.append({
-            "x": float(sx), "y": float(sy),
-            "px": float(sx), "py": float(sy),
-            "tx": float(tx), "ty": float(ty),
-            "vx": vx, "vy": vy
-        })
+        self.player_missiles.append(
+            {
+                "x": float(sx),
+                "y": float(sy),
+                "px": float(sx),
+                "py": float(sy),
+                "tx": float(tx),
+                "ty": float(ty),
+                "vx": vx,
+                "vy": vy,
+            }
+        )
         # firing costs 1 point
         try:
             self.score = max(0, self.score - 1)
@@ -7094,13 +8443,18 @@ class UFODefenseGame:
             pass
 
     def _add_explosion(self, x, y, max_r, color):
-        self.explosions.append({"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color})
+        """Append a new explosion entry to be animated."""
+        self.explosions.append(
+            {"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color}
+        )
 
     def _draw_explosion(self, ex):
+        """Render a single explosion ring on the display."""
         r = ex["r"]
         if r <= 0:
             return
-        x0 = ex["x"]; y0 = ex["y"]
+        x0 = ex["x"]
+        y0 = ex["y"]
         col = ex["col"]
         sp = display.set_pixel
 
@@ -7112,6 +8466,7 @@ class UFODefenseGame:
                 sp(x, y, col[0], col[1], col[2])
 
     def _update_explosions_and_hits(self):
+        """Advance explosion animations and remove missiles hit by them."""
         for ex in self.explosions[:]:
             ex["r"] += ex["dr"]
             if ex["r"] >= ex["max"]:
@@ -7121,7 +8476,8 @@ class UFODefenseGame:
                 continue
 
             r2 = (ex["r"] + 1) * (ex["r"] + 1)
-            exx = ex["x"]; exy = ex["y"]
+            exx = ex["x"]
+            exy = ex["y"]
 
             for em in self.enemy_missiles[:]:
                 dx = em["x"] - exx
@@ -7131,6 +8487,7 @@ class UFODefenseGame:
                     self.score += 10
 
     def _update_missiles(self):
+        """Advance all missiles (player and enemy) and handle impacts."""
         global game_over, global_score
 
         # player
@@ -7169,6 +8526,7 @@ class UFODefenseGame:
                     return
 
     def _draw_world(self):
+        """Render the static world: cities and base, and dynamic missiles/explosions."""
         display.clear()
         sp = display.set_pixel
 
@@ -7214,6 +8572,7 @@ class UFODefenseGame:
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Run UFO Defense main loop handling input, spawning, and rendering."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -7232,10 +8591,18 @@ class UFODefenseGame:
                 now = ticks_ms()
 
                 # crosshair move: move one pixel only when enough ms passed
-                d = joystick.read_direction([
-                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-                ])
+                d = joystick.read_direction(
+                    [
+                        JOYSTICK_UP,
+                        JOYSTICK_DOWN,
+                        JOYSTICK_LEFT,
+                        JOYSTICK_RIGHT,
+                        JOYSTICK_UP_LEFT,
+                        JOYSTICK_UP_RIGHT,
+                        JOYSTICK_DOWN_LEFT,
+                        JOYSTICK_DOWN_RIGHT,
+                    ]
+                )
                 step = 1
                 if d and ticks_diff(now, self._last_cross_move) >= self.cross_move_ms:
                     if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
@@ -7264,7 +8631,9 @@ class UFODefenseGame:
                         self._spawn_enemy()
                     self.level += 1
                     self.spawn_ms = max(self.min_spawn_ms, 850 - self.level * 10)
-                    self.enemy_speed = min(self.max_enemy_speed, self.base_enemy_speed + self.level * 0.01)
+                    self.enemy_speed = min(
+                        self.max_enemy_speed, self.base_enemy_speed + self.level * 0.01
+                    )
 
                 # frame pacing
                 if ticks_diff(now, last_frame) < frame_ms:
@@ -7288,11 +8657,13 @@ class UFODefenseGame:
             except RestartProgram:
                 return
 
+
 # -----------------------------
 # DOOM-LITE / RAYCASTER GAME
 # -----------------------------
+array: Any
 try:
-    from array import array
+    from array import array  # type: ignore
 except ImportError:
     array = None
 
@@ -7338,8 +8709,8 @@ class DoomLiteGame:
     )
 
     # Raycaster Parameter
-    ANGLE_MAX = 256               # 0..255 entspricht 0..360°
-    FOV = 48                      # ~67.5° (48/256 * 360)
+    ANGLE_MAX = 256  # 0..255 entspricht 0..360°
+    FOV = 48  # ~67.5° (48/256 * 360)
     HALF_FOV = FOV // 2
     MAX_STEPS = 36
     MAX_DIST = 32.0
@@ -7351,6 +8722,7 @@ class DoomLiteGame:
 
     @classmethod
     def _ensure_trig(cls):
+        """Ensure trig lookup tables are initialized (lazy init)."""
         if cls._COS is not None and cls._SIN is not None:
             return
         try:
@@ -7359,8 +8731,8 @@ class DoomLiteGame:
             pass
 
         if array:
-            cos_lut = array('h')
-            sin_lut = array('h')
+            cos_lut = array("h")
+            sin_lut = array("h")
             for i in range(256):
                 ang = 2 * math.pi * i / 256
                 cos_lut.append(int(math.cos(ang) * 1024))
@@ -7378,11 +8750,13 @@ class DoomLiteGame:
             cls._SIN = sin_lut
 
     def __init__(self):
+        """Initialize raycaster resources and reset game state."""
         self._ensure_trig()
         self.zbuf = [self.MAX_DIST] * WIDTH  # Wanddistanz pro Screen-Spalte
         self.reset()
 
     def reset(self):
+        """Reset player position, waves, and enemy list for a new run."""
         # Player (Map-Koordinaten, 1 Tile = 1.0)
         self.px = 2.5
         self.py = 2.5
@@ -7403,18 +8777,22 @@ class DoomLiteGame:
 
     # --- helpers ---
     def _is_wall_tile(self, mx, my):
+        """Return True if map cell at (mx,my) is a wall or out of bounds."""
         if mx < 0 or mx >= self.MAP_W or my < 0 or my >= self.MAP_H:
             return True
         return self.MAP[my][mx] == 35  # '#'
 
     def _is_wall_pos(self, x, y):
+        """Return True if the world position (x,y) lies inside a wall tile."""
         return self._is_wall_tile(int(x), int(y))
 
     def _cos_sin(self, a):
+        """Return (cos,sin) from precalculated LUT scaled to 1.0."""
         a &= 255
         return self._COS[a] / 1024.0, self._SIN[a] / 1024.0
 
     def _angle_to_units(self, dx, dy):
+        """Convert a vector (dx,dy) to 0..255 angular units suitable for LUT."""
         # dx,dy in Map-Koordinaten; Achtung y-Achse ist "nach unten"
         ang = math.atan2(-dy, dx)  # -dy -> mathematisch korrekt
         if ang < 0:
@@ -7422,6 +8800,7 @@ class DoomLiteGame:
         return int(ang * 256 / (2 * math.pi)) & 255
 
     def _angle_delta(self, a, b):
+        """Compute the minimal signed delta between two 0..255 angle units."""
         # kleinste Differenz a-b in [-128..127]
         d = (a - b + 128) & 255
         return d - 128
@@ -7487,6 +8866,7 @@ class DoomLiteGame:
         return self.MAX_DIST, side
 
     def _spawn_wave(self, wave):
+        """Spawn a small wave of enemies (2..6) depending on wave number."""
         # sehr klein halten: 2..6 Gegner
         n = 2 + (wave // 2)
         if n > 6:
@@ -7506,6 +8886,7 @@ class DoomLiteGame:
             self.enemies.append([ex, ey, hp])
 
     def _shoot(self):
+        """Perform a simple hitscan shoot: damage nearest visible enemy in crosshair."""
         # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
         wall_dist, _ = self._cast_ray(self.ang)
 
@@ -7543,6 +8924,7 @@ class DoomLiteGame:
                 self.score += 15
 
     def _update_enemies(self):
+        """Advance enemy AI movement and handle collisions with player."""
         global game_over, global_score
 
         # Enemies bewegen sich selten (Performance + Doom-Feeling)
@@ -7596,13 +8978,14 @@ class DoomLiteGame:
                         e[0] = nx
 
     def _render(self):
+        """Render the 3D view using raycasting into the map and draw sprites."""
         # background sky/floor
         # Intentionally no display.clear(): we always redraw the full playfield
         # background first. With the buffered framebuffer this means only pixels
         # that actually changed (walls/sprites/movement) are flushed.
         half = self.PLAY_H // 2
-        draw_rectangle(0, 0, WIDTH - 1, half - 1, 0, 0, 25)                 # sky
-        draw_rectangle(0, half, WIDTH - 1, self.PLAY_H - 1, 18, 10, 0)      # floor
+        draw_rectangle(0, 0, WIDTH - 1, half - 1, 0, 0, 25)  # sky
+        draw_rectangle(0, half, WIDTH - 1, self.PLAY_H - 1, 18, 10, 0)  # floor
 
         # ray angles: fixedpoint, damit FOV/64 sauber läuft
         angle_step_fp = (self.FOV << 16) // WIDTH
@@ -7623,8 +9006,10 @@ class DoomLiteGame:
 
             start = (self.PLAY_H - line_h) // 2
             end = start + line_h - 1
-            if start < 0: start = 0
-            if end >= self.PLAY_H: end = self.PLAY_H - 1
+            if start < 0:
+                start = 0
+            if end >= self.PLAY_H:
+                end = self.PLAY_H - 1
 
             # simple shading
             b = 220 - int(dist * 18)
@@ -7724,6 +9109,7 @@ class DoomLiteGame:
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
+        """Main game loop for the raycaster mini-game (handles input and rendering)."""
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -7745,10 +9131,19 @@ class DoomLiteGame:
                 self.frame += 1
 
                 # input
-                d = joystick.read_direction([
-                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-                ], debounce=False)
+                d = joystick.read_direction(
+                    [
+                        JOYSTICK_UP,
+                        JOYSTICK_DOWN,
+                        JOYSTICK_LEFT,
+                        JOYSTICK_RIGHT,
+                        JOYSTICK_UP_LEFT,
+                        JOYSTICK_UP_RIGHT,
+                        JOYSTICK_DOWN_LEFT,
+                        JOYSTICK_DOWN_RIGHT,
+                    ],
+                    debounce=False,
+                )
 
                 # rotate
                 rot = 0
@@ -7812,13 +9207,17 @@ class DoomLiteGame:
             except RestartProgram:
                 return
 
+
 # ======================================================================
 #                              MENUS / FLOW
 # ======================================================================
 
+
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
+
     def __init__(self, joystick, score, best, best_name="---"):
+        """Initialize the GameOver menu with scores and joystick reference."""
         self.joystick = joystick
         self.score = score
         self.best = best
@@ -7826,6 +9225,7 @@ class GameOverMenu:
         self.opts = ["RETRY", "MENU"]
 
     def run(self):
+        """Show menu and return selected option index (0=retry,1=menu)."""
         idx = 0
         prev = -1
         last_move = ticks_ms()
@@ -7866,9 +9266,12 @@ class GameOverMenu:
 
             sleep_ms(30)
 
+
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
+
     def __init__(self):
+        """Build the main game selection menu with joystick and highscore storage."""
         self.joystick = Joystick()
         self.highscores = HighScores()
         self.game_classes = {
@@ -7902,6 +9305,7 @@ class GameSelect:
         self.sorted_games = keys
 
     def run_game_selector(self):
+        """Show the game list and return the selected game's class when chosen."""
         games = self.sorted_games
         selected = 0
         top = 0
@@ -7927,7 +9331,9 @@ class GameSelect:
                     hs = self.highscores.best(name)
                     hn = self.highscores.best_name(name)
                     hs_str = str(hs) + " " + str(hn)
-                    draw_text_small(WIDTH - len(hs_str) * 6, 5 + i * 15 + 8, hs_str, 120, 120, 0)
+                    draw_text_small(
+                        WIDTH - len(hs_str) * 6, 5 + i * 15 + 8, hs_str, 120, 120, 0
+                    )
 
             if ticks_diff(now, last_move) > move_delay:
                 d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
@@ -7950,6 +9356,7 @@ class GameSelect:
             sleep_ms(30)
 
     def run(self):
+        """Main loop: select games, run them and handle highscores flow."""
         global game_over, global_score
 
         while True:
@@ -7967,13 +9374,17 @@ class GameSelect:
                     best = self.highscores.best(game_name)
                     best_name = self.highscores.best_name(game_name)
                     if global_score > best:
-                        initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
+                        initials = InitialsEntryMenu(
+                            self.joystick, global_score, best, best_name
+                        ).run()
                         if initials:
                             self.highscores.update(game_name, global_score, initials)
                     # refresh best name in case initials were saved
                     best = self.highscores.best(game_name)
                     best_name = self.highscores.best_name(game_name)
-                    choice = GameOverMenu(self.joystick, global_score, best, best_name).run()
+                    choice = GameOverMenu(
+                        self.joystick, global_score, best, best_name
+                    ).run()
                     if choice == "RETRY":
                         continue
                     else:
@@ -7981,8 +9392,20 @@ class GameSelect:
                 else:
                     break
 
+
 # ---------- Main ----------
 def main():
+    """
+    Application entry point.
+
+    Performs runtime initialization (garbage collection, display startup,
+    optional buffered framebuffer initialization), clears the screen and
+    shows the initial HUD. Binds commonly used runtime helpers into any
+    optional game modules so they can use shared globals, then enters the
+    main game-selection loop. Handles `RestartProgram` to reset to the
+    top-level menu and displays a simple error marker for unexpected
+    exceptions before returning to the menu.
+    """
     try:
         gc.collect()
     except Exception:
@@ -8003,9 +9426,15 @@ def main():
     except Exception:
         pass
 
-
     # Bind runtime symbols into optional game modules so they can use globals
     def _bind_mod(m):
+        """
+        Inject common runtime symbols into the provided module `m`.
+
+        This allows optional or inlined game modules to reference the
+        shared display, drawing helpers, timing functions and constants
+        without importing the main application directly.
+        """
         if not m:
             return
         try:
@@ -8032,8 +9461,6 @@ def main():
 
     _bind_mod(mod_2048)
 
-    
-
     while True:
         try:
             GameSelect().run()
@@ -8050,10 +9477,12 @@ def main():
             display.clear()
             maybe_collect(1)
 
+
 # Pygbag async wrapper for browser compatibility
 async def async_main():
+    """Async entrypoint for pygbag/web: initialize hardware and run menu."""
     import asyncio
-    
+
     try:
         gc.collect()
     except Exception:
@@ -8072,6 +9501,7 @@ async def async_main():
 
     # Bind optional game modules (same as in main)
     def _bind_mod_async(m):
+        """Bind shared display and helper symbols into optional modules (async)."""
         if not m:
             return
         try:
@@ -8110,6 +9540,7 @@ async def async_main():
             # Failsafe: show simple error marker and reset to menu
             print("Error:", e)
             import traceback
+
             traceback.print_exc()
             display.clear()
             draw_text(1, 20, "ERR", 255, 0, 0)
@@ -8119,11 +9550,11 @@ async def async_main():
         # Yield to browser event loop after each game loop iteration
         await asyncio.sleep(0)
 
+
 if __name__ == "__main__":
     if IS_PYGBAG:
         import asyncio
+
         asyncio.run(async_main())
     else:
         main()
-
-
