@@ -377,3 +377,101 @@ class BaseMenu:
                 return result
             
             arcade_app.sleep_ms(30)
+
+
+# ============================================================================
+# Common Helper Functions
+# ============================================================================
+
+def clamp(value, min_val, max_val):
+    """
+    Clamp a value between min and max.
+    
+    Args:
+        value: Value to clamp
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+    
+    Returns:
+        Clamped value
+    """
+    return max(min_val, min(max_val, value))
+
+
+def distance(x1, y1, x2, y2):
+    """
+    Calculate Euclidean distance between two points.
+    
+    Args:
+        x1, y1: First point coordinates
+        x2, y2: Second point coordinates
+    
+    Returns:
+        float: Distance between points
+    """
+    import math
+    dx = x2 - x1
+    dy = y2 - y1
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def rect_collision(x1, y1, w1, h1, x2, y2, w2, h2):
+    """
+    Check if two axis-aligned rectangles overlap.
+    
+    Args:
+        x1, y1, w1, h1: First rectangle (x, y, width, height)
+        x2, y2, w2, h2: Second rectangle (x, y, width, height)
+    
+    Returns:
+        bool: True if rectangles overlap
+    """
+    return (x1 < x2 + w2 and
+            x1 + w1 > x2 and
+            y1 < y2 + h2 and
+            y1 + h1 > y2)
+
+
+def point_in_rect(px, py, rx, ry, rw, rh):
+    """
+    Check if a point is inside a rectangle.
+    
+    Args:
+        px, py: Point coordinates
+        rx, ry, rw, rh: Rectangle (x, y, width, height)
+    
+    Returns:
+        bool: True if point is inside rectangle
+    """
+    return rx <= px < rx + rw and ry <= py < ry + rh
+
+
+def wrap_coordinate(value, max_value):
+    """
+    Wrap a coordinate to stay within [0, max_value).
+    
+    Useful for toroidal (wraparound) game fields like Snake.
+    
+    Args:
+        value: Coordinate value
+        max_value: Maximum value (exclusive)
+    
+    Returns:
+        int: Wrapped coordinate
+    """
+    return value % max_value
+
+
+def lerp(start, end, t):
+    """
+    Linear interpolation between start and end.
+    
+    Args:
+        start: Start value
+        end: End value
+        t: Interpolation factor (0.0 to 1.0)
+    
+    Returns:
+        Interpolated value
+    """
+    return start + (end - start) * t
