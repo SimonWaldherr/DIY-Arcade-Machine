@@ -11028,6 +11028,122 @@ class DoomLiteGame:
 # ======================================================================
 
 
+class SettingsMenu:
+    """
+    Settings menu for adjusting display and system preferences.
+    
+    Currently provides:
+    - Display brightness adjustment (if supported)
+    - About/info screen
+    
+    Future enhancements could include:
+    - Sound on/off toggle
+    - Frame rate adjustment
+    - Control sensitivity
+    """
+    
+    def __init__(self, joystick):
+        """Initialize settings menu with joystick handler."""
+        self.joystick = joystick
+        self.brightness = 128  # Default brightness (0-255)
+    
+    def run(self):
+        """Run the settings menu and return when user exits."""
+        selected = 0
+        prev = -1
+        options = ["BRIGHTNESS", "ABOUT", "BACK"]
+        last_move = ticks_ms()
+        move_delay = 160
+        
+        while True:
+            now = ticks_ms()
+            
+            if selected != prev:
+                prev = selected
+                display.clear()
+                draw_text(2, 2, "SETTINGS", 0, 200, 255)
+                
+                for i, opt in enumerate(options):
+                    col = (255, 255, 255) if i == selected else (111, 111, 111)
+                    y = 18 + i * 12
+                    
+                    if opt == "BRIGHTNESS":
+                        # Show brightness value
+                        text = f"BRIGHT:{int(self.brightness * 100 / 255)}"
+                        draw_text_small(2, y, text, *col)
+                    else:
+                        draw_text_small(2, y, opt, *col)
+            
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([
+                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT
+                ])
+                
+                if d == JOYSTICK_UP and selected > 0:
+                    selected -= 1
+                    last_move = now
+                elif d == JOYSTICK_DOWN and selected < len(options) - 1:
+                    selected += 1
+                    last_move = now
+                elif selected == 0:  # Brightness adjustment
+                    if d == JOYSTICK_LEFT and self.brightness > 32:
+                        self.brightness -= 16
+                        last_move = now
+                        prev = -1  # Force redraw
+                    elif d == JOYSTICK_RIGHT and self.brightness < 255:
+                        self.brightness += 16
+                        last_move = now
+                        prev = -1  # Force redraw
+            
+            if self.joystick.is_pressed():
+                while self.joystick.is_pressed():
+                    sleep_ms(10)
+                
+                if options[selected] == "ABOUT":
+                    self.show_about()
+                    prev = -1  # Force redraw
+                elif options[selected] == "BACK":
+                    return
+            
+            c_button, _ = self.joystick.nunchuck.buttons()
+            if c_button:
+                while True:
+                    cb, _ = self.joystick.nunchuck.buttons()
+                    if not cb:
+                        break
+                    sleep_ms(10)
+                return
+            
+            sleep_ms(30)
+    
+    def show_about(self):
+        """Display an about/info screen."""
+        display.clear()
+        draw_text_small(2, 2, "DIY ARCADE", 255, 200, 0)
+        draw_text_small(2, 10, "64x64 LED", 200, 200, 200)
+        draw_text_small(2, 18, "22+ GAMES", 200, 200, 200)
+        draw_text_small(2, 28, "PLATFORMS:", 150, 150, 150)
+        draw_text_small(2, 36, "-MICROPYTHON", 120, 120, 120)
+        draw_text_small(2, 44, "-DESKTOP", 120, 120, 120)
+        draw_text_small(2, 52, "-BROWSER", 120, 120, 120)
+        
+        # Wait for any button
+        while True:
+            if self.joystick.is_pressed():
+                while self.joystick.is_pressed():
+                    sleep_ms(10)
+                break
+            c_button, _ = self.joystick.nunchuck.buttons()
+            if c_button:
+                while True:
+                    cb, _ = self.joystick.nunchuck.buttons()
+                    if not cb:
+                        break
+                    sleep_ms(10)
+                break
+            sleep_ms(30)
+
+
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
 
@@ -11117,6 +11233,8 @@ class GameSelect:
         if "DEMOS" in keys:
             keys.remove("DEMOS")
             keys.insert(0, "DEMOS")
+        # Add SETTINGS as a special menu item at the end
+        keys.append("---SETTINGS---")
         self.sorted_games = keys
 
     def run_game_selector(self):
@@ -11176,6 +11294,11 @@ class GameSelect:
 
         while True:
             game_name = self.run_game_selector()
+            
+            # Handle special settings menu
+            if game_name == "---SETTINGS---":
+                SettingsMenu(self.joystick).run()
+                continue
 
             # retry loop
             while True:
@@ -11279,6 +11402,16 @@ class GameSelect:
 
         while True:
             game_name = await self.run_game_selector_async()
+            
+            # Handle special settings menu
+            if game_name == "---SETTINGS---":
+                # Settings menu is synchronous, but we can wrap it
+                try:
+                    SettingsMenu(self.joystick).run()
+                except Exception:
+                    pass
+                await asyncio.sleep(0)
+                continue
 
             # retry loop
             while True:
