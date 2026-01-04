@@ -252,3 +252,128 @@ class BaseGame:
                     
             except arcade_app.RestartProgram:
                 return
+
+
+class BaseMenu:
+    """
+    Base class for menu screens with common navigation patterns.
+    
+    Provides:
+    - Up/down navigation through options
+    - Selection with Z button
+    - Back/cancel with C button
+    - Automatic redraw when selection changes
+    """
+    
+    def __init__(self, joystick):
+        """
+        Initialize menu with joystick handler.
+        
+        Args:
+            joystick: Joystick/input handler object
+        """
+        self.joystick = joystick
+        self.selected = 0
+        self.prev_selected = -1
+        self.move_delay = 140  # ms between navigation moves
+        self.last_move = 0
+    
+    def get_options(self):
+        """
+        Return list of menu options.
+        
+        Override this in subclasses to provide menu items.
+        
+        Returns:
+            list: List of option strings
+        """
+        return []
+    
+    def draw(self):
+        """
+        Draw the menu screen.
+        
+        Override this in subclasses to customize appearance.
+        Default implementation clears screen and draws options.
+        """
+        # Import arcade_app at runtime to avoid circular imports
+        import arcade_app
+        
+        arcade_app.display.clear()
+        options = self.get_options()
+        
+        for i, option in enumerate(options):
+            col = (255, 255, 255) if i == self.selected else (111, 111, 111)
+            arcade_app.draw_text(8, 20 + i * 15, option, *col)
+    
+    def handle_input(self):
+        """
+        Process one frame of input and update selection.
+        
+        Returns:
+            str or None: Selected option if confirmed, None otherwise
+        """
+        # Import arcade_app at runtime to avoid circular imports
+        import arcade_app
+        
+        now = arcade_app.ticks_ms()
+        options = self.get_options()
+        
+        # Handle navigation
+        if arcade_app.ticks_diff(now, self.last_move) > self.move_delay:
+            d = self.joystick.read_direction([
+                arcade_app.JOYSTICK_UP,
+                arcade_app.JOYSTICK_DOWN
+            ])
+            if d == arcade_app.JOYSTICK_UP and self.selected > 0:
+                self.selected -= 1
+                self.last_move = now
+            elif d == arcade_app.JOYSTICK_DOWN and self.selected < len(options) - 1:
+                self.selected += 1
+                self.last_move = now
+        
+        # Handle selection
+        if self.joystick.is_pressed():
+            # Wait for release to avoid double-trigger
+            while self.joystick.is_pressed():
+                arcade_app.sleep_ms(10)
+            return options[self.selected]
+        
+        # Check C button for cancel (if subclass wants it)
+        try:
+            c_button, _ = self.joystick.nunchuck.buttons()
+            if c_button:
+                return "__CANCEL__"
+        except Exception:
+            pass
+        
+        return None
+    
+    def run(self):
+        """
+        Run the menu loop until an option is selected.
+        
+        Returns:
+            str: Selected option or None if cancelled
+        """
+        # Import arcade_app at runtime to avoid circular imports
+        import arcade_app
+        
+        self.selected = 0
+        self.prev_selected = -1
+        self.last_move = arcade_app.ticks_ms()
+        
+        while True:
+            # Redraw only when selection changes
+            if self.selected != self.prev_selected:
+                self.prev_selected = self.selected
+                self.draw()
+            
+            # Process input
+            result = self.handle_input()
+            if result is not None:
+                if result == "__CANCEL__":
+                    return None
+                return result
+            
+            arcade_app.sleep_ms(30)
