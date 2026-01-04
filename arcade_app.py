@@ -1,7 +1,78 @@
 """
-This file contains the core logic for the arcade application, including runtime detection,
-display handling, and utility functions for game development. It supports both MicroPython
-and desktop environments, ensuring compatibility across platforms.
+DIY Arcade Machine - Main Application Module
+
+This file contains the complete arcade application including all games, menus,
+and utility functions. It provides a comprehensive retro gaming experience on
+64x64 LED matrix displays with support for multiple platforms.
+
+Platform Support:
+-----------------
+- MicroPython (RP2040 + HUB75): Physical LED matrix with Nunchuk controller
+- Desktop (CPython + PyGame): Development and testing environment
+- Browser (Pygbag/WASM): Web-based arcade accessible via any modern browser
+
+Architecture:
+-------------
+The codebase is organized into several logical sections:
+
+1. Runtime Detection & Platform Setup
+   - Platform-specific imports and initialization
+   - Display abstraction layer (HUB75 / PyGame)
+   - Controller handling (I2C Nunchuk / Keyboard)
+
+2. Core Utilities & Helpers
+   - Drawing functions (text, shapes, lines)
+   - Color conversion and manipulation
+   - Timing and frame rate control
+   - Memory management
+
+3. Game Infrastructure
+   - High score tracking and persistence
+   - Menu systems (game select, settings, game over)
+   - Initials entry for high scores
+
+4. Games (22+ included)
+   - Classic arcade (Snake, Pong, Breakout, Pac-Man)
+   - Puzzle games (Tetris, 2048, Sokoban)
+   - Action games (Asteroids, R-Type, Flappy)
+   - Strategy (Reversi, Qix, Maze)
+   - Modern (Doom Lite raycaster, Lunar Lander)
+
+5. Main Loop & Entry Points
+   - Synchronous main() for desktop/MicroPython
+   - Asynchronous async_main() for browser/pygbag
+
+Code Organization:
+------------------
+For better maintainability, common patterns have been extracted to game_utils.py:
+- ShadowBuffer: Efficient display update tracking
+- BaseGame: Common game loop structure
+- BaseMenu: Standard menu navigation
+- Helper functions: collision detection, distance, interpolation
+
+Usage:
+------
+Desktop:
+    python main.py
+
+Browser:
+    pygbag --serve .
+
+MicroPython:
+    Upload main.py and arcade_app.py (or arcade_app.mpy) to device
+
+Best Practices:
+---------------
+This codebase follows DRY, KISS, and YAGNI principles:
+- DRY: Common patterns extracted to reusable utilities
+- KISS: Simple, focused classes with clear responsibilities  
+- YAGNI: Only implements features that are actually needed
+
+When adding new games:
+1. Consider extending game_utils.BaseGame for standard game loop
+2. Use existing drawing and collision utilities
+3. Follow the established patterns from existing games
+4. Keep memory usage low for MicroPython compatibility
 """
 
 import random
