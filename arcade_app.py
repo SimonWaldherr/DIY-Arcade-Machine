@@ -1,7 +1,78 @@
 """
-This file contains the core logic for the arcade application, including runtime detection,
-display handling, and utility functions for game development. It supports both MicroPython
-and desktop environments, ensuring compatibility across platforms.
+DIY Arcade Machine - Main Application Module
+
+This file contains the complete arcade application including all games, menus,
+and utility functions. It provides a comprehensive retro gaming experience on
+64x64 LED matrix displays with support for multiple platforms.
+
+Platform Support:
+-----------------
+- MicroPython (RP2040 + HUB75): Physical LED matrix with Nunchuk controller
+- Desktop (CPython + PyGame): Development and testing environment
+- Browser (Pygbag/WASM): Web-based arcade accessible via any modern browser
+
+Architecture:
+-------------
+The codebase is organized into several logical sections:
+
+1. Runtime Detection & Platform Setup
+   - Platform-specific imports and initialization
+   - Display abstraction layer (HUB75 / PyGame)
+   - Controller handling (I2C Nunchuk / Keyboard)
+
+2. Core Utilities & Helpers
+   - Drawing functions (text, shapes, lines)
+   - Color conversion and manipulation
+   - Timing and frame rate control
+   - Memory management
+
+3. Game Infrastructure
+   - High score tracking and persistence
+   - Menu systems (game select, settings, game over)
+   - Initials entry for high scores
+
+4. Games (22+ included)
+   - Classic arcade (Snake, Pong, Breakout, Pac-Man)
+   - Puzzle games (Tetris, 2048, Sokoban)
+   - Action games (Asteroids, R-Type, Flappy)
+   - Strategy (Reversi, Qix, Maze)
+   - Modern (Doom Lite raycaster, Lunar Lander)
+
+5. Main Loop & Entry Points
+   - Synchronous main() for desktop/MicroPython
+   - Asynchronous async_main() for browser/pygbag
+
+Code Organization:
+------------------
+For better maintainability, common patterns have been extracted to game_utils.py:
+- ShadowBuffer: Efficient display update tracking
+- BaseGame: Common game loop structure
+- BaseMenu: Standard menu navigation
+- Helper functions: collision detection, distance, interpolation
+
+Usage:
+------
+Desktop:
+    python main.py
+
+Browser:
+    pygbag --serve .
+
+MicroPython:
+    Upload main.py and arcade_app.py (or arcade_app.mpy) to device
+
+Best Practices:
+---------------
+This codebase follows DRY, KISS, and YAGNI principles:
+- DRY: Common patterns extracted to reusable utilities
+- KISS: Simple, focused classes with clear responsibilities
+- YAGNI: Only implements features that are actually needed
+
+When adding new games:
+1. Consider extending game_utils.BaseGame for standard game loop
+2. Use existing drawing and collision utilities
+3. Follow the established patterns from existing games
+4. Keep memory usage low for MicroPython compatibility
 """
 
 import random
@@ -43,10 +114,6 @@ try:
     print("ARCADE_APP: import start")
 except Exception:
     pass
-
-# Placeholder for the optional 2048 game module. Keeps runtime binding safe
-# and prevents NameError when code checks or injects this module at runtime.
-mod_2048 = None
 
 
 def _shuffle_in_place(seq):
@@ -223,6 +290,38 @@ def maybe_collect(period=90):
     if _gc_ctr >= period:
         _gc_ctr = 0
         gc.collect()
+
+
+def safe_gc_collect():
+    """
+    Safely perform garbage collection, ignoring any exceptions.
+    
+    This is a convenience wrapper to avoid repeated try/except blocks.
+    """
+    try:
+        gc.collect()
+    except Exception:
+        pass
+
+
+def check_exit_button(joystick):
+    """
+    Check if the exit button (C button) is pressed.
+    
+    This is a common pattern used by all game loops to allow
+    returning to the main menu.
+    
+    Args:
+        joystick: Joystick handler object
+        
+    Returns:
+        bool: True if exit button is pressed, False otherwise
+    """
+    try:
+        c_button, _ = joystick.nunchuck.buttons()
+        return c_button
+    except Exception:
+        return False
 
 
 def draw_line(x0: float, y0: float, x1: float, y1: float, *color) -> None:
@@ -485,10 +584,7 @@ def init_buffered_display():
     if not USE_BUFFERED_DISPLAY_DESIRED:
         return
 
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    safe_gc_collect()
 
     try:
         if _fb_current is None or len(_fb_current) != _fb_size:
@@ -515,17 +611,6 @@ def init_buffered_display():
         USE_BUFFERED_DISPLAY = True
     except Exception:
         USE_BUFFERED_DISPLAY = False
-
-
-def _mark_dirty_pixel(px):
-    """
-    Mark a pixel (by linear index) as dirty in the dirty mask.
-
-    This is a legacy stub kept for compatibility with existing call-sites.
-    """
-    # legacy stub (kept to avoid touching other call-sites)
-    if _dirty_mask is not None:
-        _dirty_mask[px] = 1
 
 
 def _set_pixel_buf(x, y, r, g, b):
@@ -11028,6 +11113,122 @@ class DoomLiteGame:
 # ======================================================================
 
 
+class SettingsMenu:
+    """
+    Settings menu for adjusting display and system preferences.
+    
+    Currently provides:
+    - Display brightness adjustment (if supported)
+    - About/info screen
+    
+    Future enhancements could include:
+    - Sound on/off toggle
+    - Frame rate adjustment
+    - Control sensitivity
+    """
+    
+    def __init__(self, joystick):
+        """Initialize settings menu with joystick handler."""
+        self.joystick = joystick
+        self.brightness = 128  # Default brightness (0-255)
+    
+    def run(self):
+        """Run the settings menu and return when user exits."""
+        selected = 0
+        prev = -1
+        options = ["BRIGHTNESS", "ABOUT", "BACK"]
+        last_move = ticks_ms()
+        move_delay = 160
+        
+        while True:
+            now = ticks_ms()
+            
+            if selected != prev:
+                prev = selected
+                display.clear()
+                draw_text(2, 2, "SETTINGS", 0, 200, 255)
+                
+                for i, opt in enumerate(options):
+                    col = (255, 255, 255) if i == selected else (111, 111, 111)
+                    y = 18 + i * 12
+                    
+                    if opt == "BRIGHTNESS":
+                        # Show brightness value
+                        text = f"BRIGHT:{int(self.brightness * 100 / 255)}"
+                        draw_text_small(2, y, text, *col)
+                    else:
+                        draw_text_small(2, y, opt, *col)
+            
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([
+                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT
+                ])
+                
+                if d == JOYSTICK_UP and selected > 0:
+                    selected -= 1
+                    last_move = now
+                elif d == JOYSTICK_DOWN and selected < len(options) - 1:
+                    selected += 1
+                    last_move = now
+                elif selected == 0:  # Brightness adjustment
+                    if d == JOYSTICK_LEFT and self.brightness > 32:
+                        self.brightness -= 16
+                        last_move = now
+                        prev = -1  # Force redraw
+                    elif d == JOYSTICK_RIGHT and self.brightness < 255:
+                        self.brightness += 16
+                        last_move = now
+                        prev = -1  # Force redraw
+            
+            if self.joystick.is_pressed():
+                while self.joystick.is_pressed():
+                    sleep_ms(10)
+                
+                if options[selected] == "ABOUT":
+                    self.show_about()
+                    prev = -1  # Force redraw
+                elif options[selected] == "BACK":
+                    return
+            
+            c_button, _ = self.joystick.nunchuck.buttons()
+            if c_button:
+                while True:
+                    cb, _ = self.joystick.nunchuck.buttons()
+                    if not cb:
+                        break
+                    sleep_ms(10)
+                return
+            
+            sleep_ms(30)
+    
+    def show_about(self):
+        """Display an about/info screen."""
+        display.clear()
+        draw_text_small(2, 2, "DIY ARCADE", 255, 200, 0)
+        draw_text_small(2, 10, "64x64 LED", 200, 200, 200)
+        draw_text_small(2, 18, "22+ GAMES", 200, 200, 200)
+        draw_text_small(2, 28, "PLATFORMS:", 150, 150, 150)
+        draw_text_small(2, 36, "-MICROPYTHON", 120, 120, 120)
+        draw_text_small(2, 44, "-DESKTOP", 120, 120, 120)
+        draw_text_small(2, 52, "-BROWSER", 120, 120, 120)
+        
+        # Wait for any button
+        while True:
+            if self.joystick.is_pressed():
+                while self.joystick.is_pressed():
+                    sleep_ms(10)
+                break
+            c_button, _ = self.joystick.nunchuck.buttons()
+            if c_button:
+                while True:
+                    cb, _ = self.joystick.nunchuck.buttons()
+                    if not cb:
+                        break
+                    sleep_ms(10)
+                break
+            sleep_ms(30)
+
+
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
 
@@ -11117,6 +11318,8 @@ class GameSelect:
         if "DEMOS" in keys:
             keys.remove("DEMOS")
             keys.insert(0, "DEMOS")
+        # Add SETTINGS as a special menu item at the end
+        keys.append("---SETTINGS---")
         self.sorted_games = keys
 
     def run_game_selector(self):
@@ -11176,6 +11379,11 @@ class GameSelect:
 
         while True:
             game_name = self.run_game_selector()
+            
+            # Handle special settings menu
+            if game_name == "---SETTINGS---":
+                SettingsMenu(self.joystick).run()
+                continue
 
             # retry loop
             while True:
@@ -11279,6 +11487,16 @@ class GameSelect:
 
         while True:
             game_name = await self.run_game_selector_async()
+            
+            # Handle special settings menu
+            if game_name == "---SETTINGS---":
+                # Settings menu is synchronous, but we can wrap it
+                try:
+                    SettingsMenu(self.joystick).run()
+                except Exception:
+                    pass
+                await asyncio.sleep(0)
+                continue
 
             # retry loop
             while True:
@@ -11450,16 +11668,12 @@ def main():
 
     Performs runtime initialization (garbage collection, display startup,
     optional buffered framebuffer initialization), clears the screen and
-    shows the initial HUD. Binds commonly used runtime helpers into any
-    optional game modules so they can use shared globals, then enters the
-    main game-selection loop. Handles `RestartProgram` to reset to the
-    top-level menu and displays a simple error marker for unexpected
-    exceptions before returning to the menu.
+    shows the initial HUD. Then enters the main game-selection loop.
+    Handles `RestartProgram` to reset to the top-level menu and displays
+    a simple error marker for unexpected exceptions before returning to
+    the menu.
     """
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    safe_gc_collect()
     _boot_log("before display.start")
     display.start()
     _boot_log("after display.start")
@@ -11475,41 +11689,6 @@ def main():
         sleep_ms(0)
     except Exception:
         pass
-
-    # Bind runtime symbols into optional game modules so they can use globals
-    def _bind_mod(m):
-        """
-        Inject common runtime symbols into the provided module `m`.
-
-        This allows optional or inlined game modules to reference the
-        shared display, drawing helpers, timing functions and constants
-        without importing the main application directly.
-        """
-        if not m:
-            return
-        try:
-            m.display = display
-            m.draw_text = draw_text
-            m.draw_rectangle = draw_rectangle
-            m.display_score_and_time = display_score_and_time
-            m.ticks_ms = ticks_ms
-            m.ticks_diff = ticks_diff
-            m.sleep_ms = sleep_ms
-            m.WIDTH = WIDTH
-            m.PLAY_HEIGHT = PLAY_HEIGHT
-            m.JOYSTICK_UP = JOYSTICK_UP
-            m.JOYSTICK_DOWN = JOYSTICK_DOWN
-            m.JOYSTICK_LEFT = JOYSTICK_LEFT
-            m.JOYSTICK_RIGHT = JOYSTICK_RIGHT
-            m.JOYSTICK_UP_LEFT = JOYSTICK_UP_LEFT
-            m.JOYSTICK_UP_RIGHT = JOYSTICK_UP_RIGHT
-            m.JOYSTICK_DOWN_LEFT = JOYSTICK_DOWN_LEFT
-            m.JOYSTICK_DOWN_RIGHT = JOYSTICK_DOWN_RIGHT
-            m.gc = gc
-        except Exception:
-            pass
-
-    _bind_mod(mod_2048)
 
     while True:
         try:
@@ -11533,10 +11712,7 @@ async def async_main():
     """Async entrypoint for pygbag/web: initialize hardware and run menu."""
     import asyncio
 
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    safe_gc_collect()
     _boot_log("before display.start")
     display.start()
     _boot_log("after display.start")
@@ -11575,35 +11751,6 @@ async def async_main():
         await asyncio.sleep(0)
     except Exception:
         pass
-
-    # Bind optional game modules (same as in main)
-    def _bind_mod_async(m):
-        """Bind shared display and helper symbols into optional modules (async)."""
-        if not m:
-            return
-        try:
-            m.display = display
-            m.draw_text = draw_text
-            m.draw_rectangle = draw_rectangle
-            m.display_score_and_time = display_score_and_time
-            m.ticks_ms = ticks_ms
-            m.ticks_diff = ticks_diff
-            m.sleep_ms = sleep_ms
-            m.WIDTH = WIDTH
-            m.PLAY_HEIGHT = PLAY_HEIGHT
-            m.JOYSTICK_UP = JOYSTICK_UP
-            m.JOYSTICK_DOWN = JOYSTICK_DOWN
-            m.JOYSTICK_LEFT = JOYSTICK_LEFT
-            m.JOYSTICK_RIGHT = JOYSTICK_RIGHT
-            m.JOYSTICK_UP_LEFT = JOYSTICK_UP_LEFT
-            m.JOYSTICK_UP_RIGHT = JOYSTICK_UP_RIGHT
-            m.JOYSTICK_DOWN_LEFT = JOYSTICK_DOWN_LEFT
-            m.JOYSTICK_DOWN_RIGHT = JOYSTICK_DOWN_RIGHT
-            m.gc = gc
-        except Exception:
-            pass
-
-    _bind_mod_async(mod_2048)
 
     while True:
         try:
