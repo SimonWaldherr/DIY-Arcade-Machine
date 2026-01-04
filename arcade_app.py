@@ -115,10 +115,6 @@ try:
 except Exception:
     pass
 
-# Placeholder for the optional 2048 game module. Keeps runtime binding safe
-# and prevents NameError when code checks or injects this module at runtime.
-mod_2048 = None
-
 
 def _shuffle_in_place(seq):
     """
@@ -294,6 +290,18 @@ def maybe_collect(period=90):
     if _gc_ctr >= period:
         _gc_ctr = 0
         gc.collect()
+
+
+def safe_gc_collect():
+    """
+    Safely perform garbage collection, ignoring any exceptions.
+    
+    This is a convenience wrapper to avoid repeated try/except blocks.
+    """
+    try:
+        gc.collect()
+    except Exception:
+        pass
 
 
 def draw_line(x0: float, y0: float, x1: float, y1: float, *color) -> None:
@@ -556,10 +564,7 @@ def init_buffered_display():
     if not USE_BUFFERED_DISPLAY_DESIRED:
         return
 
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    safe_gc_collect()
 
     try:
         if _fb_current is None or len(_fb_current) != _fb_size:
@@ -586,17 +591,6 @@ def init_buffered_display():
         USE_BUFFERED_DISPLAY = True
     except Exception:
         USE_BUFFERED_DISPLAY = False
-
-
-def _mark_dirty_pixel(px):
-    """
-    Mark a pixel (by linear index) as dirty in the dirty mask.
-
-    This is a legacy stub kept for compatibility with existing call-sites.
-    """
-    # legacy stub (kept to avoid touching other call-sites)
-    if _dirty_mask is not None:
-        _dirty_mask[px] = 1
 
 
 def _set_pixel_buf(x, y, r, g, b):
@@ -11654,16 +11648,12 @@ def main():
 
     Performs runtime initialization (garbage collection, display startup,
     optional buffered framebuffer initialization), clears the screen and
-    shows the initial HUD. Binds commonly used runtime helpers into any
-    optional game modules so they can use shared globals, then enters the
-    main game-selection loop. Handles `RestartProgram` to reset to the
-    top-level menu and displays a simple error marker for unexpected
-    exceptions before returning to the menu.
+    shows the initial HUD. Then enters the main game-selection loop.
+    Handles `RestartProgram` to reset to the top-level menu and displays
+    a simple error marker for unexpected exceptions before returning to
+    the menu.
     """
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    safe_gc_collect()
     _boot_log("before display.start")
     display.start()
     _boot_log("after display.start")
@@ -11679,41 +11669,6 @@ def main():
         sleep_ms(0)
     except Exception:
         pass
-
-    # Bind runtime symbols into optional game modules so they can use globals
-    def _bind_mod(m):
-        """
-        Inject common runtime symbols into the provided module `m`.
-
-        This allows optional or inlined game modules to reference the
-        shared display, drawing helpers, timing functions and constants
-        without importing the main application directly.
-        """
-        if not m:
-            return
-        try:
-            m.display = display
-            m.draw_text = draw_text
-            m.draw_rectangle = draw_rectangle
-            m.display_score_and_time = display_score_and_time
-            m.ticks_ms = ticks_ms
-            m.ticks_diff = ticks_diff
-            m.sleep_ms = sleep_ms
-            m.WIDTH = WIDTH
-            m.PLAY_HEIGHT = PLAY_HEIGHT
-            m.JOYSTICK_UP = JOYSTICK_UP
-            m.JOYSTICK_DOWN = JOYSTICK_DOWN
-            m.JOYSTICK_LEFT = JOYSTICK_LEFT
-            m.JOYSTICK_RIGHT = JOYSTICK_RIGHT
-            m.JOYSTICK_UP_LEFT = JOYSTICK_UP_LEFT
-            m.JOYSTICK_UP_RIGHT = JOYSTICK_UP_RIGHT
-            m.JOYSTICK_DOWN_LEFT = JOYSTICK_DOWN_LEFT
-            m.JOYSTICK_DOWN_RIGHT = JOYSTICK_DOWN_RIGHT
-            m.gc = gc
-        except Exception:
-            pass
-
-    _bind_mod(mod_2048)
 
     while True:
         try:
@@ -11737,10 +11692,7 @@ async def async_main():
     """Async entrypoint for pygbag/web: initialize hardware and run menu."""
     import asyncio
 
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    safe_gc_collect()
     _boot_log("before display.start")
     display.start()
     _boot_log("after display.start")
@@ -11779,35 +11731,6 @@ async def async_main():
         await asyncio.sleep(0)
     except Exception:
         pass
-
-    # Bind optional game modules (same as in main)
-    def _bind_mod_async(m):
-        """Bind shared display and helper symbols into optional modules (async)."""
-        if not m:
-            return
-        try:
-            m.display = display
-            m.draw_text = draw_text
-            m.draw_rectangle = draw_rectangle
-            m.display_score_and_time = display_score_and_time
-            m.ticks_ms = ticks_ms
-            m.ticks_diff = ticks_diff
-            m.sleep_ms = sleep_ms
-            m.WIDTH = WIDTH
-            m.PLAY_HEIGHT = PLAY_HEIGHT
-            m.JOYSTICK_UP = JOYSTICK_UP
-            m.JOYSTICK_DOWN = JOYSTICK_DOWN
-            m.JOYSTICK_LEFT = JOYSTICK_LEFT
-            m.JOYSTICK_RIGHT = JOYSTICK_RIGHT
-            m.JOYSTICK_UP_LEFT = JOYSTICK_UP_LEFT
-            m.JOYSTICK_UP_RIGHT = JOYSTICK_UP_RIGHT
-            m.JOYSTICK_DOWN_LEFT = JOYSTICK_DOWN_LEFT
-            m.JOYSTICK_DOWN_RIGHT = JOYSTICK_DOWN_RIGHT
-            m.gc = gc
-        except Exception:
-            pass
-
-    _bind_mod_async(mod_2048)
 
     while True:
         try:
