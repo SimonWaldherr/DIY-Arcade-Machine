@@ -65,7 +65,7 @@ Best Practices:
 ---------------
 This codebase follows DRY, KISS, and YAGNI principles:
 - DRY: Common patterns extracted to reusable utilities
-- KISS: Simple, focused classes with clear responsibilities  
+- KISS: Simple, focused classes with clear responsibilities
 - YAGNI: Only implements features that are actually needed
 
 When adding new games:

@@ -448,7 +448,7 @@ def point_in_rect(px, py, rx, ry, rw, rh):
 
 def wrap_coordinate(value, max_value):
     """
-    Wrap a coordinate to stay within [0, max_value).
+    Wrap coordinates to stay within [0, max_value).
     
     Useful for toroidal (wraparound) game fields like Snake.
     
