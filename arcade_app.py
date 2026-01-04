@@ -304,6 +304,26 @@ def safe_gc_collect():
         pass
 
 
+def check_exit_button(joystick):
+    """
+    Check if the exit button (C button) is pressed.
+    
+    This is a common pattern used by all game loops to allow
+    returning to the main menu.
+    
+    Args:
+        joystick: Joystick handler object
+        
+    Returns:
+        bool: True if exit button is pressed, False otherwise
+    """
+    try:
+        c_button, _ = joystick.nunchuck.buttons()
+        return c_button
+    except Exception:
+        return False
+
+
 def draw_line(x0: float, y0: float, x1: float, y1: float, *color) -> None:
     """Draw a Bresenham line between two points.
 
