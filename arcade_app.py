@@ -2733,6 +2733,134 @@ class DodgeGame:
             maybe_collect(140)
 
 
+class TronGame:
+    """
+    TRON LIGHT CYCLE (Endless)
+    Controls:
+      - Left/Right: 90° turn
+      - Z: Turbo (double step)
+      - C: Back to menu
+    """
+    FRAME_MS = const(62)
+    TURBO_STEP = const(2)
+    HUE_STEP = const(7)
+    PALETTE_SIZE = const(128)
+    # GC tick every 120 frames (vs. 140 in Dodge) since the trail never clears.
+    COLLECT_INTERVAL = const(120)
+    # Shared immutable palette to avoid repeated allocation.
+    _PALETTE = tuple(hsb_to_rgb((i * HUE_STEP) % 360, 1, 1) for i in range(PALETTE_SIZE))
+
+    _LEFT_TURN = {
+        JOYSTICK_UP: JOYSTICK_LEFT,
+        JOYSTICK_LEFT: JOYSTICK_DOWN,
+        JOYSTICK_DOWN: JOYSTICK_RIGHT,
+        JOYSTICK_RIGHT: JOYSTICK_UP,
+    }
+    _RIGHT_TURN = {
+        JOYSTICK_UP: JOYSTICK_RIGHT,
+        JOYSTICK_RIGHT: JOYSTICK_DOWN,
+        JOYSTICK_DOWN: JOYSTICK_LEFT,
+        JOYSTICK_LEFT: JOYSTICK_UP,
+    }
+    _DIR_VECS = {
+        JOYSTICK_UP: (0, -1),
+        JOYSTICK_DOWN: (0, 1),
+        JOYSTICK_LEFT: (-1, 0),
+        JOYSTICK_RIGHT: (1, 0),
+    }
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        # Fixed WIDTH x PLAY_HEIGHT grid (64×58 = 3,712 bytes) keeps trail checks O(1) with predictable memory.
+        self.trail = bytearray(WIDTH * PLAY_HEIGHT)
+        self.head_x = WIDTH // 2
+        self.head_y = PLAY_HEIGHT // 2
+        self.direction = JOYSTICK_RIGHT
+        self.score = 0
+        # Small precomputed hue ramp to avoid per-step HSB math during gameplay.
+        self._palette = TronGame._PALETTE
+
+        display.clear()
+        self._occupy(self.head_x, self.head_y)
+        self._draw_head(force=True)
+        display_score_and_time(0, force=True)
+
+    def _idx(self, x, y):
+        return y * WIDTH + x
+
+    def _occupy(self, x, y):
+        self.trail[self._idx(x, y)] = 1
+
+    def _blocked(self, x, y):
+        if x < 0 or x >= WIDTH or y < 0 or y >= PLAY_HEIGHT:
+            return True
+        return self.trail[self._idx(x, y)] != 0
+
+    def _turn(self, d):
+        if d == JOYSTICK_LEFT:
+            self.direction = self._LEFT_TURN[self.direction]
+        elif d == JOYSTICK_RIGHT:
+            self.direction = self._RIGHT_TURN[self.direction]
+
+    def _step(self, turbo):
+        dx, dy = self._DIR_VECS[self.direction]
+        steps = self.TURBO_STEP if turbo else 1
+        for _ in range(steps):
+            nx = self.head_x + dx
+            ny = self.head_y + dy
+            if self._blocked(nx, ny):
+                return False
+            self.head_x = nx
+            self.head_y = ny
+            self.score += 1
+            self._occupy(nx, ny)
+            self._draw_head()
+        return True
+
+    def _draw_head(self, force=False):
+        color = self._palette[self.score % len(self._palette)]
+        r, g, b = color
+        display.set_pixel(self.head_x, self.head_y, r, g, b)
+        if force:
+            display_flush()
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        last_frame = ticks_ms()
+        frame_ms = self.FRAME_MS
+
+        while True:
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, last_frame) < frame_ms:
+                sleep_ms(2)
+                continue
+            last_frame = now
+
+            turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if turn:
+                self._turn(turn)
+
+            alive = self._step(turbo=z_button)
+            global_score = self.score
+            display_score_and_time(self.score)
+
+            if not alive:
+                game_over = True
+                return
+
+            maybe_collect(self.COLLECT_INTERVAL)
+
+
 class RTypeGame:
     """
     R-TYPE / GRADIUS MINI (Endlos-Side-Shooter)
@@ -5853,6 +5981,7 @@ class GameSelect:
             "MAZE": MazeGame,
             "PONG": PongGame,
             "QIX": QixGame,
+            "TRON": TronGame,
             "SIMON": SimonGame,
             "SNAKE": SnakeGame,
             "TETRIS": TetrisGame,

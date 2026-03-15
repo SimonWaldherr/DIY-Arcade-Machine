@@ -140,6 +140,7 @@ The arcade includes **16+ games** accessible via the main menu:
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
+| `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, avoid collisions |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
