@@ -1376,12 +1376,16 @@ class PongGame:
         # miss left
         if x <= 0:
             self.lives -= 1
-            self.left_score = 0
             if self.lives <= 0:
-                global_score = 0
+                # behalte erreichte Punkte für Highscore-Tracking
+                global_score = self.left_score
                 game_over = True
                 return
+            # nur leichte Strafe, keine komplette Score-Nullung
+            if self.left_score > 0:
+                self.left_score = max(0, self.left_score - 5)
             self.reset_ball()
+            return
 
         # miss right -> bonus
         if x >= WIDTH - 1:
@@ -2610,6 +2614,117 @@ class FlappyGame:
             display_score_and_time(self.score)
 
             maybe_collect(140)
+
+
+class DodgeGame:
+    """
+    DODGE (Ausweichspiel)
+    Steuerung:
+      - Links/Rechts: bewegen
+      - Z: kurzer Dash in die letzte Richtung
+      - C: zurück ins Menü
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.player_x = WIDTH // 2
+        self.player_y = PLAY_HEIGHT - 3
+        self.obstacles = []      # [x, y]
+        self.score = 0
+        self.last_dir = JOYSTICK_LEFT
+        self.last_spawn = ticks_ms()
+        self.spawn_ms = 520      # wird mit steigender Punktzahl schneller
+        self.frame_ms = 38
+
+    def _spawn_obstacle(self):
+        # kleine, feste Liste für RP2040 beibehalten
+        if len(self.obstacles) >= 12:
+            return
+        ox = random.randint(0, WIDTH - 1)
+        self.obstacles.append([ox, 0])
+
+    def _move_player(self, joystick, z_button):
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if d:
+            self.last_dir = d
+        step = 1
+        if z_button and self.last_dir:
+            # Dash beschleunigt die letzte Richtung ohne neue Allokation
+            step = 2
+        if self.last_dir == JOYSTICK_LEFT and (d == JOYSTICK_LEFT or z_button):
+            self.player_x = max(0, self.player_x - step)
+        elif self.last_dir == JOYSTICK_RIGHT and (d == JOYSTICK_RIGHT or z_button):
+            self.player_x = min(WIDTH - 2, self.player_x + step)
+
+    def _advance_obstacles(self):
+        new_obs = []
+        for ox, oy in self.obstacles:
+            ny = oy + 1
+            if ny >= PLAY_HEIGHT:
+                self.score += 1
+                continue
+            new_obs.append([ox, ny])
+        self.obstacles = new_obs
+
+    def _collides(self):
+        # Spieler 2x2 Block für bessere Sichtbarkeit
+        px2 = self.player_x + 1
+        py2 = self.player_y + 1
+        for ox, oy in self.obstacles:
+            if self.player_x <= ox <= px2 and self.player_y <= oy <= py2:
+                return True
+        return False
+
+    def _draw(self):
+        display.clear()
+        # Hindernisse
+        sp = display.set_pixel
+        for ox, oy in self.obstacles:
+            sp(ox, oy, 255, 60, 60)
+        # Spieler
+        draw_rectangle(self.player_x, self.player_y, self.player_x + 1, self.player_y + 1, 0, 220, 255)
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        last_frame = ticks_ms()
+        while True:
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, last_frame) < self.frame_ms:
+                sleep_ms(4)
+                continue
+            last_frame = now
+
+            # Spawnrate an Score koppeln, aber Grenzen halten
+            if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
+                self._spawn_obstacle()
+                self.last_spawn = now
+                if self.spawn_ms > 160 and (self.score % 6) == 0:
+                    self.spawn_ms -= 12
+
+            self._move_player(joystick, z_button)
+            self._advance_obstacles()
+
+            if self._collides():
+                global_score = self.score
+                game_over = True
+                return
+
+            global_score = self.score
+            self._draw()
+            maybe_collect(140)
+
 
 class RTypeGame:
     """
@@ -5727,6 +5842,7 @@ class GameSelect:
             "ASTRD": AsteroidGame,
             "BRKOUT": BreakoutGame,
             "FLAPPY": FlappyGame,
+            "DODGE": DodgeGame,
             "MAZE": MazeGame,
             "PONG": PongGame,
             "QIX": QixGame,
@@ -5864,5 +5980,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
