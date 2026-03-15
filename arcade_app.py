@@ -2624,6 +2624,13 @@ class DodgeGame:
       - Z: kurzer Dash in die letzte Richtung
       - C: zurück ins Menü
     """
+    MAX_OBSTACLES = const(12)
+    START_SPAWN_MS = const(520)
+    FRAME_MS = const(38)
+    MIN_SPAWN_MS = const(160)
+    DIFFICULTY_SCORE_INTERVAL = const(6)
+    SPAWN_MS_DECREMENT = const(12)
+
     def __init__(self):
         self.reset()
 
@@ -2634,12 +2641,12 @@ class DodgeGame:
         self.score = 0
         self.last_dir = JOYSTICK_LEFT
         self.last_spawn = ticks_ms()
-        self.spawn_ms = 520      # wird mit steigender Punktzahl schneller
-        self.frame_ms = 38
+        self.spawn_ms = self.START_SPAWN_MS      # wird mit steigender Punktzahl schneller
+        self.frame_ms = self.FRAME_MS
 
     def _spawn_obstacle(self):
         # kleine, feste Liste für RP2040 beibehalten
-        if len(self.obstacles) >= 12:
+        if len(self.obstacles) >= self.MAX_OBSTACLES:
             return
         ox = random.randint(0, WIDTH - 1)
         self.obstacles.append([ox, 0])
@@ -2710,8 +2717,8 @@ class DodgeGame:
             if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
                 self._spawn_obstacle()
                 self.last_spawn = now
-                if self.spawn_ms > 160 and (self.score % 6) == 0:
-                    self.spawn_ms -= 12
+                if self.spawn_ms > self.MIN_SPAWN_MS and (self.score % self.DIFFICULTY_SCORE_INTERVAL) == 0:
+                    self.spawn_ms -= self.SPAWN_MS_DECREMENT
 
             self._move_player(joystick, z_button)
             self._advance_obstacles()
