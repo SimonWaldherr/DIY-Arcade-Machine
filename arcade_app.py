@@ -242,9 +242,9 @@ def _clear_buf():
     w = _fb_w * _fb_h
     global _force_full_flush
     if _fb_current is not None:
+        # Zero unconditionally — cheaper than branching on every byte
         for i in range(w * 3):
-            if _fb_current[i] != 0:
-                _fb_current[i] = 0
+            _fb_current[i] = 0
     # Avoid building a huge list of dirty pixel indices.
     _force_full_flush = True
     if _dirty_mask is not None:
@@ -333,6 +333,58 @@ def draw_play_rect(x, y, w, h, r, g, b):
     if y2 >= PLAY_HEIGHT:
         y2 = PLAY_HEIGHT - 1
     draw_rectangle(x1, y1, x2, y2, r, g, b)
+
+def draw_line(x0, y0, x1, y1, r, g, b):
+    """Bresenham line from (x0,y0) to (x1,y1), clipped to the full display."""
+    x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    sp = display.set_pixel
+    while True:
+        if 0 <= x0 < WIDTH and 0 <= y0 < HEIGHT:
+            sp(x0, y0, r, g, b)
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+
+def _draw_line_wrapped(start, end, color):
+    """Bresenham line with toroidal (modulo) wrapping — used by AsteroidGame."""
+    x0, y0 = int(start[0]), int(start[1])
+    x1, y1 = int(end[0]), int(end[1])
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    x, y = x0, y0
+    sx = -1 if x0 > x1 else 1
+    sy = -1 if y0 > y1 else 1
+    sp = display.set_pixel
+    if dx > dy:
+        err = dx / 2.0
+        while x != x1:
+            sp(x % WIDTH, y % PLAY_HEIGHT, *color)
+            err -= dy
+            if err < 0:
+                y += sy
+                err += dx
+            x += sx
+    else:
+        err = dy / 2.0
+        while y != y1:
+            sp(x % WIDTH, y % PLAY_HEIGHT, *color)
+            err -= dx
+            if err < 0:
+                x += sx
+                err += dy
+            y += sy
+    sp(x % WIDTH, y % PLAY_HEIGHT, *color)
 
 
 # ---------- Global state ----------
@@ -683,8 +735,33 @@ def count_cells_with_mark(mark, width, height):
 class RestartProgram(Exception):
     pass
 
- # ---------- Nunchuk / Joystick ----------
+# ---------- Nunchuk / Joystick ----------
 NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
+
+def _read_direction_from_xy(x, y, possible_directions):
+    """Convert raw joystick axis values (0-255) to a direction constant.
+
+    Diagonals are checked first so that a corner press is never misread as a
+    cardinal direction.  Returns None when no threshold is exceeded or the
+    resulting direction is not in *possible_directions*.
+    """
+    if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
+        return JOYSTICK_DOWN_LEFT
+    if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
+        return JOYSTICK_DOWN_RIGHT
+    if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
+        return JOYSTICK_UP_LEFT
+    if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
+        return JOYSTICK_UP_RIGHT
+    if x < 100 and JOYSTICK_LEFT in possible_directions:
+        return JOYSTICK_LEFT
+    if x > 150 and JOYSTICK_RIGHT in possible_directions:
+        return JOYSTICK_RIGHT
+    if y < 100 and JOYSTICK_DOWN in possible_directions:
+        return JOYSTICK_DOWN
+    if y > 150 and JOYSTICK_UP in possible_directions:
+        return JOYSTICK_UP
+    return None
 
 if IS_MICROPYTHON:
     class Nunchuck:
@@ -791,26 +868,7 @@ if IS_MICROPYTHON:
 
         def read_direction(self, possible_directions, debounce=True):
             x, y = self.nunchuck.joystick()
-
-            # diagonals first
-            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
-                return JOYSTICK_DOWN_LEFT
-            if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
-                return JOYSTICK_DOWN_RIGHT
-            if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
-                return JOYSTICK_UP_LEFT
-            if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
-                return JOYSTICK_UP_RIGHT
-
-            if x < 100 and JOYSTICK_LEFT in possible_directions:
-                return JOYSTICK_LEFT
-            if x > 150 and JOYSTICK_RIGHT in possible_directions:
-                return JOYSTICK_RIGHT
-            if y < 100 and JOYSTICK_DOWN in possible_directions:
-                return JOYSTICK_DOWN
-            if y > 150 and JOYSTICK_UP in possible_directions:
-                return JOYSTICK_UP
-            return None
+            return _read_direction_from_xy(x, y, possible_directions)
 
         def is_pressed(self):
             _, z = self.nunchuck.buttons()
@@ -870,26 +928,7 @@ else:
 
         def read_direction(self, possible_directions, debounce=True):
             x, y = self.nunchuck.joystick()
-
-            # diagonals first
-            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
-                return JOYSTICK_DOWN_LEFT
-            if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
-                return JOYSTICK_DOWN_RIGHT
-            if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
-                return JOYSTICK_UP_LEFT
-            if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
-                return JOYSTICK_UP_RIGHT
-
-            if x < 100 and JOYSTICK_LEFT in possible_directions:
-                return JOYSTICK_LEFT
-            if x > 150 and JOYSTICK_RIGHT in possible_directions:
-                return JOYSTICK_RIGHT
-            if y < 100 and JOYSTICK_DOWN in possible_directions:
-                return JOYSTICK_DOWN
-            if y > 150 and JOYSTICK_UP in possible_directions:
-                return JOYSTICK_UP
-            return None
+            return _read_direction_from_xy(x, y, possible_directions)
 
         def is_pressed(self):
             _, z = self.nunchuck.buttons()
@@ -1580,33 +1619,8 @@ class AsteroidGame:
             return self.lifetime > 0
 
         def draw_line(self, start, end, color):
-            x0, y0 = int(start[0]), int(start[1])
-            x1, y1 = int(end[0]), int(end[1])
-            dx = abs(x1 - x0)
-            dy = abs(y1 - y0)
-            x, y = x0, y0
-            sx = -1 if x0 > x1 else 1
-            sy = -1 if y0 > y1 else 1
-            sp = display.set_pixel
-            if dx > dy:
-                err = dx / 2.0
-                while x != x1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dy
-                    if err < 0:
-                        y += sy
-                        err += dx
-                    x += sx
-            else:
-                err = dy / 2.0
-                while y != y1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dx
-                    if err < 0:
-                        x += sx
-                        err += dy
-                    y += sy
-            sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+            # Delegate to module-level helper to avoid code duplication with Ship
+            _draw_line_wrapped(start, end, color)
 
         def draw(self):
             ex = self.x + math.cos(math.radians(self.angle))
@@ -1650,33 +1664,8 @@ class AsteroidGame:
             self.cooldown = 0
 
         def draw_line(self, start, end, color):
-            x0, y0 = int(start[0]), int(start[1])
-            x1, y1 = int(end[0]), int(end[1])
-            dx = abs(x1 - x0)
-            dy = abs(y1 - y0)
-            x, y = x0, y0
-            sx = -1 if x0 > x1 else 1
-            sy = -1 if y0 > y1 else 1
-            sp = display.set_pixel
-            if dx > dy:
-                err = dx / 2.0
-                while x != x1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dy
-                    if err < 0:
-                        y += sy
-                        err += dx
-                    x += sx
-            else:
-                err = dy / 2.0
-                while y != y1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dx
-                    if err < 0:
-                        x += sx
-                        err += dy
-                    y += sy
-            sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+            # Delegate to module-level helper shared with Projectile
+            _draw_line_wrapped(start, end, color)
 
         def update(self, direction):
             if direction == JOYSTICK_LEFT:
@@ -1870,11 +1859,6 @@ class QixGame:
                  [(self.width - 1, y) for y in range(self.height)])
         self.player_x, self.player_y = random.choice(edges)
         display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
-
-    def place_opponent(self):
-        self.opponent_x = random.randint(1, self.width - 2)
-        self.opponent_y = random.randint(1, self.height - 2)
-        display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
 
     def move_opponent(self):
         global game_over, global_score
@@ -2385,7 +2369,7 @@ class MazeGame:
         if not z_button:
             return
 
-        dx, dy = 0, -1
+        # Compute delta from last movement direction (default: UP if never moved)
         if self.player_direction == JOYSTICK_UP:
             dx, dy = 0, -1
         elif self.player_direction == JOYSTICK_DOWN:
@@ -2394,6 +2378,8 @@ class MazeGame:
             dx, dy = -1, 0
         elif self.player_direction == JOYSTICK_RIGHT:
             dx, dy = 1, 0
+        else:
+            dx, dy = 0, -1
 
         sx = self.player_x + dx
         sy = self.player_y + dy
@@ -4866,26 +4852,8 @@ class LunarLanderGame:
         return abs(d)
 
     def _line(self, x0, y0, x1, y1, r, g, b):
-        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        sp = display.set_pixel
-
-        while True:
-            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
-                sp(x0, y0, r, g, b)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
+        # Delegate to module-level Bresenham helper (shared with UFODefenseGame)
+        draw_line(x0, y0, x1, y1, r, g, b)
 
     def _draw_ship(self, thrust_on=False):
         size = 4
@@ -5109,27 +5077,9 @@ class UFODefenseGame:
         self._last_cross_move = ticks_ms()
 
     def _line(self, x0, y0, x1, y1, col):
-        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        sp = display.set_pixel
+        # Delegate to module-level Bresenham helper (shared with LunarLanderGame)
         r, g, b = col
-
-        while True:
-            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
-                sp(x0, y0, r, g, b)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
+        draw_line(x0, y0, x1, y1, r, g, b)
 
     def _cities_alive(self):
         for c in self.cities:
