@@ -742,8 +742,8 @@ def _read_direction_from_xy(x, y, possible_directions):
     """Convert raw joystick axis values (0-255) to a direction constant.
 
     Diagonals are checked first so that a corner press is never misread as a
-    cardinal direction.  Returns None when no threshold is exceeded or the
-    resulting direction is not in *possible_directions*.
+    cardinal direction.  Returns None when no threshold is exceeded, or when
+    the detected direction is not listed in *possible_directions*.
     """
     if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
         return JOYSTICK_DOWN_LEFT
