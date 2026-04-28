@@ -1376,12 +1376,16 @@ class PongGame:
         # miss left
         if x <= 0:
             self.lives -= 1
-            self.left_score = 0
             if self.lives <= 0:
-                global_score = 0
+                # behalte erreichte Punkte für Highscore-Tracking
+                global_score = self.left_score
                 game_over = True
                 return
+            # nur leichte Strafe, keine komplette Score-Nullung
+            if self.left_score > 0:
+                self.left_score = max(0, self.left_score - 5)
             self.reset_ball()
+            return
 
         # miss right -> bonus
         if x >= WIDTH - 1:
@@ -2610,6 +2614,252 @@ class FlappyGame:
             display_score_and_time(self.score)
 
             maybe_collect(140)
+
+
+class DodgeGame:
+    """
+    DODGE (Ausweichspiel)
+    Steuerung:
+      - Links/Rechts: bewegen
+      - Z: kurzer Dash in die letzte Richtung
+      - C: zurück ins Menü
+    """
+    MAX_OBSTACLES = const(12)
+    START_SPAWN_MS = const(520)
+    FRAME_MS = const(38)
+    MIN_SPAWN_MS = const(160)
+    DIFFICULTY_SCORE_INTERVAL = const(6)
+    SPAWN_MS_DECREMENT = const(12)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.player_x = WIDTH // 2
+        self.player_y = PLAY_HEIGHT - 3
+        self.obstacles = []      # [x, y]
+        self.score = 0
+        self.last_dir = JOYSTICK_LEFT
+        self.last_spawn = ticks_ms()
+        self.spawn_ms = self.START_SPAWN_MS      # wird mit steigender Punktzahl schneller
+        self.frame_ms = self.FRAME_MS
+
+    def _spawn_obstacle(self):
+        # kleine, feste Liste für RP2040 beibehalten
+        if len(self.obstacles) >= self.MAX_OBSTACLES:
+            return
+        ox = random.randint(0, WIDTH - 1)
+        self.obstacles.append([ox, 0])
+
+    def _move_player(self, joystick, z_button):
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if d:
+            self.last_dir = d
+        step = 1
+        if z_button and self.last_dir:
+            # Dash beschleunigt die letzte Richtung ohne neue Allokation
+            step = 2
+        if self.last_dir == JOYSTICK_LEFT and (d == JOYSTICK_LEFT or z_button):
+            self.player_x = max(0, self.player_x - step)
+        elif self.last_dir == JOYSTICK_RIGHT and (d == JOYSTICK_RIGHT or z_button):
+            self.player_x = min(WIDTH - 2, self.player_x + step)
+
+    def _advance_obstacles(self):
+        new_obs = []
+        for ox, oy in self.obstacles:
+            ny = oy + 1
+            if ny >= PLAY_HEIGHT:
+                self.score += 1
+                continue
+            new_obs.append([ox, ny])
+        self.obstacles = new_obs
+
+    def _collides(self):
+        # Spieler 2x2 Block für bessere Sichtbarkeit
+        px2 = self.player_x + 1
+        py2 = self.player_y + 1
+        for ox, oy in self.obstacles:
+            if self.player_x <= ox <= px2 and self.player_y <= oy <= py2:
+                return True
+        return False
+
+    def _draw(self):
+        display.clear()
+        # Hindernisse
+        sp = display.set_pixel
+        for ox, oy in self.obstacles:
+            sp(ox, oy, 255, 60, 60)
+        # Spieler
+        draw_rectangle(self.player_x, self.player_y, self.player_x + 1, self.player_y + 1, 0, 220, 255)
+        display_score_and_time(self.score)
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        last_frame = ticks_ms()
+        while True:
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, last_frame) < self.frame_ms:
+                sleep_ms(4)
+                continue
+            last_frame = now
+
+            # Spawnrate an Score koppeln, aber Grenzen halten
+            if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
+                self._spawn_obstacle()
+                self.last_spawn = now
+                if self.spawn_ms > self.MIN_SPAWN_MS and (self.score % self.DIFFICULTY_SCORE_INTERVAL) == 0:
+                    self.spawn_ms -= self.SPAWN_MS_DECREMENT
+
+            self._move_player(joystick, z_button)
+            self._advance_obstacles()
+
+            if self._collides():
+                global_score = self.score
+                game_over = True
+                return
+
+            global_score = self.score
+            self._draw()
+            maybe_collect(140)
+
+
+class TronGame:
+    """
+    TRON LIGHT CYCLE (Endless)
+    Controls:
+      - Left/Right: 90° turn
+      - Z: Turbo (double step)
+      - C: Back to menu
+    """
+    FRAME_MS = const(62)
+    TURBO_STEP = const(2)
+    HUE_STEP = const(7)
+    PALETTE_SIZE = const(128)
+    # GC tick every 120 frames (vs. 140 in Dodge) since the trail never clears.
+    COLLECT_INTERVAL = const(120)
+    # Shared immutable palette to avoid repeated allocation.
+    _PALETTE = tuple(hsb_to_rgb((i * HUE_STEP) % 360, 1, 1) for i in range(PALETTE_SIZE))
+
+    _LEFT_TURN = {
+        JOYSTICK_UP: JOYSTICK_LEFT,
+        JOYSTICK_LEFT: JOYSTICK_DOWN,
+        JOYSTICK_DOWN: JOYSTICK_RIGHT,
+        JOYSTICK_RIGHT: JOYSTICK_UP,
+    }
+    _RIGHT_TURN = {
+        JOYSTICK_UP: JOYSTICK_RIGHT,
+        JOYSTICK_RIGHT: JOYSTICK_DOWN,
+        JOYSTICK_DOWN: JOYSTICK_LEFT,
+        JOYSTICK_LEFT: JOYSTICK_UP,
+    }
+    _DIR_VECS = {
+        JOYSTICK_UP: (0, -1),
+        JOYSTICK_DOWN: (0, 1),
+        JOYSTICK_LEFT: (-1, 0),
+        JOYSTICK_RIGHT: (1, 0),
+    }
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        # Fixed WIDTH x PLAY_HEIGHT grid (64×58 = 3,712 bytes) keeps trail checks O(1) with predictable memory.
+        self.trail = bytearray(WIDTH * PLAY_HEIGHT)
+        self.head_x = WIDTH // 2
+        self.head_y = PLAY_HEIGHT // 2
+        self.direction = JOYSTICK_RIGHT
+        self.score = 0
+        # Small precomputed hue ramp to avoid per-step HSB math during gameplay.
+        self._palette = TronGame._PALETTE
+
+        display.clear()
+        self._occupy(self.head_x, self.head_y)
+        self._draw_head(force=True)
+        display_score_and_time(0, force=True)
+
+    def _idx(self, x, y):
+        return y * WIDTH + x
+
+    def _occupy(self, x, y):
+        self.trail[self._idx(x, y)] = 1
+
+    def _blocked(self, x, y):
+        if x < 0 or x >= WIDTH or y < 0 or y >= PLAY_HEIGHT:
+            return True
+        return self.trail[self._idx(x, y)] != 0
+
+    def _turn(self, d):
+        if d == JOYSTICK_LEFT:
+            self.direction = self._LEFT_TURN[self.direction]
+        elif d == JOYSTICK_RIGHT:
+            self.direction = self._RIGHT_TURN[self.direction]
+
+    def _step(self, turbo):
+        dx, dy = self._DIR_VECS[self.direction]
+        steps = self.TURBO_STEP if turbo else 1
+        for _ in range(steps):
+            nx = self.head_x + dx
+            ny = self.head_y + dy
+            if self._blocked(nx, ny):
+                return False
+            self.head_x = nx
+            self.head_y = ny
+            self.score += 1
+            self._occupy(nx, ny)
+            self._draw_head()
+        return True
+
+    def _draw_head(self, force=False):
+        color = self._palette[self.score % len(self._palette)]
+        r, g, b = color
+        display.set_pixel(self.head_x, self.head_y, r, g, b)
+        if force:
+            display_flush()
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        last_frame = ticks_ms()
+        frame_ms = self.FRAME_MS
+
+        while True:
+            c_button, z_button = joystick.nunchuck.buttons()
+            if c_button:
+                return
+
+            now = ticks_ms()
+            if ticks_diff(now, last_frame) < frame_ms:
+                sleep_ms(2)
+                continue
+            last_frame = now
+
+            turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if turn:
+                self._turn(turn)
+
+            alive = self._step(turbo=z_button)
+            global_score = self.score
+            display_score_and_time(self.score)
+
+            if not alive:
+                game_over = True
+                return
+
+            maybe_collect(self.COLLECT_INTERVAL)
+
 
 class RTypeGame:
     """
@@ -5727,9 +5977,11 @@ class GameSelect:
             "ASTRD": AsteroidGame,
             "BRKOUT": BreakoutGame,
             "FLAPPY": FlappyGame,
+            "DODGE": DodgeGame,
             "MAZE": MazeGame,
             "PONG": PongGame,
             "QIX": QixGame,
+            "TRON": TronGame,
             "SIMON": SimonGame,
             "SNAKE": SnakeGame,
             "TETRIS": TetrisGame,
@@ -5864,5 +6116,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
