@@ -5584,6 +5584,8 @@ class DoomLiteGame:
         self.wave = 1
 
         self.shot_cd = 0
+        self.wave_announce = 0  # frames left to show wave banner
+        self.hit_flash = 0      # frames left to flash crosshair on hit
 
         self.enemies = []
         self._spawn_wave(self.wave)
@@ -5695,6 +5697,7 @@ class DoomLiteGame:
                 continue
             hp = 1 if wave < 4 else 2
             self.enemies.append([ex, ey, hp])
+        self.wave_announce = 60  # show wave banner for ~2 s
 
     def _shoot(self):
         # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
@@ -5718,8 +5721,8 @@ class DoomLiteGame:
             a = self._angle_to_units(dx, dy)
             delta = self._angle_delta(a, self.ang)
 
-            # nur wenn nahe an der Mitte (Crosshair) -> sehr "abgesteckt"
-            if abs(delta) > 3:
+            # nur wenn nahe an der Mitte (Crosshair) -> leicht großzügiger für Arcade-Stick
+            if abs(delta) > 4:
                 continue
 
             if dist < best_d:
@@ -5728,6 +5731,7 @@ class DoomLiteGame:
 
         if best_i >= 0:
             self.enemies[best_i][2] -= 1
+            self.hit_flash = 8  # flash crosshair on hit
             if self.enemies[best_i][2] <= 0:
                 self.score += 50
             else:
@@ -5817,14 +5821,15 @@ class DoomLiteGame:
             if start < 0: start = 0
             if end >= self.PLAY_H: end = self.PLAY_H - 1
 
-            # simple shading
+            # warm brownish tint (x-side lighter, y-side darker)
             b = 220 - int(dist * 18)
             if b < 40:
                 b = 40
-            if side == 1:
-                b = (b * 3) // 4
-
-            draw_rectangle(x, start, x, end, b, b, b)
+            if side == 0:
+                draw_rectangle(x, start, x, end, b, b * 3 // 5, b // 4)
+            else:
+                bv = (b * 3) // 4
+                draw_rectangle(x, start, x, end, bv, bv * 3 // 5, bv // 4)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -5899,18 +5904,32 @@ class DoomLiteGame:
                 if 0 <= ex < self.MAP_W and 0 <= ey < self.MAP_H:
                     sp(ex, ey, 255, 0, 0)
 
-        # lives indicator (oben rechts)
+        # lives indicator - 2x2 red blocks (oben rechts)
         for i in range(self.lives):
-            x = WIDTH - 2 - i * 3
-            y = 1
-            if 0 <= x < WIDTH and 0 <= y < self.PLAY_H:
-                sp(x, y, 0, 255, 0)
+            lx = WIDTH - 3 - i * 4
+            ly = 1
+            draw_rectangle(lx, ly, lx + 1, ly + 1, 220, 30, 30)
 
-        # crosshair
+        # wave announcement banner
+        if self.wave_announce > 0:
+            wlabel = "W" + str(self.wave)
+            wx = WIDTH // 2 - len(wlabel) * 3
+            wy = self.PLAY_H // 2 - 3
+            draw_rectangle(wx - 1, wy - 1, wx + len(wlabel) * 6, wy + 5, 0, 0, 0)
+            draw_text_small(wx, wy, wlabel, 255, 220, 0)
+
+        # crosshair (+ shape, flashes yellow on hit)
         cx = WIDTH // 2
         cy = self.PLAY_H // 2
-        if 0 <= cx < WIDTH and 0 <= cy < self.PLAY_H:
-            sp(cx, cy, 255, 255, 255)
+        if self.hit_flash > 0:
+            cr, cg, cb = 255, 255, 0
+        else:
+            cr, cg, cb = 200, 200, 200
+        for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+            xx = cx + dx
+            yy = cy + dy
+            if 0 <= xx < WIDTH and 0 <= yy < self.PLAY_H:
+                sp(xx, yy, cr, cg, cb)
 
         display_score_and_time(self.score)
 
@@ -5934,6 +5953,10 @@ class DoomLiteGame:
                     continue
                 self.last_frame = now
                 self.frame += 1
+                if self.wave_announce > 0:
+                    self.wave_announce -= 1
+                if self.hit_flash > 0:
+                    self.hit_flash -= 1
 
                 # input
                 d = joystick.read_direction([
