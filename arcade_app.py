@@ -5549,13 +5549,16 @@ class DoomLiteGame:
         except Exception:
             pass
 
+        # Store floats directly to avoid per-call division at runtime.
+        # array('f') uses 4 bytes/element (vs 2 for 'h') but saves the
+        # "/ 1024.0" division on every _cos_sin call (64×/frame).
         if array:
-            cos_lut = array('h')
-            sin_lut = array('h')
+            cos_lut = array('f')
+            sin_lut = array('f')
             for i in range(256):
                 ang = 2 * math.pi * i / 256
-                cos_lut.append(int(math.cos(ang) * 1024))
-                sin_lut.append(int(math.sin(ang) * 1024))
+                cos_lut.append(math.cos(ang))
+                sin_lut.append(math.sin(ang))
             cls._COS = cos_lut
             cls._SIN = sin_lut
         else:
@@ -5563,14 +5566,21 @@ class DoomLiteGame:
             sin_lut = []
             for i in range(256):
                 ang = 2 * math.pi * i / 256
-                cos_lut.append(int(math.cos(ang) * 1024))
-                sin_lut.append(int(math.sin(ang) * 1024))
+                cos_lut.append(math.cos(ang))
+                sin_lut.append(math.sin(ang))
             cls._COS = cos_lut
             cls._SIN = sin_lut
 
     def __init__(self):
         self._ensure_trig()
         self.zbuf = [self.MAX_DIST] * WIDTH  # Wanddistanz pro Screen-Spalte
+        # Pre-compute wall positions for fast minimap rendering (map never changes).
+        self._minimap_walls = [
+            (mx, my)
+            for my in range(self.MAP_H)
+            for mx in range(self.MAP_W)
+            if self.MAP[my][mx] == 35
+        ]
         self.reset()
 
     def reset(self):
@@ -5584,6 +5594,8 @@ class DoomLiteGame:
         self.wave = 1
 
         self.shot_cd = 0
+        self.wave_announce = 0  # frames left to show wave banner
+        self.hit_flash = 0      # frames left to flash crosshair on hit
 
         self.enemies = []
         self._spawn_wave(self.wave)
@@ -5603,7 +5615,7 @@ class DoomLiteGame:
 
     def _cos_sin(self, a):
         a &= 255
-        return self._COS[a] / 1024.0, self._SIN[a] / 1024.0
+        return self._COS[a], self._SIN[a]
 
     def _angle_to_units(self, dx, dy):
         # dx,dy in Map-Koordinaten; Achtung y-Achse ist "nach unten"
@@ -5622,10 +5634,20 @@ class DoomLiteGame:
         DDA Raycast: liefert (dist, side)
         side: 0 = x-seite (vertikale Wand), 1 = y-seite (horizontale Wand)
         """
-        # Ray direction (float)
-        c, s = self._cos_sin(ray_ang)
-        ray_dx = c
-        ray_dy = -s  # y nach unten
+        # Hoist to locals – attribute lookups are expensive in MicroPython.
+        COS = self._COS
+        SIN = self._SIN
+        MAP = self.MAP
+        MAP_W = self.MAP_W
+        MAP_H = self.MAP_H
+        MAX_DIST = self.MAX_DIST
+        px = self.px
+        py = self.py
+
+        # Inline trig lookup (floats stored directly in LUT).
+        a = ray_ang & 255
+        ray_dx = COS[a]
+        ray_dy = -SIN[a]  # y nach unten
 
         # avoid division by 0
         if ray_dx == 0:
@@ -5633,25 +5655,25 @@ class DoomLiteGame:
         if ray_dy == 0:
             ray_dy = 1e-6
 
-        map_x = int(self.px)
-        map_y = int(self.py)
+        map_x = int(px)
+        map_y = int(py)
 
         delta_x = abs(1.0 / ray_dx)
         delta_y = abs(1.0 / ray_dy)
 
         if ray_dx < 0:
             step_x = -1
-            side_x = (self.px - map_x) * delta_x
+            side_x = (px - map_x) * delta_x
         else:
             step_x = 1
-            side_x = (map_x + 1.0 - self.px) * delta_x
+            side_x = (map_x + 1.0 - px) * delta_x
 
         if ray_dy < 0:
             step_y = -1
-            side_y = (self.py - map_y) * delta_y
+            side_y = (py - map_y) * delta_y
         else:
             step_y = 1
-            side_y = (map_y + 1.0 - self.py) * delta_y
+            side_y = (map_y + 1.0 - py) * delta_y
 
         side = 0
         for _ in range(self.MAX_STEPS):
@@ -5664,18 +5686,19 @@ class DoomLiteGame:
                 map_y += step_y
                 side = 1
 
-            if self._is_wall_tile(map_x, map_y):
+            # Inline _is_wall_tile to avoid per-step method call overhead.
+            if map_x < 0 or map_x >= MAP_W or map_y < 0 or map_y >= MAP_H or MAP[map_y][map_x] == 35:
                 if side == 0:
                     dist = side_x - delta_x
                 else:
                     dist = side_y - delta_y
                 if dist < 0.05:
                     dist = 0.05
-                if dist > self.MAX_DIST:
-                    dist = self.MAX_DIST
+                if dist > MAX_DIST:
+                    dist = MAX_DIST
                 return dist, side
 
-        return self.MAX_DIST, side
+        return MAX_DIST, side
 
     def _spawn_wave(self, wave):
         # sehr klein halten: 2..6 Gegner
@@ -5695,6 +5718,7 @@ class DoomLiteGame:
                 continue
             hp = 1 if wave < 4 else 2
             self.enemies.append([ex, ey, hp])
+        self.wave_announce = 60  # show wave banner for ~2 s
 
     def _shoot(self):
         # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
@@ -5718,8 +5742,8 @@ class DoomLiteGame:
             a = self._angle_to_units(dx, dy)
             delta = self._angle_delta(a, self.ang)
 
-            # nur wenn nahe an der Mitte (Crosshair) -> sehr "abgesteckt"
-            if abs(delta) > 3:
+            # nur wenn nahe an der Mitte (Crosshair) -> leicht großzügiger für Arcade-Stick
+            if abs(delta) > 4:
                 continue
 
             if dist < best_d:
@@ -5728,6 +5752,7 @@ class DoomLiteGame:
 
         if best_i >= 0:
             self.enemies[best_i][2] -= 1
+            self.hit_flash = 8  # flash crosshair on hit
             if self.enemies[best_i][2] <= 0:
                 self.score += 50
             else:
@@ -5787,13 +5812,20 @@ class DoomLiteGame:
                         e[0] = nx
 
     def _render(self):
+        # Hoist frequently-accessed attributes to locals once.
+        # On MicroPython each 'self.X' lookup costs a dictionary probe;
+        # reading a local is a single LOAD_FAST bytecode.
+        sp = display.set_pixel
+        PLAY_H = self.PLAY_H
+        zbuf = self.zbuf
+
         # background sky/floor
         # Intentionally no display.clear(): we always redraw the full playfield
         # background first. With the buffered framebuffer this means only pixels
         # that actually changed (walls/sprites/movement) are flushed.
-        half = self.PLAY_H // 2
+        half = PLAY_H // 2
         draw_rectangle(0, 0, WIDTH - 1, half - 1, 0, 0, 25)                 # sky
-        draw_rectangle(0, half, WIDTH - 1, self.PLAY_H - 1, 18, 10, 0)      # floor
+        draw_rectangle(0, half, WIDTH - 1, PLAY_H - 1, 18, 10, 0)           # floor
 
         # ray angles: fixedpoint, damit FOV/64 sauber läuft
         angle_step_fp = (self.FOV << 16) // WIDTH
@@ -5804,92 +5836,99 @@ class DoomLiteGame:
             ang_fp += angle_step_fp
 
             dist, side = self._cast_ray(ray_ang)
-            self.zbuf[x] = dist
+            zbuf[x] = dist
 
-            line_h = int(self.PLAY_H / (dist + 1e-6))
+            line_h = int(PLAY_H / (dist + 1e-6))
             if line_h < 1:
                 line_h = 1
-            if line_h > self.PLAY_H:
-                line_h = self.PLAY_H
+            if line_h > PLAY_H:
+                line_h = PLAY_H
 
-            start = (self.PLAY_H - line_h) // 2
+            start = (PLAY_H - line_h) // 2
             end = start + line_h - 1
             if start < 0: start = 0
-            if end >= self.PLAY_H: end = self.PLAY_H - 1
+            if end >= PLAY_H: end = PLAY_H - 1
 
-            # simple shading
+            # warm brownish tint (x-side lighter, y-side darker).
+            # Compute the brightness scaler once, then derive g/b from it.
             b = 220 - int(dist * 18)
             if b < 40:
                 b = 40
-            if side == 1:
-                b = (b * 3) // 4
-
-            draw_rectangle(x, start, x, end, b, b, b)
+            wr = b if side == 0 else (b * 3) // 4
+            wg = wr * 3 // 5
+            wb = wr // 4
+            # Inline single-column draw (avoids draw_rectangle call overhead +
+            # its swap/clamp checks + inner x-loop that would run exactly once).
+            for y in range(start, end + 1):
+                sp(x, y, wr, wg, wb)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
+        # dx/dy stored alongside dist so we don't recalculate below.
+        px = self.px
+        py = self.py
         alive = []
         for e in self.enemies:
             if e[2] > 0:
-                dx = e[0] - self.px
-                dy = e[1] - self.py
+                dx = e[0] - px
+                dy = e[1] - py
                 d = math.sqrt(dx * dx + dy * dy)
-                alive.append((d, e))
+                alive.append((d, e, dx, dy))
         alive.sort(reverse=True)
 
-        for dist, e in alive:
-            dx = e[0] - self.px
-            dy = e[1] - self.py
+        HALF_FOV = self.HALF_FOV
+        FOV = self.FOV
+        ang = self.ang
+        for dist, e, dx, dy in alive:
             a = self._angle_to_units(dx, dy)
-            delta = self._angle_delta(a, self.ang)
-            if abs(delta) > self.HALF_FOV:
+            delta = self._angle_delta(a, ang)
+            if abs(delta) > HALF_FOV:
                 continue
 
-            sx = int((delta + self.HALF_FOV) * WIDTH / self.FOV)
+            sx = int((delta + HALF_FOV) * WIDTH / FOV)
             if sx < 0 or sx >= WIDTH:
                 continue
 
             # sprite size
-            sh = int(self.PLAY_H / (dist + 1e-6))
+            sh = int(PLAY_H / (dist + 1e-6))
             if sh < 2:
                 sh = 2
-            if sh > self.PLAY_H:
-                sh = self.PLAY_H
+            if sh > PLAY_H:
+                sh = PLAY_H
             sw = sh // 3
             if sw < 1:
                 sw = 1
             if sw > 6:
                 sw = 6
 
-            y0 = (self.PLAY_H - sh) // 2
+            y0 = (PLAY_H - sh) // 2
             y1 = y0 + sh - 1
 
             x0 = sx - sw // 2
             x1 = x0 + sw - 1
 
-            # draw with z-buffer test per column
-            for xx in range(x0, x1 + 1):
-                if 0 <= xx < WIDTH and dist < self.zbuf[xx]:
-                    # hp color
-                    if e[2] >= 2:
-                        col = (255, 0, 255)
-                    else:
-                        col = (255, 60, 60)
-                    draw_rectangle(xx, y0, xx, y1, col[0], col[1], col[2])
+            # hp color
+            if e[2] >= 2:
+                sr, sg, sb = 255, 0, 255
+            else:
+                sr, sg, sb = 255, 60, 60
 
-        # minimap overlay (16x16)
+            # draw with z-buffer test per column; inline single-column draw
+            for xx in range(x0, x1 + 1):
+                if 0 <= xx < WIDTH and dist < zbuf[xx]:
+                    for y in range(y0, y1 + 1):
+                        sp(xx, y, sr, sg, sb)
+
+        # minimap overlay (16x16) – use pre-computed wall list instead of
+        # iterating all 256 tiles every frame.
         draw_rectangle(0, 0, self.MAP_W + 1, self.MAP_H + 1, 0, 0, 0)
-        sp = display.set_pixel
-        for my in range(self.MAP_H):
-            row = self.MAP[my]
-            for mx in range(self.MAP_W):
-                if row[mx] == 35:
-                    sp(mx, my, 0, 0, 160)
-        sp(int(self.px), int(self.py), 0, 255, 0)
+        for mx, my in self._minimap_walls:
+            sp(mx, my, 0, 0, 160)
+        sp(int(px), int(py), 0, 255, 0)
         # direction hint
-        dc, ds = self._cos_sin(self.ang)
-        ax = int(self.px + dc * 0.7)
-        ay = int(self.py - ds * 0.7)
+        dc, ds = self._cos_sin(ang)
+        ax = int(px + dc * 0.7)
+        ay = int(py - ds * 0.7)
         if 0 <= ax < self.MAP_W and 0 <= ay < self.MAP_H:
             sp(ax, ay, 0, 200, 0)
         for e in self.enemies:
@@ -5899,18 +5938,32 @@ class DoomLiteGame:
                 if 0 <= ex < self.MAP_W and 0 <= ey < self.MAP_H:
                     sp(ex, ey, 255, 0, 0)
 
-        # lives indicator (oben rechts)
+        # lives indicator - 2x2 red blocks (oben rechts)
         for i in range(self.lives):
-            x = WIDTH - 2 - i * 3
-            y = 1
-            if 0 <= x < WIDTH and 0 <= y < self.PLAY_H:
-                sp(x, y, 0, 255, 0)
+            lx = WIDTH - 3 - i * 4
+            ly = 1
+            draw_rectangle(lx, ly, lx + 1, ly + 1, 220, 30, 30)
 
-        # crosshair
+        # wave announcement banner
+        if self.wave_announce > 0:
+            wlabel = "W" + str(self.wave)
+            wx = WIDTH // 2 - len(wlabel) * 3
+            wy = PLAY_H // 2 - 3
+            draw_rectangle(wx - 1, wy - 1, wx + len(wlabel) * 6, wy + 5, 0, 0, 0)
+            draw_text_small(wx, wy, wlabel, 255, 220, 0)
+
+        # crosshair (+ shape, flashes yellow on hit)
         cx = WIDTH // 2
-        cy = self.PLAY_H // 2
-        if 0 <= cx < WIDTH and 0 <= cy < self.PLAY_H:
-            sp(cx, cy, 255, 255, 255)
+        cy = PLAY_H // 2
+        if self.hit_flash > 0:
+            cr, cg, cb = 255, 255, 0
+        else:
+            cr, cg, cb = 200, 200, 200
+        for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+            xx = cx + dx
+            yy = cy + dy
+            if 0 <= xx < WIDTH and 0 <= yy < PLAY_H:
+                sp(xx, yy, cr, cg, cb)
 
         display_score_and_time(self.score)
 
@@ -5934,6 +5987,10 @@ class DoomLiteGame:
                     continue
                 self.last_frame = now
                 self.frame += 1
+                if self.wave_announce > 0:
+                    self.wave_announce -= 1
+                if self.hit_flash > 0:
+                    self.hit_flash -= 1
 
                 # input
                 d = joystick.read_direction([
