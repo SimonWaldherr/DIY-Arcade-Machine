@@ -2293,7 +2293,7 @@ class TetrisGame:
         def __init__(self):
             idx = random.randint(0, len(TetrisGame.TETRIMINOS) - 1)
             self.shape = TetrisGame.TETRIMINOS[idx]
-            self.color = idx + 1
+            self.color = random.randint(1, len(TetrisGame.COLORS))
             self.x = TetrisGame.GRID_WIDTH // 2 - len(self.shape[0]) // 2
             self.y = 0
 
