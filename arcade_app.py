@@ -3,6 +3,10 @@ import time
 import math
 import gc
 import sys
+try:
+    import uos as _os
+except ImportError:
+    import os as _os
 
 
 def _boot_log(tag):
@@ -242,9 +246,9 @@ def _clear_buf():
     w = _fb_w * _fb_h
     global _force_full_flush
     if _fb_current is not None:
+        # Zero unconditionally — cheaper than branching on every byte
         for i in range(w * 3):
-            if _fb_current[i] != 0:
-                _fb_current[i] = 0
+            _fb_current[i] = 0
     # Avoid building a huge list of dirty pixel indices.
     _force_full_flush = True
     if _dirty_mask is not None:
@@ -333,6 +337,58 @@ def draw_play_rect(x, y, w, h, r, g, b):
     if y2 >= PLAY_HEIGHT:
         y2 = PLAY_HEIGHT - 1
     draw_rectangle(x1, y1, x2, y2, r, g, b)
+
+def draw_line(x0, y0, x1, y1, r, g, b):
+    """Bresenham line from (x0,y0) to (x1,y1), clipped to the full display."""
+    x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    sp = display.set_pixel
+    while True:
+        if 0 <= x0 < WIDTH and 0 <= y0 < HEIGHT:
+            sp(x0, y0, r, g, b)
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+
+def _draw_line_wrapped(start, end, color):
+    """Bresenham line with toroidal (modulo) wrapping — used by AsteroidGame."""
+    x0, y0 = int(start[0]), int(start[1])
+    x1, y1 = int(end[0]), int(end[1])
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    x, y = x0, y0
+    sx = -1 if x0 > x1 else 1
+    sy = -1 if y0 > y1 else 1
+    sp = display.set_pixel
+    if dx > dy:
+        err = dx / 2.0
+        while x != x1:
+            sp(x % WIDTH, y % PLAY_HEIGHT, *color)
+            err -= dy
+            if err < 0:
+                y += sy
+                err += dx
+            x += sx
+    else:
+        err = dy / 2.0
+        while y != y1:
+            sp(x % WIDTH, y % PLAY_HEIGHT, *color)
+            err -= dx
+            if err < 0:
+                x += sx
+                err += dy
+            y += sy
+    sp(x % WIDTH, y % PLAY_HEIGHT, *color)
 
 
 # ---------- Global state ----------
@@ -683,8 +739,43 @@ def count_cells_with_mark(mark, width, height):
 class RestartProgram(Exception):
     pass
 
- # ---------- Nunchuk / Joystick ----------
+# ---------- Nunchuk / Joystick ----------
 NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
+
+def _read_direction_from_xy(x, y, possible_directions):
+    """Convert raw joystick axis values (0-255) to a direction constant.
+
+    Diagonals are checked first so that a corner press is never misread as a
+    cardinal direction.  Returns None when no threshold is exceeded, or when
+    the detected direction is not listed in *possible_directions*.
+    """
+    if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
+        return JOYSTICK_DOWN_LEFT
+    if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
+        return JOYSTICK_DOWN_RIGHT
+    if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
+        return JOYSTICK_UP_LEFT
+    if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
+        return JOYSTICK_UP_RIGHT
+    if x < 100 and JOYSTICK_LEFT in possible_directions:
+        return JOYSTICK_LEFT
+    if x > 150 and JOYSTICK_RIGHT in possible_directions:
+        return JOYSTICK_RIGHT
+    if y < 100 and JOYSTICK_DOWN in possible_directions:
+        return JOYSTICK_DOWN
+    if y > 150 and JOYSTICK_UP in possible_directions:
+        return JOYSTICK_UP
+    return None
+
+def _wait_for_primary_release(joystick, timeout_ms=1200):
+    t0 = ticks_ms()
+    while True:
+        _c, z = joystick.read_buttons()
+        if not z:
+            return
+        if ticks_diff(ticks_ms(), t0) >= timeout_ms:
+            return
+        sleep_ms(10)
 
 if IS_MICROPYTHON:
     class Nunchuck:
@@ -787,33 +878,63 @@ if IS_MICROPYTHON:
     class Joystick:
         def __init__(self):
             self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
-            self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=50)
+            self.nunchuck = None
+            self._last_reinit = 0
+            self._last_dir = None
+            self._last_dir_ms = 0
+            self._debounce_ms = 70
+            self._reinit_nunchuck()
+
+        def _reinit_nunchuck(self):
+            self._last_reinit = ticks_ms()
+            try:
+                self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=50)
+            except Exception:
+                self.nunchuck = None
+
+        def _ensure_nunchuck(self):
+            if self.nunchuck is not None:
+                return True
+            if ticks_diff(ticks_ms(), self._last_reinit) >= 250:
+                self._reinit_nunchuck()
+            return self.nunchuck is not None
 
         def read_direction(self, possible_directions, debounce=True):
-            x, y = self.nunchuck.joystick()
+            if not self._ensure_nunchuck():
+                return None
+            try:
+                x, y = self.nunchuck.joystick()
+            except Exception:
+                self.nunchuck = None
+                self._ensure_nunchuck()
+                return None
+            d = _read_direction_from_xy(x, y, possible_directions)
+            if not debounce:
+                return d
+            now = ticks_ms()
+            if d is None:
+                self._last_dir = None
+                return None
+            if d == self._last_dir and ticks_diff(now, self._last_dir_ms) < self._debounce_ms:
+                return None
+            self._last_dir = d
+            self._last_dir_ms = now
+            return d
 
-            # diagonals first
-            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
-                return JOYSTICK_DOWN_LEFT
-            if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
-                return JOYSTICK_DOWN_RIGHT
-            if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
-                return JOYSTICK_UP_LEFT
-            if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
-                return JOYSTICK_UP_RIGHT
-
-            if x < 100 and JOYSTICK_LEFT in possible_directions:
-                return JOYSTICK_LEFT
-            if x > 150 and JOYSTICK_RIGHT in possible_directions:
-                return JOYSTICK_RIGHT
-            if y < 100 and JOYSTICK_DOWN in possible_directions:
-                return JOYSTICK_DOWN
-            if y > 150 and JOYSTICK_UP in possible_directions:
-                return JOYSTICK_UP
-            return None
+        def read_buttons(self):
+            if not self._ensure_nunchuck():
+                return False, False
+            try:
+                return self.nunchuck.buttons()
+            except RestartProgram:
+                raise
+            except Exception:
+                self.nunchuck = None
+                self._ensure_nunchuck()
+                return False, False
 
         def is_pressed(self):
-            _, z = self.nunchuck.buttons()
+            _, z = self.read_buttons()
             return z
 else:
     class Nunchuck:
@@ -867,32 +988,35 @@ else:
     class Joystick:
         def __init__(self):
             self.nunchuck = Nunchuck()
+            self._last_dir = None
+            self._last_dir_ms = 0
+            self._debounce_ms = 70
 
         def read_direction(self, possible_directions, debounce=True):
             x, y = self.nunchuck.joystick()
+            d = _read_direction_from_xy(x, y, possible_directions)
+            if not debounce:
+                return d
+            now = ticks_ms()
+            if d is None:
+                self._last_dir = None
+                return None
+            if d == self._last_dir and ticks_diff(now, self._last_dir_ms) < self._debounce_ms:
+                return None
+            self._last_dir = d
+            self._last_dir_ms = now
+            return d
 
-            # diagonals first
-            if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
-                return JOYSTICK_DOWN_LEFT
-            if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
-                return JOYSTICK_DOWN_RIGHT
-            if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
-                return JOYSTICK_UP_LEFT
-            if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
-                return JOYSTICK_UP_RIGHT
-
-            if x < 100 and JOYSTICK_LEFT in possible_directions:
-                return JOYSTICK_LEFT
-            if x > 150 and JOYSTICK_RIGHT in possible_directions:
-                return JOYSTICK_RIGHT
-            if y < 100 and JOYSTICK_DOWN in possible_directions:
-                return JOYSTICK_DOWN
-            if y > 150 and JOYSTICK_UP in possible_directions:
-                return JOYSTICK_UP
-            return None
+        def read_buttons(self):
+            try:
+                return self.nunchuck.buttons()
+            except RestartProgram:
+                raise
+            except Exception:
+                return False, False
 
         def is_pressed(self):
-            _, z = self.nunchuck.buttons()
+            _, z = self.read_buttons()
             return z
 
 # ---------- Color helper ----------
@@ -944,11 +1068,25 @@ class HighScores:
             self.scores = {}
 
     def save(self):
+        tmp_file = self.FILE + ".tmp"
         try:
-            with open(self.FILE, "w") as f:
+            with open(tmp_file, "w") as f:
                 json.dump(self.scores, f)
+            try:
+                _os.remove(self.FILE)
+            except Exception:
+                pass
+            _os.rename(tmp_file, self.FILE)
         except Exception:
-            pass
+            try:
+                _os.remove(tmp_file)
+            except Exception:
+                pass
+            try:
+                with open(self.FILE, "w") as f:
+                    json.dump(self.scores, f)
+            except Exception:
+                pass
 
     def best(self, game):
         try:
@@ -1039,20 +1177,20 @@ class InitialsEntryMenu:
                     self.letters[self.idx] = chr(c)
                     last_move = now
 
-            c_button, z_button = self.joystick.nunchuck.buttons()
+            c_button, z_button = self.joystick.read_buttons()
             if c_button:
                 # cancel
                 while True:
-                    cb, zb = self.joystick.nunchuck.buttons()
-                    if not cb:
+                    c_pressed, _z_pressed = self.joystick.read_buttons()
+                    if not c_pressed:
                         break
                     sleep_ms(10)
                 return None
 
             if z_button:
                 while True:
-                    cb, zb = self.joystick.nunchuck.buttons()
-                    if not zb:
+                    _c_pressed, z_pressed = self.joystick.read_buttons()
+                    if not z_pressed:
                         break
                     sleep_ms(10)
                 return "".join(self.letters)
@@ -1119,7 +1257,7 @@ class SimonGame:
         display_score_and_time(0, force=True)
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
 
@@ -1187,16 +1325,21 @@ class SnakeGame:
         global game_over, global_score
         hx, hy = self.snake[0]
         body = self.snake[1:]
+        if len(body) > 12:
+            body_positions = set(body)
+        else:
+            body_positions = body
+        contains_body = body_positions.__contains__
         moves = {
             JOYSTICK_UP: (hx, hy - 1),
             JOYSTICK_DOWN: (hx, hy + 1),
             JOYSTICK_LEFT: (hx - 1, hy),
             JOYSTICK_RIGHT: (hx + 1, hy),
         }
-        safe = {d: p for d, p in moves.items() if p not in body}
-        if moves[self.snake_direction] not in safe.values():
-            if safe:
-                self.snake_direction = random.choice(list(safe.keys()))
+        safe_dirs = [d for d, p in moves.items() if not contains_body(p)]
+        if contains_body(moves[self.snake_direction]):
+            if safe_dirs:
+                self.snake_direction = random.choice(safe_dirs)
             else:
                 global_score = self.score
                 game_over = True
@@ -1263,7 +1406,7 @@ class SnakeGame:
         self.restart_game()
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -1403,7 +1546,7 @@ class PongGame:
         display_score_and_time(0, force=True)
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -1528,7 +1671,7 @@ class BreakoutGame:
         display_score_and_time(0, force=True)
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -1580,33 +1723,8 @@ class AsteroidGame:
             return self.lifetime > 0
 
         def draw_line(self, start, end, color):
-            x0, y0 = int(start[0]), int(start[1])
-            x1, y1 = int(end[0]), int(end[1])
-            dx = abs(x1 - x0)
-            dy = abs(y1 - y0)
-            x, y = x0, y0
-            sx = -1 if x0 > x1 else 1
-            sy = -1 if y0 > y1 else 1
-            sp = display.set_pixel
-            if dx > dy:
-                err = dx / 2.0
-                while x != x1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dy
-                    if err < 0:
-                        y += sy
-                        err += dx
-                    x += sx
-            else:
-                err = dy / 2.0
-                while y != y1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dx
-                    if err < 0:
-                        x += sx
-                        err += dy
-                    y += sy
-            sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+            # Delegate to module-level helper to avoid code duplication with Ship
+            _draw_line_wrapped(start, end, color)
 
         def draw(self):
             ex = self.x + math.cos(math.radians(self.angle))
@@ -1650,33 +1768,8 @@ class AsteroidGame:
             self.cooldown = 0
 
         def draw_line(self, start, end, color):
-            x0, y0 = int(start[0]), int(start[1])
-            x1, y1 = int(end[0]), int(end[1])
-            dx = abs(x1 - x0)
-            dy = abs(y1 - y0)
-            x, y = x0, y0
-            sx = -1 if x0 > x1 else 1
-            sy = -1 if y0 > y1 else 1
-            sp = display.set_pixel
-            if dx > dy:
-                err = dx / 2.0
-                while x != x1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dy
-                    if err < 0:
-                        y += sy
-                        err += dx
-                    x += sx
-            else:
-                err = dy / 2.0
-                while y != y1:
-                    sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
-                    err -= dx
-                    if err < 0:
-                        x += sx
-                        err += dy
-                    y += sy
-            sp(x % PIXEL_WIDTH, y % PIXEL_HEIGHT, *color)
+            # Delegate to module-level helper shared with Projectile
+            _draw_line_wrapped(start, end, color)
 
         def update(self, direction):
             if direction == JOYSTICK_LEFT:
@@ -1730,19 +1823,34 @@ class AsteroidGame:
     def check_collisions(self):
         global game_over, global_score
         # projectile vs asteroid
-        for p in self.projectiles[:]:
-            for a in self.asteroids[:]:
+        hit_asteroids = set()
+        new_projectiles = []
+        spawned = []
+        for p in self.projectiles:
+            hit_ai = -1
+            hit_a = None
+            for ai, a in enumerate(self.asteroids):
+                if ai in hit_asteroids:
+                    continue
                 d = hypot(p.x - a.x, p.y - a.y)
                 if d < a.size:
-                    if p in self.projectiles:
-                        self.projectiles.remove(p)
-                    if a in self.asteroids:
-                        self.asteroids.remove(a)
-                    self.score += 10
-                    if a.size > 3:
-                        for _ in range(2):
-                            self.asteroids.append(self.Asteroid(a.x, a.y, max(2, a.size // 2)))
+                    hit_ai = ai
+                    hit_a = a
                     break
+            if hit_ai >= 0:
+                hit_asteroids.add(hit_ai)
+                self.score += 10
+                if hit_a.size > 3:
+                    half = max(2, hit_a.size // 2)
+                    spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
+                    spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
+            else:
+                new_projectiles.append(p)
+        if hit_asteroids:
+            self.asteroids = [a for i, a in enumerate(self.asteroids) if i not in hit_asteroids]
+            if spawned:
+                self.asteroids.extend(spawned)
+        self.projectiles = new_projectiles
 
         # ship vs asteroid
         for a in self.asteroids:
@@ -1769,7 +1877,7 @@ class AsteroidGame:
         while True:
             t0 = ticks_ms()
 
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -1786,10 +1894,12 @@ class AsteroidGame:
             for a in self.asteroids:
                 a.update()
 
-            for p in self.projectiles[:]:
+            alive_projectiles = []
+            for p in self.projectiles:
                 p.update()
-                if not p.is_alive():
-                    self.projectiles.remove(p)
+                if p.is_alive():
+                    alive_projectiles.append(p)
+            self.projectiles = alive_projectiles
 
             self.check_collisions()
             if game_over:
@@ -1870,11 +1980,6 @@ class QixGame:
                  [(self.width - 1, y) for y in range(self.height)])
         self.player_x, self.player_y = random.choice(edges)
         display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
-
-    def place_opponent(self):
-        self.opponent_x = random.randint(1, self.width - 2)
-        self.opponent_y = random.randint(1, self.height - 2)
-        display.set_pixel(self.opponent_x, self.opponent_y, 255, 0, 0)
 
     def move_opponent(self):
         global game_over, global_score
@@ -1988,7 +2093,7 @@ class QixGame:
         self.initialize_game()
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -2143,7 +2248,7 @@ class TetrisGame:
         display_score_and_time(0, force=True)
 
         while True:
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
 
@@ -2233,13 +2338,12 @@ class MazeGame:
 
         while stack:
             x, y = stack[-1]
-            mixed = dirs[:]
-            for i in range(len(mixed)-1, 0, -1):
-                j = random.randint(0, i)
-                mixed[i], mixed[j] = mixed[j], mixed[i]
+            dir_order = [0, 1, 2, 3]
+            _shuffle_in_place(dir_order)
 
             found = False
-            for dx, dy in mixed:
+            for di in dir_order:
+                dx, dy = dirs[di]
                 nx, ny = x + dx, y + dy
                 if self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER and (nx, ny) not in visited:
                     # carve
@@ -2381,19 +2485,18 @@ class MazeGame:
         self.enemies = new_enemies
 
     def handle_shooting(self, joystick):
-        _, z_button = joystick.nunchuck.buttons()
+        _, z_button = joystick.read_buttons()
         if not z_button:
             return
 
-        dx, dy = 0, -1
-        if self.player_direction == JOYSTICK_UP:
-            dx, dy = 0, -1
-        elif self.player_direction == JOYSTICK_DOWN:
-            dx, dy = 0, 1
-        elif self.player_direction == JOYSTICK_LEFT:
-            dx, dy = -1, 0
-        elif self.player_direction == JOYSTICK_RIGHT:
-            dx, dy = 1, 0
+        # Compute delta from last movement direction (UP fallback).
+        dir_map = {
+            JOYSTICK_UP: (0, -1),
+            JOYSTICK_DOWN: (0, 1),
+            JOYSTICK_LEFT: (-1, 0),
+            JOYSTICK_RIGHT: (1, 0),
+        }
+        dx, dy = dir_map.get(self.player_direction, (0, -1))
 
         sx = self.player_x + dx
         sy = self.player_y + dy
@@ -2454,7 +2557,7 @@ class MazeGame:
         display_score_and_time(0, force=True)
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
 
@@ -2562,7 +2665,7 @@ class FlappyGame:
         frame_ms = 35
 
         while True:
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
 
@@ -2703,7 +2806,7 @@ class DodgeGame:
 
         last_frame = ticks_ms()
         while True:
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
 
@@ -2836,7 +2939,7 @@ class TronGame:
         frame_ms = self.FRAME_MS
 
         while True:
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
 
@@ -2964,37 +3067,46 @@ class RTypeGame:
 
     def _update_powerups(self):
         # move left, expire
-        for p in self.powerups[:]:
+        keep = []
+        for p in self.powerups:
             p[0] -= 1
             p[2] -= 1
             if p[0] < -2 or p[2] <= 0:
-                self.powerups.remove(p)
                 continue
 
             # collect
             if abs(p[0] - (self.px + self.pw // 2)) <= 2 and abs(p[1] - (self.py + 1)) <= 2:
-                self.powerups.remove(p)
-                self.power_t = 240  # ~8 Sekunden
-                # kleines Bonus
+                self.power_t = 240  # roughly 8 seconds at the current tick speed
+                # small bonus
                 self.score += 5
+                continue
+            keep.append(p)
+        self.powerups = keep
 
     def _update_bullets(self):
         # player bullets
-        for b in self.bullets[:]:
+        keep_b = []
+        for b in self.bullets:
             b[0] += 4
             if b[0] >= WIDTH:
-                self.bullets.remove(b)
+                continue
+            keep_b.append(b)
+        self.bullets = keep_b
 
         # enemy bullets
-        for b in self.ebullets[:]:
+        keep_eb = []
+        for b in self.ebullets:
             b[0] -= 3
             if b[0] < 0:
-                self.ebullets.remove(b)
+                continue
+            keep_eb.append(b)
+        self.ebullets = keep_eb
 
     def _update_enemies(self):
         global game_over, global_score
 
-        for e in self.enemies[:]:
+        alive_enemies = []
+        for e in self.enemies:
             typ = e[2]
 
             # movement
@@ -3016,7 +3128,6 @@ class RTypeGame:
 
             # offscreen
             if e[0] < -10:
-                self.enemies.remove(e)
                 continue
 
             # collision with player (rects)
@@ -3036,6 +3147,8 @@ class RTypeGame:
                 global_score = self.score
                 game_over = True
                 return
+            alive_enemies.append(e)
+        self.enemies = alive_enemies
 
         # enemy bullets vs player
         px1 = self.px
@@ -3050,7 +3163,8 @@ class RTypeGame:
 
     def _bullet_hits(self):
         # bullets vs enemies
-        for b in self.bullets[:]:
+        keep_b = []
+        for b in self.bullets:
             bx, by = b[0], b[1]
             hit = None
             for e in self.enemies:
@@ -3066,12 +3180,9 @@ class RTypeGame:
                     break
 
             if hit is not None:
-                if b in self.bullets:
-                    self.bullets.remove(b)
                 hit[3] -= 1
                 if hit[3] <= 0:
-                    if hit in self.enemies:
-                        self.enemies.remove(hit)
+                    self.enemies.remove(hit)
                     # score
                     typ = hit[2]
                     self.score += (10 + typ * 7)
@@ -3080,6 +3191,9 @@ class RTypeGame:
                         self.powerups.append([hit[0], hit[1], 400])
                 else:
                     self.score += 1  # hit bonus
+            else:
+                keep_b.append(b)
+        self.bullets = keep_b
 
     def _draw(self):
         display.clear()
@@ -3143,7 +3257,7 @@ class RTypeGame:
         display_score_and_time(0, force=True)
 
         while True:
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -3519,7 +3633,7 @@ class PacmanGame:
         self._draw()
 
         while True:
-            c_button, _z = joystick.nunchuck.buttons()
+            c_button, _z = joystick.read_buttons()
             if c_button:
                 return
             if game_over:
@@ -3720,7 +3834,7 @@ class CaveFlyGame:
         last = ticks_ms()
 
         while True:
-            c_button, z_button = joystick.nunchuck.buttons()
+            c_button, z_button = joystick.read_buttons()
             if c_button:
                 return
 
@@ -3948,7 +4062,7 @@ class PitfallGame:
 
         while not game_over:
             try:
-                c_button, z_button = joystick.nunchuck.buttons()
+                c_button, z_button = joystick.read_buttons()
                 if c_button:
                     return
 
@@ -4332,11 +4446,12 @@ class DemosGame:
             x = v & 0x3F
             y = v >> 6
 
-            mixed = dirs[:]
-            _shuffle_in_place(mixed)
+            dir_order = [0, 1, 2, 3]
+            _shuffle_in_place(dir_order)
 
             found = False
-            for dx, dy in mixed:
+            for di in dir_order:
+                dx, dy = dirs[di]
                 nx = x + dx
                 ny = y + dy
                 if not (0 < nx < w and 0 < ny < h):
@@ -4703,7 +4818,7 @@ class DemosGame:
         last_frame = ticks_ms()
 
         while True:
-            c_button, _ = joystick.nunchuck.buttons()
+            c_button, _ = joystick.read_buttons()
             if c_button:
                 return
 
@@ -4866,26 +4981,8 @@ class LunarLanderGame:
         return abs(d)
 
     def _line(self, x0, y0, x1, y1, r, g, b):
-        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        sp = display.set_pixel
-
-        while True:
-            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
-                sp(x0, y0, r, g, b)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
+        # Delegate to module-level Bresenham helper (shared with UFODefenseGame)
+        draw_line(x0, y0, x1, y1, r, g, b)
 
     def _draw_ship(self, thrust_on=False):
         size = 4
@@ -4956,7 +5053,7 @@ class LunarLanderGame:
 
         while not game_over:
             try:
-                c_button, z_button = joystick.nunchuck.buttons()
+                c_button, z_button = joystick.read_buttons()
                 if c_button:
                     return
 
@@ -5109,27 +5206,9 @@ class UFODefenseGame:
         self._last_cross_move = ticks_ms()
 
     def _line(self, x0, y0, x1, y1, col):
-        x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        sp = display.set_pixel
+        # Delegate to module-level Bresenham helper (shared with LunarLanderGame)
         r, g, b = col
-
-        while True:
-            if 0 <= x0 < WIDTH and 0 <= y0 < PLAY_HEIGHT:
-                sp(x0, y0, r, g, b)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
+        draw_line(x0, y0, x1, y1, r, g, b)
 
     def _cities_alive(self):
         for c in self.cities:
@@ -5214,47 +5293,54 @@ class UFODefenseGame:
                 sp(x, y, col[0], col[1], col[2])
 
     def _update_explosions_and_hits(self):
-        for ex in self.explosions[:]:
+        active_explosions = []
+        for ex in self.explosions:
             ex["r"] += ex["dr"]
             if ex["r"] >= ex["max"]:
                 ex["dr"] = -1
             if ex["r"] <= 0 and ex["dr"] < 0:
-                self.explosions.remove(ex)
                 continue
 
             r2 = (ex["r"] + 1) * (ex["r"] + 1)
             exx = ex["x"]; exy = ex["y"]
 
-            for em in self.enemy_missiles[:]:
+            keep_enemy = []
+            for em in self.enemy_missiles:
                 dx = em["x"] - exx
                 dy = em["y"] - exy
                 if dx * dx + dy * dy <= r2:
-                    self.enemy_missiles.remove(em)
                     self.score += 10
+                    continue
+                keep_enemy.append(em)
+            self.enemy_missiles = keep_enemy
+            active_explosions.append(ex)
+        self.explosions = active_explosions
 
     def _update_missiles(self):
         global game_over, global_score
 
         # player
-        for m in self.player_missiles[:]:
+        keep_player = []
+        for m in self.player_missiles:
             m["px"], m["py"] = m["x"], m["y"]
             m["x"] += m["vx"]
             m["y"] += m["vy"]
             dx = m["x"] - m["tx"]
             dy = m["y"] - m["ty"]
             if dx * dx + dy * dy <= 7.0:
-                self.player_missiles.remove(m)
                 self._add_explosion(m["tx"], m["ty"], 6, (255, 180, 0))
             elif m["y"] < 0 or m["y"] >= PLAY_HEIGHT:
-                self.player_missiles.remove(m)
+                continue
+            keep_player.append(m)
+        self.player_missiles = keep_player
 
         # enemy
-        for m in self.enemy_missiles[:]:
+        keep_enemy = []
+        for m in self.enemy_missiles:
             m["px"], m["py"] = m["x"], m["y"]
             m["x"] += m["vx"]
             m["y"] += m["vy"]
             if m["y"] >= m["ty"] or m["y"] >= PLAY_HEIGHT - 1:
-                self.enemy_missiles.remove(m)
                 ix = int(m["x"])
                 iy = int(m["y"])
                 self._add_explosion(ix, iy, 5, (255, 60, 60))
@@ -5269,6 +5355,9 @@ class UFODefenseGame:
                     global_score = self.score
                     game_over = True
                     return
+            else:
+                keep_enemy.append(m)
+        self.enemy_missiles = keep_enemy
 
     def _draw_world(self):
         display.clear()
@@ -5327,7 +5416,7 @@ class UFODefenseGame:
 
         while not game_over:
             try:
-                c_button, z_button = joystick.nunchuck.buttons()
+                c_button, z_button = joystick.read_buttons()
                 if c_button:
                     return
 
@@ -5835,7 +5924,7 @@ class DoomLiteGame:
 
         while not game_over:
             try:
-                c_button, z_button = joystick.nunchuck.buttons()
+                c_button, z_button = joystick.read_buttons()
                 if c_button:
                     return
 
@@ -5931,7 +6020,8 @@ class GameOverMenu:
         idx = 0
         prev = -1
         last_move = ticks_ms()
-        move_delay = 160
+        # Slightly faster than game selector for snappier two-item navigation.
+        move_delay = 130
 
         while True:
             now = ticks_ms()
@@ -5953,7 +6043,7 @@ class GameOverMenu:
                     draw_text(8, 28 + i * 15, o, *col)
 
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
                 if d == JOYSTICK_UP and idx > 0:
                     idx -= 1
                     last_move = now
@@ -5961,12 +6051,12 @@ class GameOverMenu:
                     idx += 1
                     last_move = now
 
-            if self.joystick.is_pressed():
-                while self.joystick.is_pressed():
-                    sleep_ms(10)
+            _c, z = self.joystick.read_buttons()
+            if z:
+                _wait_for_primary_release(self.joystick)
                 return self.opts[idx]
 
-            sleep_ms(30)
+            sleep_ms(16)  # minimum sleep to keep menu smooth without busy looping
 
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
@@ -6004,49 +6094,75 @@ class GameSelect:
         games = self.sorted_games
         selected = 0
         top = 0
-        prev = -1
+        prev_selected = -1
+        prev_top = -1
         view = 4
         last_move = ticks_ms()
-        move_delay = 140
+        hold_dir = None
+        move_delay = 150
 
         while True:
             now = ticks_ms()
 
-            if selected != prev:
-                prev = selected
+            if selected != prev_selected or top != prev_top:
+                prev_selected = selected
+                prev_top = top
                 display.clear()
+                draw_text_small(1, 1, "SELECT GAME", 180, 180, 255)
+                draw_text_small(1, 8, "Z/C=PLAY", 90, 90, 120)
                 for i in range(view):
                     gi = top + i
                     if gi >= len(games):
                         break
                     name = games[gi]
-                    col = (255, 255, 255) if gi == selected else (111, 111, 111)
-                    draw_text(8, 5 + i * 15, name, *col)
+                    is_sel = gi == selected
+                    col = (255, 255, 255) if is_sel else (100, 100, 100)
+                    y = 14 + i * 12
+                    if is_sel:
+                        draw_text_small(1, y + 2, ">", 255, 255, 255)
+                    draw_text(8, y, name, *col)
 
                     hs = self.highscores.best(name)
                     hn = self.highscores.best_name(name)
                     hs_str = str(hs) + " " + str(hn)
-                    draw_text_small(WIDTH - len(hs_str) * 6, 5 + i * 15 + 8, hs_str, 120, 120, 0)
+                    draw_text_small(WIDTH - len(hs_str) * 6, y + 7, hs_str, 120, 120, 0)
 
-            if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
-                if d == JOYSTICK_UP and selected > 0:
-                    selected -= 1
-                    if selected < top:
-                        top -= 1
-                    last_move = now
-                elif d == JOYSTICK_DOWN and selected < len(games) - 1:
-                    selected += 1
-                    if selected > top + view - 1:
-                        top += 1
-                    last_move = now
+            d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
+            if d is None:
+                hold_dir = None
+                move_delay = 150
+            elif ticks_diff(now, last_move) > move_delay:
+                if d != hold_dir:
+                    hold_dir = d
+                    move_delay = 150
+                else:
+                    move_delay = 85
 
-            if self.joystick.is_pressed():
-                while self.joystick.is_pressed():
-                    sleep_ms(10)
+                if d == JOYSTICK_UP:
+                    selected = (selected - 1) % len(games)
+                elif d == JOYSTICK_DOWN:
+                    selected = (selected + 1) % len(games)
+
+                max_top = max(0, len(games) - view)
+                if selected < top:
+                    top = selected
+                elif selected > top + view - 1:
+                    top = selected - (view - 1)
+                if top < 0:
+                    top = 0
+                elif top > max_top:
+                    top = max_top
+                last_move = now
+
+            c_button, z_button = self.joystick.read_buttons()
+            if z_button:
+                _wait_for_primary_release(self.joystick)
+                return games[selected]
+            if c_button:
+                _wait_for_primary_release(self.joystick, timeout_ms=400)
                 return games[selected]
 
-            sleep_ms(30)
+            sleep_ms(14)  # minimum sleep for responsive scrolling on long game lists
 
     def run(self):
         global game_over, global_score
