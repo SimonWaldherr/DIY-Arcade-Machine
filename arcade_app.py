@@ -1304,13 +1304,37 @@ class SnakeGame:
         return (random.randint(1, WIDTH - 2), random.randint(1, PLAY_HEIGHT - 2))
 
     def place_target(self):
-        self.target = self.random_target()
+        for _ in range(300):
+            t = self.random_target()
+            if t in self.snake:
+                continue
+
+            blocked = False
+            for gx, gy, _life in self.green_targets:
+                if t == (gx, gy):
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            self.target = t
+            display.set_pixel(t[0], t[1], 255, 0, 0)
+            return
+
+        self.target = (WIDTH // 2, PLAY_HEIGHT // 2)
         display.set_pixel(self.target[0], self.target[1], 255, 0, 0)
 
     def place_green_target(self):
-        x, y = random.randint(1, WIDTH - 2), random.randint(1, PLAY_HEIGHT - 2)
-        self.green_targets.append((x, y, 256))
-        display.set_pixel(x, y, 0, 255, 0)
+        for _ in range(200):
+            x = random.randint(1, WIDTH - 2)
+            y = random.randint(1, PLAY_HEIGHT - 2)
+            if (x, y) == self.target:
+                continue
+            if (x, y) in self.snake:
+                continue
+            self.green_targets.append((x, y, 256))
+            display.set_pixel(x, y, 0, 255, 0)
+            return
 
     def update_green_targets(self):
         new_list = []
@@ -1947,6 +1971,7 @@ class QixGame:
         self.place_player()
         self.place_opponents(self.num_opponents)
         self.occupied_percentage = 0
+        self.prev_player_pos = 1
         display_score_and_time(0, force=True)
 
     def place_opponents(self, n):
@@ -2058,14 +2083,13 @@ class QixGame:
         set_grid_value(x, y, 1)
         display.set_pixel(x, y, 0, 0, 255)
 
-        # pick an opponent position for flood fill (use first opponent if present)
+        # Flood-fill all regions reachable by opponents. With multiple opponents,
+        # using only the first one can incorrectly claim an area containing another.
         if self.opponents:
-            ox = self.opponents[0]["x"]
-            oy = self.opponents[0]["y"]
+            for op in self.opponents:
+                flood_fill(op["x"], op["y"], accessible_mark=3)
         else:
-            ox = self.width // 2
-            oy = self.height // 2
-        flood_fill(ox, oy, accessible_mark=3)
+            flood_fill(self.width // 2, self.height // 2, accessible_mark=3)
 
         for i in range(self.width):
             for j in range(self.height):
@@ -2742,7 +2766,7 @@ class DodgeGame:
         self.player_y = PLAY_HEIGHT - 3
         self.obstacles = []      # [x, y]
         self.score = 0
-        self.last_dir = JOYSTICK_LEFT
+        self.last_dir = None
         self.last_spawn = ticks_ms()
         self.spawn_ms = self.START_SPAWN_MS      # wird mit steigender Punktzahl schneller
         self.frame_ms = self.FRAME_MS
@@ -2758,10 +2782,12 @@ class DodgeGame:
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if d:
             self.last_dir = d
+
         step = 1
         if z_button and self.last_dir:
-            # Dash beschleunigt die letzte Richtung ohne neue Allokation
+            # Dash beschleunigt die letzte Richtung ohne neue Allokation.
             step = 2
+
         if self.last_dir == JOYSTICK_LEFT and (d == JOYSTICK_LEFT or z_button):
             self.player_x = max(0, self.player_x - step)
         elif self.last_dir == JOYSTICK_RIGHT and (d == JOYSTICK_RIGHT or z_button):
@@ -2851,7 +2877,17 @@ class TronGame:
     # GC tick every 120 frames (vs. 140 in Dodge) since the trail never clears.
     COLLECT_INTERVAL = const(120)
     # Shared immutable palette to avoid repeated allocation.
-    _PALETTE = tuple(hsb_to_rgb((i * HUE_STEP) % 360, 1, 1) for i in range(PALETTE_SIZE))
+    # Lazy-created to avoid import-time RAM pressure on MicroPython.
+    _PALETTE = None
+
+    @classmethod
+    def _palette(cls):
+        if cls._PALETTE is None:
+            cls._PALETTE = tuple(
+                hsb_to_rgb((i * cls.HUE_STEP) % 360, 1, 1)
+                for i in range(cls.PALETTE_SIZE)
+            )
+        return cls._PALETTE
 
     _LEFT_TURN = {
         JOYSTICK_UP: JOYSTICK_LEFT,
@@ -2883,7 +2919,7 @@ class TronGame:
         self.direction = JOYSTICK_RIGHT
         self.score = 0
         # Small precomputed hue ramp to avoid per-step HSB math during gameplay.
-        self._palette = TronGame._PALETTE
+        self._palette = TronGame._palette()
 
         display.clear()
         self._occupy(self.head_x, self.head_y)
@@ -3711,9 +3747,9 @@ class PacmanGame:
 
 class CaveFlyGame:
     """
-    CAVE FLYER (wie Flappy in Höhle)
+    CAVE FLYER
     Steuerung:
-      - Z oder Stick UP: Schub nach oben
+      - Links/Rechts: seitlich durch die Höhle steuern
       - C: zurück ins Menü
     """
     def __init__(self):
@@ -3934,12 +3970,15 @@ class PitfallGame:
         self.last_spawn_kind = kind
 
     def _ensure_obstacles(self):
-        max_right = -999
+        max_right = None
         for o in self.obstacles:
             w = o.get("w", 1)
             xr = o["x"] + w
-            if xr > max_right:
+            if max_right is None or xr > max_right:
                 max_right = xr
+
+        if max_right is None:
+            max_right = WIDTH + 8
 
         while max_right < WIDTH + 20:
             gap = random.randint(14, 28)
@@ -4888,7 +4927,7 @@ class DemosGame:
             else:  # SNAKE
                 self._snake_step()
 
-            maybe_collect(1)
+            maybe_collect(120)
 
 
 class LunarLanderGame:
@@ -5201,6 +5240,7 @@ class UFODefenseGame:
         self.enemy_speed = self.base_enemy_speed
         self.level = 0
         self.frame = 0
+        self.start_ms = ticks_ms()
         # crosshair movement smoothing: ms between pixel moves (tweakable)
         self.cross_move_ms = 45
         self._last_cross_move = ticks_ms()
@@ -5329,6 +5369,7 @@ class UFODefenseGame:
             dy = m["y"] - m["ty"]
             if dx * dx + dy * dy <= 7.0:
                 self._add_explosion(m["tx"], m["ty"], 6, (255, 180, 0))
+                continue
             elif m["y"] < 0 or m["y"] >= PLAY_HEIGHT:
                 continue
             keep_player.append(m)
@@ -6268,6 +6309,7 @@ def main():
         init_buffered_display()
     except Exception:
         pass
+    _boot_log("buffered on" if USE_BUFFERED_DISPLAY else "buffered off")
     display.clear()
     display_score_and_time(0, force=True)
 
