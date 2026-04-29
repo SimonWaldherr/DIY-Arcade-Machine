@@ -8,8 +8,18 @@ try:
 except ImportError:
     import os as _os
 
+# Low-resource defaults. Keep debug logging off unless explicitly changed here.
+DEBUG_BOOT_LOG = False
+CONFIG_LOW_RAM_MODE = False
+CONFIG_BUFFERED_DISPLAY = False
+CONFIG_ENABLE_HEAVY_GAMES = True
+CONFIG_FRAME_MS_DEFAULT = 35
+FEATURE_TIER = 2
+
 
 def _boot_log(tag):
+    if not DEBUG_BOOT_LOG:
+        return
     try:
         # Keep this tiny to reduce chance of further allocations.
         print("BOOT:", tag, gc.mem_free())
@@ -54,6 +64,51 @@ HEIGHT = const(64)
 
 HUD_HEIGHT  = const(6)
 PLAY_HEIGHT = const(HEIGHT - HUD_HEIGHT)  # 58
+
+GAME_FLAG_HEAVY = const(1)
+FRAMEBUFFER_MIN_FREE_RP2040 = const(110000)
+FRAMEBUFFER_MIN_FREE_RP2350 = const(70000)
+LOW_RAM_FREE_THRESHOLD = const(95000)
+
+def _mem_free():
+    try:
+        return gc.mem_free()
+    except Exception:
+        return 0
+
+def _board_name():
+    try:
+        return _os.uname().machine.lower()
+    except Exception:
+        try:
+            return sys.platform.lower()
+        except Exception:
+            return ""
+
+def _detect_feature_tier():
+    if not IS_MICROPYTHON:
+        return 2
+    name = _board_name()
+    if "2350" in name or "pico2" in name or "pico 2" in name:
+        return 2
+    free = _mem_free()
+    if free and free < LOW_RAM_FREE_THRESHOLD:
+        return 0
+    return 1
+
+def refresh_runtime_config():
+    global FEATURE_TIER, CONFIG_LOW_RAM_MODE, CONFIG_BUFFERED_DISPLAY, CONFIG_ENABLE_HEAVY_GAMES
+    FEATURE_TIER = _detect_feature_tier()
+    CONFIG_LOW_RAM_MODE = bool(IS_MICROPYTHON and FEATURE_TIER == 0)
+    CONFIG_ENABLE_HEAVY_GAMES = bool((not IS_MICROPYTHON) or FEATURE_TIER >= 1)
+    if not IS_MICROPYTHON:
+        CONFIG_BUFFERED_DISPLAY = False
+        return
+    free = _mem_free()
+    threshold = FRAMEBUFFER_MIN_FREE_RP2350 if FEATURE_TIER >= 2 else FRAMEBUFFER_MIN_FREE_RP2040
+    CONFIG_BUFFERED_DISPLAY = bool(free == 0 or free >= threshold)
+
+refresh_runtime_config()
 
 _boot_log("constants")
 
@@ -165,7 +220,7 @@ else:
 # Use the software framebuffer diff layer only on MicroPython/HUB75.
 # IMPORTANT: delay allocations until after display.start(), otherwise the
 # hub75 driver may fail to allocate its own internal buffers on boot.
-USE_BUFFERED_DISPLAY_DESIRED = IS_MICROPYTHON
+USE_BUFFERED_DISPLAY_DESIRED = CONFIG_BUFFERED_DISPLAY
 USE_BUFFERED_DISPLAY = False
 
 _boot_log("buffer flags")
@@ -190,7 +245,9 @@ _boot_log("display refs")
 
 def init_buffered_display():
     """Allocate software framebuffer + hooks after hub75 display is started."""
-    global USE_BUFFERED_DISPLAY, _fb_current, _fb_prev, _dirty_mask, _force_full_flush
+    global USE_BUFFERED_DISPLAY, USE_BUFFERED_DISPLAY_DESIRED, _fb_current, _fb_prev, _dirty_mask, _force_full_flush
+    refresh_runtime_config()
+    USE_BUFFERED_DISPLAY_DESIRED = CONFIG_BUFFERED_DISPLAY
     if USE_BUFFERED_DISPLAY:
         return
     if not USE_BUFFERED_DISPLAY_DESIRED:
@@ -200,6 +257,13 @@ def init_buffered_display():
         gc.collect()
     except Exception:
         pass
+
+    free = _mem_free()
+    if IS_MICROPYTHON and free:
+        threshold = FRAMEBUFFER_MIN_FREE_RP2350 if FEATURE_TIER >= 2 else FRAMEBUFFER_MIN_FREE_RP2040
+        if free < threshold:
+            USE_BUFFERED_DISPLAY = False
+            return
 
     try:
         if _fb_current is None or len(_fb_current) != _fb_size:
@@ -1060,18 +1124,55 @@ class HighScores:
         self.scores = {}
         self.load()
 
+    def _load_compact(self):
+        out = {}
+        with open(self.FILE, "r") as f:
+            for line in f:
+                parts = line.strip().split(":")
+                if len(parts) < 2:
+                    continue
+                game = parts[0]
+                score = int(parts[1] or 0)
+                if score <= 0:
+                    continue
+                if len(parts) > 2 and parts[2]:
+                    out[game] = {"score": score, "name": parts[2][:3].upper()}
+                else:
+                    out[game] = score
+        self.scores = out
+
     def load(self):
         try:
             with open(self.FILE, "r") as f:
                 self.scores = json.load(f)
         except Exception:
-            self.scores = {}
+            try:
+                self._load_compact()
+            except Exception:
+                self.scores = {}
+
+    def _write_scores(self, f):
+        if IS_MICROPYTHON:
+            for game, v in self.scores.items():
+                try:
+                    if isinstance(v, dict):
+                        score = int(v.get("score", 0) or 0)
+                        name = str(v.get("name", "---"))[:3].upper()
+                    else:
+                        score = int(v or 0)
+                        name = ""
+                    if score > 0:
+                        f.write(game + ":" + str(score) + (":" + name if name else "") + "\n")
+                except Exception:
+                    pass
+        else:
+            json.dump(self.scores, f)
 
     def save(self):
         tmp_file = self.FILE + ".tmp"
         try:
             with open(tmp_file, "w") as f:
-                json.dump(self.scores, f)
+                self._write_scores(f)
             try:
                 _os.remove(self.FILE)
             except Exception:
@@ -1084,7 +1185,7 @@ class HighScores:
                 pass
             try:
                 with open(self.FILE, "w") as f:
-                    json.dump(self.scores, f)
+                    self._write_scores(f)
             except Exception:
                 pass
 
@@ -1842,44 +1943,59 @@ class AsteroidGame:
         self.ship = self.Ship()
         self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
         self.projectiles = []
+        self.max_projectiles = 4 if CONFIG_LOW_RAM_MODE else 6
+        self.max_asteroids = 8 if CONFIG_LOW_RAM_MODE else 12
         self.score = 0
 
     def check_collisions(self):
         global game_over, global_score
         # projectile vs asteroid
-        hit_asteroids = set()
-        new_projectiles = []
+        hit_asteroids = bytearray(len(self.asteroids))
+        hit_count = 0
+        keep_i = 0
         spawned = []
         for p in self.projectiles:
             hit_ai = -1
             hit_a = None
             for ai, a in enumerate(self.asteroids):
-                if ai in hit_asteroids:
+                if hit_asteroids[ai]:
                     continue
-                d = hypot(p.x - a.x, p.y - a.y)
-                if d < a.size:
+                dx = p.x - a.x
+                dy = p.y - a.y
+                if dx * dx + dy * dy < a.size * a.size:
                     hit_ai = ai
                     hit_a = a
                     break
             if hit_ai >= 0:
-                hit_asteroids.add(hit_ai)
+                hit_asteroids[hit_ai] = 1
+                hit_count += 1
                 self.score += 10
                 if hit_a.size > 3:
                     half = max(2, hit_a.size // 2)
-                    spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
-                    spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
+                    if len(self.asteroids) + len(spawned) < self.max_asteroids:
+                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
+                    if len(self.asteroids) + len(spawned) < self.max_asteroids:
+                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
             else:
-                new_projectiles.append(p)
-        if hit_asteroids:
-            self.asteroids = [a for i, a in enumerate(self.asteroids) if i not in hit_asteroids]
+                self.projectiles[keep_i] = p
+                keep_i += 1
+        del self.projectiles[keep_i:]
+        if hit_count:
+            keep_a = 0
+            for i, a in enumerate(self.asteroids):
+                if not hit_asteroids[i]:
+                    self.asteroids[keep_a] = a
+                    keep_a += 1
+            del self.asteroids[keep_a:]
             if spawned:
                 self.asteroids.extend(spawned)
-        self.projectiles = new_projectiles
 
         # ship vs asteroid
         for a in self.asteroids:
-            d = hypot(self.ship.x - a.x, self.ship.y - a.y)
-            if d < a.size + self.ship.size:
+            dx = self.ship.x - a.x
+            dy = self.ship.y - a.y
+            limit = a.size + self.ship.size
+            if dx * dx + dy * dy < limit * limit:
                 game_over = True
                 global_score = self.score
                 return
@@ -1892,6 +2008,8 @@ class AsteroidGame:
         self.ship = self.Ship()
         self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
         self.projectiles = []
+        self.max_projectiles = 4 if CONFIG_LOW_RAM_MODE else 6
+        self.max_asteroids = 8 if CONFIG_LOW_RAM_MODE else 12
         self.score = 0
 
         frame_ms = 1000 // FPS
@@ -1912,18 +2030,19 @@ class AsteroidGame:
 
             if z_button:
                 pr = self.ship.shoot()
-                if pr:
+                if pr and len(self.projectiles) < self.max_projectiles:
                     self.projectiles.append(pr)
 
             for a in self.asteroids:
                 a.update()
 
-            alive_projectiles = []
+            keep_i = 0
             for p in self.projectiles:
                 p.update()
                 if p.is_alive():
-                    alive_projectiles.append(p)
-            self.projectiles = alive_projectiles
+                    self.projectiles[keep_i] = p
+                    keep_i += 1
+            del self.projectiles[keep_i:]
 
             self.check_collisions()
             if game_over:
@@ -1931,7 +2050,7 @@ class AsteroidGame:
 
             # new wave
             if not self.asteroids:
-                self.asteroids = [self.Asteroid(start=False) for _ in range(4)]
+                self.asteroids = [self.Asteroid(start=False) for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)]
 
             display.clear()
             self.ship.draw()
@@ -1982,7 +2101,7 @@ class QixGame:
             oy = random.randint(1, self.height - 2)
             odx = random.choice([-1, 1])
             ody = random.choice([-1, 1])
-            self.opponents.append({"x": ox, "y": oy, "dx": odx, "dy": ody})
+            self.opponents.append([ox, oy, odx, ody])
             display.set_pixel(ox, oy, 255, 0, 0)
 
     def draw_frame(self):
@@ -2010,10 +2129,10 @@ class QixGame:
         global game_over, global_score
         # move each opponent independently
         for op in self.opponents:
-            ox = op["x"]
-            oy = op["y"]
-            dx = op["dx"]
-            dy = op["dy"]
+            ox = op[0]
+            oy = op[1]
+            dx = op[2]
+            dy = op[3]
 
             nx = ox + dx
             ny = oy + dy
@@ -2045,10 +2164,10 @@ class QixGame:
 
             # move opponent pixel
             display.set_pixel(ox, oy, 0, 0, 0)
-            op["x"] = nx
-            op["y"] = ny
-            op["dx"] = dx
-            op["dy"] = dy
+            op[0] = nx
+            op[1] = ny
+            op[2] = dx
+            op[3] = dy
             display.set_pixel(nx, ny, 255, 0, 0)
 
     def move_player(self, joystick):
@@ -2087,7 +2206,7 @@ class QixGame:
         # using only the first one can incorrectly claim an area containing another.
         if self.opponents:
             for op in self.opponents:
-                flood_fill(op["x"], op["y"], accessible_mark=3)
+                flood_fill(op[0], op[1], accessible_mark=3)
         else:
             flood_fill(self.width // 2, self.height // 2, accessible_mark=3)
 
@@ -2155,33 +2274,31 @@ class TetrisGame:
     GRID_HEIGHT = const(13)
     BLOCK_SIZE = const(4)
 
-    COLORS = [
-        (0, 255, 255),(255, 0, 0),(0, 255, 0),(0, 0, 255),
-        (255, 255, 0),(255, 165, 0),(128, 0, 128),
-    ]
+    COLORS = (
+        (0, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255),
+        (255, 255, 0), (255, 165, 0), (128, 0, 128),
+    )
 
-    TETRIMINOS = [
-        [[1,1,1,1]],                 # I
-        [[1,1,1],[0,1,0]],           # T
-        [[1,1,0],[0,1,1]],           # S
-        [[0,1,1],[1,1,0]],           # Z
-        [[1,1],[1,1]],               # O
-        [[1,1,1],[1,0,0]],           # L
-        [[1,1,1],[0,0,1]],           # J
-    ]
+    TETRIMINOS = (
+        ((1,1,1,1),),                # I
+        ((1,1,1),(0,1,0)),          # T
+        ((1,1,0),(0,1,1)),          # S
+        ((0,1,1),(1,1,0)),          # Z
+        ((1,1),(1,1)),              # O
+        ((1,1,1),(1,0,0)),          # L
+        ((1,1,1),(0,0,1)),          # J
+    )
 
     class Piece:
         def __init__(self):
-            self.shape = random.choice(TetrisGame.TETRIMINOS)
-            self.color = random.choice(TetrisGame.COLORS)
+            idx = random.randint(0, len(TetrisGame.TETRIMINOS) - 1)
+            self.shape = TetrisGame.TETRIMINOS[idx]
+            self.color = random.randint(1, len(TetrisGame.COLORS))
             self.x = TetrisGame.GRID_WIDTH // 2 - len(self.shape[0]) // 2
             self.y = 0
 
-        def rotate(self):
-            self.shape = [list(row) for row in zip(*self.shape[::-1])]
-
     def __init__(self):
-        self.locked = {}  # (x,y)->color
+        self.locked = bytearray(self.GRID_WIDTH * self.GRID_HEIGHT)
         self.current = TetrisGame.Piece()
         self.score = 0
         self.last_fall = ticks_ms()
@@ -2201,7 +2318,7 @@ class TetrisGame:
                     return False
                 if ny >= self.GRID_HEIGHT:
                     return False
-                if ny >= 0 and (nx, ny) in self.locked:
+                if ny >= 0 and self.locked[ny * self.GRID_WIDTH + nx]:
                     return False
         return True
 
@@ -2213,49 +2330,53 @@ class TetrisGame:
                     py = piece.y + y
                     if py < 0:
                         return False
-                    self.locked[(px, py)] = piece.color
+                    self.locked[py * self.GRID_WIDTH + px] = piece.color
         return True
 
     def clear_rows(self):
-        full_rows = []
-        for y in range(self.GRID_HEIGHT):
-            ok = True
-            for x in range(self.GRID_WIDTH):
-                if (x, y) not in self.locked:
-                    ok = False
+        w = self.GRID_WIDTH
+        h = self.GRID_HEIGHT
+        cleared = 0
+        dst_y = h - 1
+        for src_y in range(h - 1, -1, -1):
+            full = True
+            base = src_y * w
+            for x in range(w):
+                if self.locked[base + x] == 0:
+                    full = False
                     break
-            if ok:
-                full_rows.append(y)
-
-        if not full_rows:
-            return 0
-
-        for y in full_rows:
-            for x in range(self.GRID_WIDTH):
-                if (x, y) in self.locked:
-                    del self.locked[(x, y)]
-
-        full_rows.sort()
-        new_locked = {}
-        for (x, y), col in self.locked.items():
-            shift = 0
-            for ry in full_rows:
-                if y < ry:
-                    shift += 1
-            new_locked[(x, y + shift)] = col
-        self.locked = new_locked
-        return len(full_rows)
+            if full:
+                cleared += 1
+                continue
+            if dst_y != src_y:
+                dst = dst_y * w
+                for x in range(w):
+                    self.locked[dst + x] = self.locked[base + x]
+            dst_y -= 1
+        while dst_y >= 0:
+            base = dst_y * w
+            for x in range(w):
+                self.locked[base + x] = 0
+            dst_y -= 1
+        return cleared
 
     def draw_block(self, gx, gy, color):
         x1 = gx * self.BLOCK_SIZE
         y1 = gy * self.BLOCK_SIZE
+        if isinstance(color, int):
+            color = self.COLORS[(color - 1) % len(self.COLORS)]
         draw_rectangle(x1, y1, x1 + self.BLOCK_SIZE - 1, y1 + self.BLOCK_SIZE - 1, *color)
 
     def render(self):
         display.clear()
         # locked
-        for (x, y), col in self.locked.items():
-            self.draw_block(x, y, col)
+        w = self.GRID_WIDTH
+        for y in range(self.GRID_HEIGHT):
+            base = y * w
+            for x in range(w):
+                col = self.locked[base + x]
+                if col:
+                    self.draw_block(x, y, col)
         # current
         for y, row in enumerate(self.current.shape):
             for x, cell in enumerate(row):
@@ -2269,6 +2390,12 @@ class TetrisGame:
         global game_over, global_score
         game_over = False
         global_score = 0
+        self.locked = bytearray(self.GRID_WIDTH * self.GRID_HEIGHT)
+        self.current = TetrisGame.Piece()
+        self.score = 0
+        self.last_fall = ticks_ms()
+        self.last_input = ticks_ms()
+        self.fall_ms = 520
         display_score_and_time(0, force=True)
 
         while True:
@@ -2289,7 +2416,7 @@ class TetrisGame:
                     self.current.y += 1
                 elif d == JOYSTICK_UP or z_button:
                     # rotate
-                    rot = [list(row) for row in zip(*self.current.shape[::-1])]
+                    rot = tuple(tuple(row) for row in zip(*self.current.shape[::-1]))
                     if self.valid(self.current, rotated_shape=rot):
                         self.current.shape = rot
                 self.last_input = now
@@ -2345,32 +2472,42 @@ class MazeGame:
         self.enemies = []
         self.score = 0
         self.player_direction = JOYSTICK_UP
-        self.explored = set()
+        self.explored = bytearray(WIDTH * PLAY_HEIGHT)
+
+    def _idx(self, x, y):
+        return y * WIDTH + x
+
+    def _mark_explored(self, x, y):
+        if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+            self.explored[self._idx(x, y)] = 1
 
     def generate_maze(self):
         stack = []
-        visited = set()
+        visited = bytearray(WIDTH * PLAY_HEIGHT)
 
         start_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
         start_y = random.randint(self.BORDER, PLAY_HEIGHT - self.BORDER - 1)
 
-        stack.append((start_x, start_y))
-        visited.add((start_x, start_y))
+        # WIDTH/PLAY_HEIGHT are <256, so y<<8|x safely packs one cell.
+        stack.append((start_y << 8) | start_x)
+        visited[self._idx(start_x, start_y)] = 1
         set_grid_value(start_x, start_y, self.PATH)
 
-        dirs = [(0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0)]
+        dirs = ((0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0))
+        dir_order = [0, 1, 2, 3]
 
         while stack:
-            x, y = stack[-1]
-            dir_order = [0, 1, 2, 3]
+            pack = stack[-1]
+            x = pack & 0xFF
+            y = pack >> 8
+            dir_order[0], dir_order[1], dir_order[2], dir_order[3] = 0, 1, 2, 3
             _shuffle_in_place(dir_order)
 
             found = False
             for di in dir_order:
                 dx, dy = dirs[di]
                 nx, ny = x + dx, y + dy
-                if self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER and (nx, ny) not in visited:
-                    # carve
+                if self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER and not visited[self._idx(nx, ny)]:
                     step_x = dx // self.MazeWaySize
                     step_y = dy // self.MazeWaySize
                     for k in range(self.MazeWaySize):
@@ -2378,8 +2515,8 @@ class MazeGame:
                         cy = y + step_y * k
                         set_grid_value(cx, cy, self.PATH)
                     set_grid_value(nx, ny, self.PATH)
-                    stack.append((nx, ny))
-                    visited.add((nx, ny))
+                    stack.append((ny << 8) | nx)
+                    visited[self._idx(nx, ny)] = 1
                     found = True
                     break
 
@@ -2392,8 +2529,7 @@ class MazeGame:
             self.player_y = random.randint(self.BORDER, PLAY_HEIGHT - self.BORDER - 1)
             if get_grid_value(self.player_x, self.player_y) == self.PATH:
                 set_grid_value(self.player_x, self.player_y, self.PLAYER)
-                # mark initial player cell as explored
-                self.explored.add((self.player_x, self.player_y))
+                self._mark_explored(self.player_x, self.player_y)
                 break
 
     def place_gems(self, n=10):
@@ -2419,10 +2555,14 @@ class MazeGame:
                     break
 
     def get_visible_cells(self):
-        vis = set()
+        vis = []
+        def add_vis(px, py):
+            cell = (px, py)
+            if cell not in vis:
+                vis.append(cell)
         x, y = self.player_x, self.player_y
-        vis.add((x, y))
-        dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+        add_vis(x, y)
+        dirs = ((-1,0), (1,0), (0,-1), (0,1))
         for dx, dy in dirs:
             nx, ny = x, y
             while True:
@@ -2432,7 +2572,7 @@ class MazeGame:
                     v = get_grid_value(nx, ny)
                     if v == self.WALL:
                         break
-                    vis.add((nx, ny))
+                    add_vis(nx, ny)
                     if v == self.ENEMY:
                         break
                 else:
@@ -2443,29 +2583,30 @@ class MazeGame:
         display.clear()
         vis = self.get_visible_cells()
 
-        # add newly seen path cells to explored set
         for x, y in vis:
             v = get_grid_value(x, y)
             if v == self.PATH or v == self.PLAYER:
-                self.explored.add((x, y))
+                self._mark_explored(x, y)
 
-        # draw explored paths (dim)
-        for x, y in self.explored:
-            display.set_pixel(x, y, 40, 40, 40)
+        sp = display.set_pixel
+        for y in range(PLAY_HEIGHT):
+            base = y * WIDTH
+            for x in range(WIDTH):
+                if self.explored[base + x]:
+                    sp(x, y, 40, 40, 40)
 
-        # draw currently visible cells brighter / overlay
         for x, y in vis:
             v = get_grid_value(x, y)
             if v == self.PATH:
-                display.set_pixel(x, y, 80, 80, 80)
+                sp(x, y, 80, 80, 80)
             elif v == self.PLAYER:
-                display.set_pixel(x, y, 0, 255, 0)
+                sp(x, y, 0, 255, 0)
             elif v == self.GEM:
-                display.set_pixel(x, y, 255, 215, 0)
+                sp(x, y, 255, 215, 0)
             elif v == self.ENEMY:
-                display.set_pixel(x, y, 255, 0, 0)
+                sp(x, y, 255, 0, 0)
             elif v == self.PROJECTILE:
-                display.set_pixel(x, y, 255, 255, 0)
+                sp(x, y, 255, 255, 0)
 
     def move_player(self, joystick):
         d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
@@ -2514,13 +2655,14 @@ class MazeGame:
             return
 
         # Compute delta from last movement direction (UP fallback).
-        dir_map = {
-            JOYSTICK_UP: (0, -1),
-            JOYSTICK_DOWN: (0, 1),
-            JOYSTICK_LEFT: (-1, 0),
-            JOYSTICK_RIGHT: (1, 0),
-        }
-        dx, dy = dir_map.get(self.player_direction, (0, -1))
+        dx = 0
+        dy = -1
+        if self.player_direction == JOYSTICK_DOWN:
+            dy = 1
+        elif self.player_direction == JOYSTICK_LEFT:
+            dx, dy = -1, 0
+        elif self.player_direction == JOYSTICK_RIGHT:
+            dx, dy = 1, 0
 
         sx = self.player_x + dx
         sy = self.player_y + dy
@@ -2531,38 +2673,39 @@ class MazeGame:
         if v == self.WALL:
             return
 
-        proj = {"x": sx, "y": sy, "dx": dx, "dy": dy, "lifetime": 12, "prev": v}
+        if len(self.projectiles) >= 3:
+            return
+        self.projectiles.append([sx, sy, dx, dy, 12, v])
         set_grid_value(sx, sy, self.PROJECTILE)
-        self.projectiles.append(proj)
 
     def update_projectiles(self):
-        for p in self.projectiles[:]:
-            # restore previous cell
-            set_grid_value(p["x"], p["y"], p["prev"])
+        keep_i = 0
+        for p in self.projectiles:
+            set_grid_value(p[0], p[1], p[5])
 
-            p["x"] += p["dx"]
-            p["y"] += p["dy"]
-            p["lifetime"] -= 1
+            p[0] += p[2]
+            p[1] += p[3]
+            p[4] -= 1
 
-            if p["lifetime"] <= 0 or not (0 <= p["x"] < WIDTH and 0 <= p["y"] < PLAY_HEIGHT):
-                self.projectiles.remove(p)
+            if p[4] <= 0 or not (0 <= p[0] < WIDTH and 0 <= p[1] < PLAY_HEIGHT):
                 continue
 
-            v = get_grid_value(p["x"], p["y"])
+            v = get_grid_value(p[0], p[1])
             if v == self.WALL:
-                self.projectiles.remove(p)
                 continue
             if v == self.ENEMY:
-                # remove enemy
-                if (p["x"], p["y"]) in self.enemies:
-                    self.enemies.remove((p["x"], p["y"]))
-                set_grid_value(p["x"], p["y"], self.PATH)
-                self.projectiles.remove(p)
+                pos = (p[0], p[1])
+                if pos in self.enemies:
+                    self.enemies.remove(pos)
+                set_grid_value(p[0], p[1], self.PATH)
                 self.score += 20
                 continue
 
-            p["prev"] = v
-            set_grid_value(p["x"], p["y"], self.PROJECTILE)
+            p[5] = v
+            set_grid_value(p[0], p[1], self.PROJECTILE)
+            self.projectiles[keep_i] = p
+            keep_i += 1
+        del self.projectiles[keep_i:]
 
     def main_loop(self, joystick):
         global game_over, global_score
@@ -2570,7 +2713,7 @@ class MazeGame:
         global_score = 0
 
         initialize_grid()
-        self.explored = set()
+        self.explored = bytearray(WIDTH * PLAY_HEIGHT)
         self.score = 0
         self.projectiles = []
         self.generate_maze()
@@ -3010,6 +3153,10 @@ class RTypeGame:
     """
     # kleine Sinus-LUT (±4) für "wobble" Gegner ohne math.sin
     _SIN = (0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1)
+    MAX_BULLETS = 6
+    MAX_EBULLETS = 3
+    MAX_ENEMIES = 8
+    MAX_POWERUPS = 3
 
     def __init__(self):
         self.reset()
@@ -3103,7 +3250,7 @@ class RTypeGame:
 
     def _update_powerups(self):
         # move left, expire
-        keep = []
+        keep_i = 0
         for p in self.powerups:
             p[0] -= 1
             p[2] -= 1
@@ -3116,32 +3263,35 @@ class RTypeGame:
                 # small bonus
                 self.score += 5
                 continue
-            keep.append(p)
-        self.powerups = keep
+            self.powerups[keep_i] = p
+            keep_i += 1
+        del self.powerups[keep_i:]
 
     def _update_bullets(self):
         # player bullets
-        keep_b = []
+        keep_i = 0
         for b in self.bullets:
             b[0] += 4
             if b[0] >= WIDTH:
                 continue
-            keep_b.append(b)
-        self.bullets = keep_b
+            self.bullets[keep_i] = b
+            keep_i += 1
+        del self.bullets[keep_i:]
 
         # enemy bullets
-        keep_eb = []
+        keep_i = 0
         for b in self.ebullets:
             b[0] -= 3
             if b[0] < 0:
                 continue
-            keep_eb.append(b)
-        self.ebullets = keep_eb
+            self.ebullets[keep_i] = b
+            keep_i += 1
+        del self.ebullets[keep_i:]
 
     def _update_enemies(self):
         global game_over, global_score
 
-        alive_enemies = []
+        keep_i = 0
         for e in self.enemies:
             typ = e[2]
 
@@ -3157,7 +3307,7 @@ class RTypeGame:
             else:
                 e[0] -= 1
                 e[5] -= 1
-                if e[5] <= 0 and len(self.ebullets) < 3:
+                if e[5] <= 0 and len(self.ebullets) < self.MAX_EBULLETS:
                     # shoot
                     self.ebullets.append([e[0], e[1] + 1])
                     e[5] = random.randint(18, 40)
@@ -3183,8 +3333,9 @@ class RTypeGame:
                 global_score = self.score
                 game_over = True
                 return
-            alive_enemies.append(e)
-        self.enemies = alive_enemies
+            self.enemies[keep_i] = e
+            keep_i += 1
+        del self.enemies[keep_i:]
 
         # enemy bullets vs player
         px1 = self.px
@@ -3199,7 +3350,7 @@ class RTypeGame:
 
     def _bullet_hits(self):
         # bullets vs enemies
-        keep_b = []
+        keep_i = 0
         for b in self.bullets:
             bx, by = b[0], b[1]
             hit = None
@@ -3223,13 +3374,14 @@ class RTypeGame:
                     typ = hit[2]
                     self.score += (10 + typ * 7)
                     # chance for powerup
-                    if random.randint(0, 99) < 12:
+                    if random.randint(0, 99) < 12 and len(self.powerups) < self.MAX_POWERUPS:
                         self.powerups.append([hit[0], hit[1], 400])
                 else:
                     self.score += 1  # hit bonus
             else:
-                keep_b.append(b)
-        self.bullets = keep_b
+                self.bullets[keep_i] = b
+                keep_i += 1
+        del self.bullets[keep_i:]
 
     def _draw(self):
         display.clear()
@@ -3332,17 +3484,17 @@ class RTypeGame:
             if self.fire_cd > 0:
                 self.fire_cd -= 1
             cd_min = 4 if self.power_t > 0 else 7
-            if z_button and self.fire_cd == 0:
+            if z_button and self.fire_cd == 0 and len(self.bullets) < self.MAX_BULLETS:
                 # normal bullet
                 self.bullets.append([self.px + self.pw + 1, self.py + 1])
                 # powered double-shot
-                if self.power_t > 0 and len(self.bullets) < 6:
+                if self.power_t > 0 and len(self.bullets) < self.MAX_BULLETS:
                     self.bullets.append([self.px + self.pw + 1, self.py])
                 self.fire_cd = cd_min
 
             # spawn
             self._difficulty_update()
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms and len(self.enemies) < 8:
+            if ticks_diff(now, self.last_spawn) >= self.spawn_ms and len(self.enemies) < self.MAX_ENEMIES:
                 self.last_spawn = now
                 self._spawn_enemy()
 
@@ -3719,18 +3871,20 @@ class PacmanGame:
 
                 global_score = self.score
 
-                # incremental redraw: old/new sprite cells (and current cell if pellet changed)
-                dirty = set()
-                dirty.add((old_px, old_py))
-                dirty.add((self.px, self.py))
+                # incremental redraw: old/new sprite cells without allocating a set
+                dirty = []
+                def add_dirty(cell):
+                    if cell not in dirty:
+                        dirty.append(cell)
+                add_dirty((old_px, old_py))
+                add_dirty((self.px, self.py))
                 for p in old_ghosts:
-                    dirty.add(p)
+                    add_dirty(p)
                 for g in self.ghosts:
-                    dirty.add((g[0], g[1]))
-                # if frightened state toggles, redraw ghosts too (same cells)
+                    add_dirty((g[0], g[1]))
                 if (old_power > 0) != (self.power_timer > 0):
                     for g in self.ghosts:
-                        dirty.add((g[0], g[1]))
+                        add_dirty((g[0], g[1]))
 
                 self._draw_dirty_cells(dirty)
 
@@ -4209,7 +4363,7 @@ class DemosGame:
     """Zero-player demos: simple animations and cellular automata."""
     def __init__(self):
         # TRON removed; new demos added: ANTS, FLOOD, FIRE
-        self.demos = ["SNAKE", "LIFE", "ANTS", "FLOOD", "FIRE"]
+        self.demos = ("SNAKE", "LIFE", "FIRE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "LIFE", "ANTS", "FLOOD", "FIRE")
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
@@ -4903,8 +5057,6 @@ class DemosGame:
                 elif demo == "FLOOD":
                     self._flood_init()
                 elif demo == "FIRE":
-                    self._fire = bytearray(self._fire_w * self._fire_h)
-                    self._fire_prev = bytearray(self._fire_w * self._fire_h)
                     self._fire_init()
                 else:  # SNAKE
                     self._snake_init()
@@ -5590,10 +5742,16 @@ class DoomLiteGame:
         except Exception:
             pass
 
-        # Store floats directly to avoid per-call division at runtime.
-        # array('f') uses 4 bytes/element (vs 2 for 'h') but saves the
-        # "/ 1024.0" division on every _cos_sin call (64×/frame).
-        if array:
+        if CONFIG_LOW_RAM_MODE and array:
+            cos_lut = array('h')
+            sin_lut = array('h')
+            for i in range(256):
+                ang = 2 * math.pi * i / 256
+                cos_lut.append(int(math.cos(ang) * 1024))
+                sin_lut.append(int(math.sin(ang) * 1024))
+            cls._COS = cos_lut
+            cls._SIN = sin_lut
+        elif array:
             cos_lut = array('f')
             sin_lut = array('f')
             for i in range(256):
@@ -5607,8 +5765,12 @@ class DoomLiteGame:
             sin_lut = []
             for i in range(256):
                 ang = 2 * math.pi * i / 256
-                cos_lut.append(math.cos(ang))
-                sin_lut.append(math.sin(ang))
+                if CONFIG_LOW_RAM_MODE:
+                    cos_lut.append(int(math.cos(ang) * 1024))
+                    sin_lut.append(int(math.sin(ang) * 1024))
+                else:
+                    cos_lut.append(math.cos(ang))
+                    sin_lut.append(math.sin(ang))
             cls._COS = cos_lut
             cls._SIN = sin_lut
 
@@ -5642,7 +5804,7 @@ class DoomLiteGame:
         self._spawn_wave(self.wave)
 
         self.last_frame = ticks_ms()
-        self.frame_ms = 35  # ~28 fps
+        self.frame_ms = 45 if CONFIG_LOW_RAM_MODE else CONFIG_FRAME_MS_DEFAULT  # ~22-28 fps
         self.frame = 0
 
     # --- helpers ---
@@ -5656,7 +5818,11 @@ class DoomLiteGame:
 
     def _cos_sin(self, a):
         a &= 255
-        return self._COS[a], self._SIN[a]
+        c = self._COS[a]
+        s = self._SIN[a]
+        if CONFIG_LOW_RAM_MODE:
+            return c / 1024.0, s / 1024.0
+        return c, s
 
     def _angle_to_units(self, dx, dy):
         # dx,dy in Map-Koordinaten; Achtung y-Achse ist "nach unten"
@@ -5685,10 +5851,13 @@ class DoomLiteGame:
         px = self.px
         py = self.py
 
-        # Inline trig lookup (floats stored directly in LUT).
+        # Inline trig lookup. Low-RAM mode stores int16 values scaled by 1024.
         a = ray_ang & 255
         ray_dx = COS[a]
         ray_dy = -SIN[a]  # y nach unten
+        if CONFIG_LOW_RAM_MODE:
+            ray_dx = ray_dx / 1024.0
+            ray_dy = ray_dy / 1024.0
 
         # avoid division by 0
         if ray_dx == 0:
@@ -5869,15 +6038,18 @@ class DoomLiteGame:
         draw_rectangle(0, half, WIDTH - 1, PLAY_H - 1, 18, 10, 0)           # floor
 
         # ray angles: fixedpoint, damit FOV/64 sauber läuft
+        col_step = 2 if CONFIG_LOW_RAM_MODE else 1
         angle_step_fp = (self.FOV << 16) // WIDTH
         ang_fp = ((self.ang - self.HALF_FOV) & 255) << 16
 
-        for x in range(WIDTH):
+        for x in range(0, WIDTH, col_step):
             ray_ang = (ang_fp >> 16) & 255
-            ang_fp += angle_step_fp
+            ang_fp += angle_step_fp * col_step
 
             dist, side = self._cast_ray(ray_ang)
             zbuf[x] = dist
+            if col_step == 2 and x + 1 < WIDTH:
+                zbuf[x + 1] = dist
 
             line_h = int(PLAY_H / (dist + 1e-6))
             if line_h < 1:
@@ -5902,6 +6074,8 @@ class DoomLiteGame:
             # its swap/clamp checks + inner x-loop that would run exactly once).
             for y in range(start, end + 1):
                 sp(x, y, wr, wg, wb)
+                if col_step == 2 and x + 1 < WIDTH:
+                    sp(x + 1, y, wr, wg, wb)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -6158,35 +6332,43 @@ class GameOverMenu:
 
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
+    GAME_REGISTRY = (
+        ("DEMOS", DemosGame, 0),
+        ("ASTRD", AsteroidGame, GAME_FLAG_HEAVY),
+        ("BRKOUT", BreakoutGame, 0),
+        ("CAVEFL", CaveFlyGame, 0),
+        ("DODGE", DodgeGame, 0),
+        ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
+        ("FLAPPY", FlappyGame, 0),
+        ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
+        ("MAZE", MazeGame, GAME_FLAG_HEAVY),
+        ("PACMAN", PacmanGame, 0),
+        ("PITFAL", PitfallGame, 0),
+        ("PONG", PongGame, 0),
+        ("QIX", QixGame, GAME_FLAG_HEAVY),
+        ("RTYPE", RTypeGame, GAME_FLAG_HEAVY),
+        ("SIMON", SimonGame, 0),
+        ("SNAKE", SnakeGame, 0),
+        ("TETRIS", TetrisGame, GAME_FLAG_HEAVY),
+        ("TRON", TronGame, 0),
+        ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
+    )
+
     def __init__(self):
+        refresh_runtime_config()
         self.joystick = Joystick()
         self.highscores = HighScores()
-        self.game_classes = {
-            "ASTRD": AsteroidGame,
-            "BRKOUT": BreakoutGame,
-            "FLAPPY": FlappyGame,
-            "DODGE": DodgeGame,
-            "MAZE": MazeGame,
-            "PONG": PongGame,
-            "QIX": QixGame,
-            "TRON": TronGame,
-            "SIMON": SimonGame,
-            "SNAKE": SnakeGame,
-            "TETRIS": TetrisGame,
-            "RTYPE": RTypeGame,
-            "PACMAN": PacmanGame,
-            "CAVEFL": CaveFlyGame,
-            "PITFAL": PitfallGame,
-            "LANDER": LunarLanderGame,
-            "UFODEF": UFODefenseGame,
-            "DOOMLT": DoomLiteGame,
-            "DEMOS": DemosGame,
-        }
-        keys = sorted(self.game_classes.keys())
-        if "DEMOS" in keys:
-            keys.remove("DEMOS")
-            keys.insert(0, "DEMOS")
-        self.sorted_games = keys
+        if CONFIG_ENABLE_HEAVY_GAMES:
+            self.game_registry = self.GAME_REGISTRY
+        else:
+            self.game_registry = tuple(g for g in self.GAME_REGISTRY if not (g[2] & GAME_FLAG_HEAVY))
+        self.sorted_games = tuple(g[0] for g in self.game_registry)
+
+    def _game_class(self, name):
+        for game_name, cls, _flags in self.game_registry:
+            if game_name == name:
+                return cls
+        return None
 
     def run_game_selector(self):
         games = self.sorted_games
@@ -6273,7 +6455,10 @@ class GameSelect:
                 game_over = False
                 global_score = 0
 
-                game = self.game_classes[game_name]()
+                game_cls = self._game_class(game_name)
+                if game_cls is None:
+                    break
+                game = game_cls()
                 game.main_loop(self.joystick)
 
                 if game_over:
@@ -6306,6 +6491,7 @@ def main():
     # After hub75 has allocated its internal buffers, we can try to enable
     # the optional software framebuffer diff layer.
     try:
+        refresh_runtime_config()
         init_buffered_display()
     except Exception:
         pass
@@ -6313,9 +6499,10 @@ def main():
     display.clear()
     display_score_and_time(0, force=True)
 
+    selector = GameSelect()
     while True:
         try:
-            GameSelect().run()
+            selector.run()
         except RestartProgram:
             display.clear()
             display_score_and_time(0, force=True)
