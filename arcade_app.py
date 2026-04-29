@@ -2488,6 +2488,7 @@ class MazeGame:
         start_x = random.randint(self.BORDER, WIDTH - self.BORDER - 1)
         start_y = random.randint(self.BORDER, PLAY_HEIGHT - self.BORDER - 1)
 
+        # WIDTH/PLAY_HEIGHT are <256, so y<<8|x safely packs one cell.
         stack.append((start_y << 8) | start_x)
         visited[self._idx(start_x, start_y)] = 1
         set_grid_value(start_x, start_y, self.PATH)
@@ -5803,7 +5804,7 @@ class DoomLiteGame:
         self._spawn_wave(self.wave)
 
         self.last_frame = ticks_ms()
-        self.frame_ms = 45 if CONFIG_LOW_RAM_MODE else 35  # ~22-28 fps
+        self.frame_ms = 45 if CONFIG_LOW_RAM_MODE else CONFIG_FRAME_MS_DEFAULT  # ~22-28 fps
         self.frame = 0
 
     # --- helpers ---
