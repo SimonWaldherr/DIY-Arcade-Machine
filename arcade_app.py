@@ -1079,6 +1079,10 @@ class HighScores:
             _os.rename(tmp_file, self.FILE)
         except Exception:
             try:
+                _os.remove(tmp_file)
+            except Exception:
+                pass
+            try:
                 with open(self.FILE, "w") as f:
                     json.dump(self.scores, f)
             except Exception:
@@ -1177,16 +1181,16 @@ class InitialsEntryMenu:
             if c_button:
                 # cancel
                 while True:
-                    cb, zb = self.joystick.read_buttons()
-                    if not cb:
+                    c_pressed, _z_pressed = self.joystick.read_buttons()
+                    if not c_pressed:
                         break
                     sleep_ms(10)
                 return None
 
             if z_button:
                 while True:
-                    cb, zb = self.joystick.read_buttons()
-                    if not zb:
+                    _c_pressed, z_pressed = self.joystick.read_buttons()
+                    if not z_pressed:
                         break
                     sleep_ms(10)
                 return "".join(self.letters)
@@ -1321,15 +1325,19 @@ class SnakeGame:
         global game_over, global_score
         hx, hy = self.snake[0]
         body = self.snake[1:]
-        body_set = set(body)
+        if len(body) > 12:
+            body_positions = set(body)
+        else:
+            body_positions = body
+        contains_body = body_positions.__contains__
         moves = {
             JOYSTICK_UP: (hx, hy - 1),
             JOYSTICK_DOWN: (hx, hy + 1),
             JOYSTICK_LEFT: (hx - 1, hy),
             JOYSTICK_RIGHT: (hx + 1, hy),
         }
-        safe_dirs = [d for d, p in moves.items() if p not in body_set]
-        if moves[self.snake_direction] in body_set:
+        safe_dirs = [d for d, p in moves.items() if not contains_body(p)]
+        if contains_body(moves[self.snake_direction]):
             if safe_dirs:
                 self.snake_direction = random.choice(safe_dirs)
             else:
@@ -2330,11 +2338,11 @@ class MazeGame:
 
         while stack:
             x, y = stack[-1]
-            mixed = [0, 1, 2, 3]
-            _shuffle_in_place(mixed)
+            dir_order = [0, 1, 2, 3]
+            _shuffle_in_place(dir_order)
 
             found = False
-            for di in mixed:
+            for di in dir_order:
                 dx, dy = dirs[di]
                 nx, ny = x + dx, y + dy
                 if self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER and (nx, ny) not in visited:
@@ -2481,17 +2489,14 @@ class MazeGame:
         if not z_button:
             return
 
-        # Compute delta from last movement direction (default: UP if never moved)
-        if self.player_direction == JOYSTICK_UP:
-            dx, dy = 0, -1
-        elif self.player_direction == JOYSTICK_DOWN:
-            dx, dy = 0, 1
-        elif self.player_direction == JOYSTICK_LEFT:
-            dx, dy = -1, 0
-        elif self.player_direction == JOYSTICK_RIGHT:
-            dx, dy = 1, 0
-        else:
-            dx, dy = 0, -1
+        # Compute delta from last movement direction (UP fallback).
+        dir_map = {
+            JOYSTICK_UP: (0, -1),
+            JOYSTICK_DOWN: (0, 1),
+            JOYSTICK_LEFT: (-1, 0),
+            JOYSTICK_RIGHT: (1, 0),
+        }
+        dx, dy = dir_map.get(self.player_direction, (0, -1))
 
         sx = self.player_x + dx
         sy = self.player_y + dy
@@ -3071,8 +3076,8 @@ class RTypeGame:
 
             # collect
             if abs(p[0] - (self.px + self.pw // 2)) <= 2 and abs(p[1] - (self.py + 1)) <= 2:
-                self.power_t = 240  # ~8 Sekunden
-                # kleines Bonus
+                self.power_t = 240  # roughly 8 seconds at the current tick speed
+                # small bonus
                 self.score += 5
                 continue
             keep.append(p)
@@ -3177,10 +3182,7 @@ class RTypeGame:
             if hit is not None:
                 hit[3] -= 1
                 if hit[3] <= 0:
-                    try:
-                        self.enemies.remove(hit)
-                    except ValueError:
-                        pass
+                    self.enemies.remove(hit)
                     # score
                     typ = hit[2]
                     self.score += (10 + typ * 7)
@@ -4444,11 +4446,11 @@ class DemosGame:
             x = v & 0x3F
             y = v >> 6
 
-            mixed = [0, 1, 2, 3]
-            _shuffle_in_place(mixed)
+            dir_order = [0, 1, 2, 3]
+            _shuffle_in_place(dir_order)
 
             found = False
-            for di in mixed:
+            for di in dir_order:
                 dx, dy = dirs[di]
                 nx = x + dx
                 ny = y + dy
@@ -5329,8 +5331,7 @@ class UFODefenseGame:
                 self._add_explosion(m["tx"], m["ty"], 6, (255, 180, 0))
             elif m["y"] < 0 or m["y"] >= PLAY_HEIGHT:
                 continue
-            else:
-                keep_player.append(m)
+            keep_player.append(m)
         self.player_missiles = keep_player
 
         # enemy
@@ -6019,6 +6020,7 @@ class GameOverMenu:
         idx = 0
         prev = -1
         last_move = ticks_ms()
+        # Slightly faster than game selector for snappier two-item navigation.
         move_delay = 130
 
         while True:
@@ -6054,7 +6056,7 @@ class GameOverMenu:
                 _wait_for_primary_release(self.joystick)
                 return self.opts[idx]
 
-            sleep_ms(16)
+            sleep_ms(16)  # minimum sleep to keep menu smooth without busy looping
 
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
@@ -6160,7 +6162,7 @@ class GameSelect:
                 _wait_for_primary_release(self.joystick, timeout_ms=400)
                 return games[selected]
 
-            sleep_ms(14)
+            sleep_ms(14)  # minimum sleep for responsive scrolling on long game lists
 
     def run(self):
         global game_over, global_score
