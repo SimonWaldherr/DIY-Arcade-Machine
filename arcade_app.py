@@ -3069,10 +3069,10 @@ class TronGame:
     TURBO_STEP = const(2)
     HUE_STEP = const(7)
     PALETTE_SIZE = const(128)
-    # GC tick every 120 frames (vs. 140 in Dodge) since the trail never clears.
     COLLECT_INTERVAL = const(120)
-    # Shared immutable palette to avoid repeated allocation.
-    # Lazy-created to avoid import-time RAM pressure on MicroPython.
+    RESPAWN_MIN_CLEAR = const(5)
+    RESPAWN_TRIES = const(48)
+
     _PALETTE = None
 
     @classmethod
@@ -3107,18 +3107,25 @@ class TronGame:
         self.reset()
 
     def reset(self):
-        # Fixed WIDTH x PLAY_HEIGHT grid (64×58 = 3,712 bytes) keeps trail checks O(1) with predictable memory.
         self.trail = bytearray(WIDTH * PLAY_HEIGHT)
-        self.head_x = WIDTH // 2
+        self.head_x = WIDTH // 4
         self.head_y = PLAY_HEIGHT // 2
         self.direction = JOYSTICK_RIGHT
+        
+        self.enemy_x = WIDTH - (WIDTH // 4)
+        self.enemy_y = PLAY_HEIGHT // 2
+        self.enemy_dir = JOYSTICK_LEFT
+        self.enemy_alive = True
+        self.enemy_score = 0
+        
         self.score = 0
-        # Small precomputed hue ramp to avoid per-step HSB math during gameplay.
         self._palette = TronGame._palette()
 
         display.clear()
         self._occupy(self.head_x, self.head_y)
+        self._occupy(self.enemy_x, self.enemy_y)
         self._draw_head(force=True)
+        self._draw_enemy(force=True)
         display_score_and_time(0, force=True)
 
     def _idx(self, x, y):
@@ -3138,7 +3145,101 @@ class TronGame:
         elif d == JOYSTICK_RIGHT:
             self.direction = self._RIGHT_TURN[self.direction]
 
+    def _enemy_lookahead(self, e_dir):
+        # How many clear tiles in direction e_dir?
+        dx, dy = self._DIR_VECS[e_dir]
+        nx, ny = self.enemy_x, self.enemy_y
+        dist = 0
+        while True:
+            nx += dx
+            ny += dy
+            if self._blocked(nx, ny):
+                break
+            dist += 1
+            if dist > 8: # don't need to look too far
+                break
+        return dist
+
+    def _clear_distance_from(self, x, y, e_dir, limit=12):
+        dx, dy = self._DIR_VECS[e_dir]
+        dist = 0
+        while dist < limit:
+            x += dx
+            y += dy
+            if self._blocked(x, y):
+                break
+            dist += 1
+        return dist
+
+    def _best_enemy_dir_from(self, x, y):
+        best_dir = JOYSTICK_LEFT
+        best_dist = -1
+        dirs = (JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT)
+        for e_dir in dirs:
+            dist = self._clear_distance_from(x, y, e_dir)
+            if dist > best_dist:
+                best_dist = dist
+                best_dir = e_dir
+        return best_dir, best_dist
+
+    def _try_respawn_enemy(self):
+        for _ in range(self.RESPAWN_TRIES):
+            rx = random.randint(4, WIDTH - 5)
+            ry = random.randint(4, PLAY_HEIGHT - 5)
+            if self._blocked(rx, ry):
+                continue
+            # Keep the respawn readable and avoid spawning directly on top of the player.
+            if abs(rx - self.head_x) + abs(ry - self.head_y) < 14:
+                continue
+            e_dir, clear = self._best_enemy_dir_from(rx, ry)
+            if clear < self.RESPAWN_MIN_CLEAR:
+                continue
+            self.enemy_x = rx
+            self.enemy_y = ry
+            self.enemy_dir = e_dir
+            self.enemy_alive = True
+            self.enemy_score = 0
+            self._occupy(rx, ry)
+            self._draw_enemy()
+            return True
+        return False
+
     def _step(self, turbo):
+        # AI step
+        if self.enemy_alive:
+            # Check survival ahead
+            fwd_dist = self._enemy_lookahead(self.enemy_dir)
+            if fwd_dist < 4:
+                # Need to turn! Check left and right distances
+                l_dir = self._LEFT_TURN[self.enemy_dir]
+                r_dir = self._RIGHT_TURN[self.enemy_dir]
+                l_dist = self._enemy_lookahead(l_dir)
+                r_dist = self._enemy_lookahead(r_dir)
+                
+                if max(fwd_dist, l_dist, r_dist) == 0:
+                    # Trapped! Just crash next tick.
+                    pass
+                elif l_dist >= r_dist and l_dist > fwd_dist:
+                    self.enemy_dir = l_dir
+                elif r_dist >= l_dist and r_dist > fwd_dist:
+                    self.enemy_dir = r_dir
+            
+            # Enemy moves 1 step per frame normally
+            edx, edy = self._DIR_VECS[self.enemy_dir]
+            enx, eny = self.enemy_x + edx, self.enemy_y + edy
+            if self._blocked(enx, eny):
+                self.enemy_alive = False
+                # Optionally add big score for killing enemy
+                self.score += 150
+                draw_rectangle(self.enemy_x - 2, self.enemy_y - 2, self.enemy_x + 2, self.enemy_y + 2, 255, 100, 0)
+            else:
+                self.enemy_x = enx
+                self.enemy_y = eny
+                self.enemy_score += 1
+                self._occupy(enx, eny)
+                self._draw_enemy()
+
+        # Player step
         dx, dy = self._DIR_VECS[self.direction]
         steps = self.TURBO_STEP if turbo else 1
         for _ in range(steps):
@@ -3157,6 +3258,12 @@ class TronGame:
         color = self._palette[self.score % len(self._palette)]
         r, g, b = color
         display.set_pixel(self.head_x, self.head_y, r, g, b)
+        if force:
+            display_flush()
+
+    def _draw_enemy(self, force=False):
+        # Enemy is fixed red-ish to contrast with player palette
+        display.set_pixel(self.enemy_x, self.enemy_y, 255, 50, 50)
         if force:
             display_flush()
 
@@ -3188,9 +3295,13 @@ class TronGame:
             global_score = self.score
             display_score_and_time(self.score)
 
+            # If player dies, they lose
             if not alive:
                 game_over = True
                 return
+                
+            if not self.enemy_alive and random.randint(0, 15) == 0:
+                self._try_respawn_enemy()
 
             maybe_collect(self.COLLECT_INTERVAL)
 
@@ -4414,8 +4525,8 @@ class PitfallGame:
 class DemosGame:
     """Zero-player demos: simple animations and cellular automata."""
     def __init__(self):
-        # TRON removed; new demos added: ANTS, FLOOD, FIRE
-        self.demos = ("SNAKE", "LIFE", "FIRE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "LIFE", "ANTS", "FLOOD", "FIRE")
+        # Additional hardware-demo effects implemented: MATRIX (falling code), STARS (starfield), MYSTIFY (bouncing lines), PLASMA (color waves), CUBE (3D wireframe), TUNNEL (zooming vector tunnel)
+        self.demos = ("SNAKE", "LIFE", "PLASMA", "CUBE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "PLASMA", "CUBE", "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE", "MATRIX", "STARS")
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
@@ -4461,6 +4572,25 @@ class DemosGame:
         self._fire_h = HEIGHT
         self._fire = None
         self._fire_prev = None
+
+        # MATRIX (falling green rain)
+        self._matrix_drops = []
+        
+        # STARS (3d starfield)
+        self._stars = []
+        
+        # MYSTIFY (bouncing polygons/lines)
+        self._mystify_pts = []
+        self._mystify_history = []
+        self._mystify_hue = 0.0
+        
+        # PLASMA effect
+        self._plasma_time = 0
+        self._plasma_palette = []
+        self._plasma_sin = []
+
+        # TUNNEL
+        self._tunnel_phase = 0
 
         # SNAKE
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
@@ -4868,6 +4998,288 @@ class DemosGame:
             r, g, b = self._fire_palette(v)
             display.set_pixel(x, y, r, g, b)
 
+    # --- MATRIX ---
+    def _matrix_init(self):
+        w = self._demo_w
+        self._matrix_drops = []
+        for _ in range(12):
+            self._matrix_drops.append({
+                'x': random.randint(0, w - 1),
+                'y': random.randint(-20, 0),
+                'speed': random.randint(1, 3),
+                'len': random.randint(4, 12)
+            })
+        display.clear()
+
+    def _matrix_step(self):
+        w = self._demo_w
+        h = self._demo_h
+        
+        # darken screen
+        for y in range(h):
+            for x in range(w):
+                # We can't directly read pixels from software buffer easily in all configs.
+                # Just draw black with alpha effect conceptually.
+                pass
+                
+        # Better matrix approach without reading buffer:
+        # Just clear screen occasionally or redraw tails in black
+        for drop in self._matrix_drops:
+            # Erase tail
+            ty = drop['y'] - drop['len']
+            if 0 <= ty < h:
+                display.set_pixel(drop['x'], ty, 0, 0, 0)
+                
+            # Move
+            if self._frame % drop['speed'] == 0:
+                drop['y'] += 1
+                
+            # Draw head
+            if 0 <= drop['y'] < h:
+                # White head
+                display.set_pixel(drop['x'], drop['y'], 200, 255, 200)
+                
+            # Draw body (dim green)
+            by = drop['y'] - 1
+            if 0 <= by < h:
+                display.set_pixel(drop['x'], by, 0, 200, 0)
+                
+            by = drop['y'] - 2
+            if 0 <= by < h:
+                display.set_pixel(drop['x'], by, 0, 100, 0)
+                
+            by = drop['y'] - 3
+            if 0 <= by < h:
+                display.set_pixel(drop['x'], by, 0, 50, 0)
+                
+            # Reset
+            if drop['y'] - drop['len'] > h:
+                drop['x'] = random.randint(0, w - 1)
+                drop['y'] = random.randint(-10, 0)
+                drop['speed'] = random.randint(1, 3)
+                drop['len'] = random.randint(4, 12)
+
+    # --- STARS ---
+    def _stars_init(self):
+        w = self._demo_w
+        h = self._demo_h
+        self._stars = []
+        for _ in range(40):
+            # x, y, z
+            self._stars.append([
+                random.uniform(-1, 1),
+                random.uniform(-1, 1),
+                random.uniform(0.1, 2.0)
+            ])
+        display.clear()
+
+    def _stars_step(self):
+        w = self._demo_w
+        h = self._demo_h
+        cx, cy = w // 2, h // 2
+        
+        # Erase old
+        for s in self._stars:
+            pz = s[2]
+            if pz > 0.01:
+                px = int(s[0] / pz * cx + cx)
+                py = int(s[1] / pz * cy + cy)
+                if 0 <= px < w and 0 <= py < h:
+                    display.set_pixel(px, py, 0, 0, 0)
+                    
+            # Move
+            s[2] -= 0.05
+            
+            # Reset if passed screen
+            if s[2] < 0.05:
+                s[0] = random.uniform(-1, 1)
+                s[1] = random.uniform(-1, 1)
+                s[2] = 2.0
+                
+            # Draw new
+            nz = s[2]
+            nx = int(s[0] / nz * cx + cx)
+            ny = int(s[1] / nz * cy + cy)
+            
+            if 0 <= nx < w and 0 <= ny < h:
+                bright = int(255 * (1.0 - nz/2.0))
+                if bright < 0: bright = 0
+                if bright > 255: bright = 255
+                display.set_pixel(nx, ny, bright, bright, bright)
+                
+    # --- MYSTIFY ---
+    def _mystify_init(self):
+        self._mystify_pts = []
+        for _ in range(4): # 4 points forming our shape
+            self._mystify_pts.append({
+                'x': float(random.randint(0, WIDTH-1)),
+                'y': float(random.randint(0, HEIGHT-1)),
+                'vx': random.choice([-1.5, -1.0, 1.0, 1.5]),
+                'vy': random.choice([-1.5, -1.0, 1.0, 1.5])
+            })
+        self._mystify_history = []
+        self._mystify_hue = random.randint(0, 360)
+        display.clear()
+
+    def _mystify_draw_poly(self, pts, r, g, b):
+        for i in range(len(pts)):
+            p1 = pts[i]
+            p2 = pts[(i + 1) % len(pts)]
+            draw_line(int(p1['x']), int(p1['y']), int(p2['x']), int(p2['y']), r, g, b)
+
+    def _mystify_step(self):
+        # Add current to history
+        current_state = [{'x': p['x'], 'y': p['y']} for p in self._mystify_pts]
+        self._mystify_history.append(current_state)
+        
+        # Erase oldest if history too long (max 8 trailing lines)
+        if len(self._mystify_history) > 8:
+            oldest = self._mystify_history.pop(0)
+            self._mystify_draw_poly(oldest, 0, 0, 0)
+            
+        # Move points
+        for p in self._mystify_pts:
+            p['x'] += p['vx']
+            p['y'] += p['vy']
+            
+            # Bounce
+            if p['x'] <= 0:
+                p['x'] = 0
+                p['vx'] *= -1
+            elif p['x'] >= WIDTH - 1:
+                p['x'] = WIDTH - 1
+                p['vx'] *= -1
+                
+            if p['y'] <= 0:
+                p['y'] = 0
+                p['vy'] *= -1
+            elif p['y'] >= HEIGHT - 1:
+                p['y'] = HEIGHT - 1
+                p['vy'] *= -1
+                
+        # Draw new
+        self._mystify_hue = (self._mystify_hue + 1.5) % 360
+        r, g, b = hsb_to_rgb(self._mystify_hue, 1, 1)
+        self._mystify_draw_poly(self._mystify_pts, r, g, b)
+
+    # --- CUBE (3D Wireframe) ---
+    def _cube_init(self):
+        self._cube_angle_x = 0.0
+        self._cube_angle_y = 0.0
+        self._cube_angle_z = 0.0
+        self._cube_pulse = 0.0
+        # 8 vertices of a cube
+        self._cube_vertices = [
+            (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
+            (-1, -1, 1),  (1, -1, 1),  (1, 1, 1),  (-1, 1, 1)
+        ]
+        # 12 edges (pairs of vertex indices)
+        self._cube_edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0), # Back face
+            (4, 5), (5, 6), (6, 7), (7, 4), # Front face
+            (0, 4), (1, 5), (2, 6), (3, 7)  # Connecting faces
+        ]
+        self._cube_hue = 0.0
+        display.clear()
+
+    def _cube_step(self):
+        display.clear()
+        
+        # Increment angles
+        self._cube_angle_x += 0.05
+        self._cube_angle_y += 0.03
+        self._cube_angle_z += 0.02
+        self._cube_pulse += 0.065
+        self._cube_hue = (self._cube_hue + 2) % 360
+        pulse_scale = 8.5 + math.sin(self._cube_pulse) * 3.5
+        
+        # Precompute sin/cos
+        sx, cx = math.sin(self._cube_angle_x), math.cos(self._cube_angle_x)
+        sy, cy = math.sin(self._cube_angle_y), math.cos(self._cube_angle_y)
+        sz, cz = math.sin(self._cube_angle_z), math.cos(self._cube_angle_z)
+        
+        projected = []
+        for x, y, z in self._cube_vertices:
+            # Rotate X
+            y1 = y * cx - z * sx
+            z1 = y * sx + z * cx
+            # Rotate Y
+            x2 = x * cy + z1 * sy
+            z2 = -x * sy + z1 * cy
+            # Rotate Z
+            x3 = x2 * cz - y1 * sz
+            y3 = x2 * sz + y1 * cz
+            
+            # Projection (scale and center)
+            scale = 16 / (z2 + 3) # Perspective divide
+            px = int(WIDTH // 2 + x3 * scale * pulse_scale)
+            py = int(HEIGHT // 2 + y3 * scale * pulse_scale)
+            projected.append((px, py))
+            
+        # Draw edges
+        r, g, b = hsb_to_rgb(self._cube_hue, 1, 1)
+        for i, j in self._cube_edges:
+            x1, y1 = projected[i]
+            x2, y2 = projected[j]
+            draw_line(x1, y1, x2, y2, r, g, b)
+
+    # --- TUNNEL ---
+    def _tunnel_init(self):
+        self._tunnel_phase = 0
+        display.clear()
+
+    def _tunnel_step(self):
+        display.clear()
+        self._tunnel_phase = (self._tunnel_phase + 1) & 255
+        phase = self._tunnel_phase
+        cx = WIDTH // 2 + int(math.sin(phase * 0.07) * 7)
+        cy = HEIGHT // 2 + int(math.cos(phase * 0.05) * 5)
+
+        for i in range(9):
+            depth = ((phase * 2) + i * 16) & 127
+            size = 4 + depth // 2
+            if size > 38:
+                continue
+            skew = int(math.sin((phase + i * 13) * 0.09) * 5)
+            x1 = cx - size + skew
+            y1 = cy - size
+            x2 = cx + size - skew
+            y2 = cy + size
+            hue = (phase * 3 + i * 31) % 360
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            draw_line(x1, y1, x2, y1, r, g, b)
+            draw_line(x2, y1, x2, y2, r, g, b)
+            draw_line(x2, y2, x1, y2, r, g, b)
+            draw_line(x1, y2, x1, y1, r, g, b)
+
+    # --- PLASMA ---
+    def _plasma_init(self):
+        self._plasma_time = 0
+        if not self._plasma_palette:
+            self._plasma_palette = [hsb_to_rgb(i * 360 / 256.0, 1, 1) for i in range(256)]
+        if not self._plasma_sin:
+            self._plasma_sin = [int((math.sin(i * 3.14159 * 2 / 255.0) + 1) * 127) for i in range(256)]
+
+    def _plasma_step(self):
+        self._plasma_time = (self._plasma_time + 4) % 256
+        t = self._plasma_time
+        sin = self._plasma_sin
+        pal = self._plasma_palette
+        
+        for y in range(0, HEIGHT, 2):
+            vy = sin[(y*4 + t) % 256]
+            for x in range(0, WIDTH, 2):
+                vx = sin[(x*4 + t) % 256]
+                vc = sin[(x*2 + y*2 + t*2) % 256]
+                
+                dist = abs(x - (WIDTH//2)) + abs(y - (HEIGHT//2))
+                vd = sin[(dist*6 - t*3) % 256]
+                
+                v = (vy + vx + vc + vd) >> 2
+                
+                r, g, b = pal[v % 256]
+                draw_rectangle(x, y, x+2, y+2, r, g, b)
+        
     # --- SNAKE (based on hub75/snake_on_hub75_zeroplayer.py) ---
     def _snake_restart(self):
         self._snake_score = 0
@@ -5110,6 +5522,18 @@ class DemosGame:
                     self._flood_init()
                 elif demo == "FIRE":
                     self._fire_init()
+                elif demo == "MATRIX":
+                    self._matrix_init()
+                elif demo == "STARS":
+                    self._stars_init()
+                elif demo == "MYSTIFY":
+                    self._mystify_init()
+                elif demo == "CUBE":
+                    self._cube_init()
+                elif demo == "TUNNEL":
+                    self._tunnel_init()
+                elif demo == "PLASMA":
+                    self._plasma_init()
                 else:  # SNAKE
                     self._snake_init()
                 self._init = True
@@ -5127,6 +5551,28 @@ class DemosGame:
 
             elif demo == "FIRE":
                 self._fire_step()
+                
+            elif demo == "MATRIX":
+                self._matrix_step()
+                
+            elif demo == "STARS":
+                self._stars_step()
+                
+            elif demo == "MYSTIFY":
+                if not getattr(self, '_mystify_pts', None):
+                    self._mystify_init()
+                self._mystify_step()
+                
+            elif demo == "CUBE":
+                if not getattr(self, '_cube_vertices', None):
+                    self._cube_init()
+                self._cube_step()
+            elif demo == "TUNNEL":
+                self._tunnel_step()
+            elif demo == "PLASMA":
+                if not getattr(self, '_plasma_palette', None):
+                    self._plasma_init()
+                self._plasma_step()
 
             else:  # SNAKE
                 self._snake_step()

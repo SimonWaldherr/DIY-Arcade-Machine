@@ -1,5 +1,9 @@
 # DIY Arcade Machine
 
+![Python](https://img.shields.io/badge/Python-3.x-blue?style=flat-square&logo=python)
+![MicroPython](https://img.shields.io/badge/MicroPython-RP2040-green?style=flat-square)
+![PyGame](https://img.shields.io/badge/PyGame-Supported-yellow?style=flat-square)
+
 [![Short video of the DIY Arcade Console in action (on YouTube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
 
 A complete mini arcade system that runs on **both hardware and desktop**: play a collection of classic-inspired games on a **64×64 RGB LED matrix** (HUB75 + MicroPython) or on your computer with a **PyGame-based emulator**.
@@ -130,10 +134,12 @@ If you prefer manual upload via Thonny or `ampy`:
 
 For ease of use, a `Makefile` is provided with the following commands:
 
+- `make install`: Installs desktop dependencies (PyGame)
 - `make run`: Runs the PyGame emulator locally (`python main.py`)
 - `make upload`: Compiles and uploads the code to the hardware (`./upload.sh`)
 - `make build`: Precompiles `arcade_app.py` into bytecode (`arcade_app.mpy`)
 - `make clean`: Cleans up previous build artifacts and pycache
+- `make clean-all`: Cleans up all files and the python virtual environment
 
 ---
 
@@ -145,7 +151,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 
 | Game ID | Name | Description |
 |---------|------|-------------|
-| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Conway's Life, Langton's Ants, Floodfill Maze, Fire |
+| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Plasma, Cube, Tunnel, Matrix, Fire |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
 | `PONG` | Pong | Paddle vs. AI, increasing difficulty |
@@ -156,7 +162,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
-| `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, avoid collisions |
+| `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |

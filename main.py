@@ -10,7 +10,9 @@ so the Pico doesn't have to compile ~180KB of Python source at boot.
 Desktop (CPython/PyGame) remains supported: `python main.py` runs the same app.
 """
 
+
 def _print_exception(exc):
+    """Fallback exception printing for both full Python and MicroPython."""
     try:
         import sys
 
@@ -26,10 +28,12 @@ def _print_exception(exc):
 
         traceback.print_exc()
     except Exception:
-        pass
+        print("Exception:", exc)
 
 
 def _run():
+    """Main start function."""
+    print("Starting DIY Arcade Machine...")
     try:
         import gc
 

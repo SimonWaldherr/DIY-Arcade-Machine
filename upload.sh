@@ -6,6 +6,13 @@ set -euo pipefail
 # It features auto-detection of USB ports, automated compilation (if mpy-cross is present),
 # and memory-safe bootstrap loading via a two-file system.
 
+# Check if ampy is installed
+if ! command -v ampy >/dev/null 2>&1; then
+	echo "Error: ampy is not installed or not in PATH."
+	echo "Please install it using: pip install adafruit-ampy"
+	exit 1
+fi
+
 # Interactive device selection if PORT not already set
 if [ -z "${PORT:-}" ]; then
 	echo "Scanning for USB devices..."
@@ -61,5 +68,8 @@ else
 	echo "  → arcade_app.py (warning: may cause MemoryError on boot)"
 	ampy --port "$PORT" put ./arcade_app.py
 fi
+
+echo "  → Resetting the device..."
+ampy --port "$PORT" reset || echo "Notice: Could not reset device automatically. Please reboot manually."
 
 echo "✓ Upload complete!"
