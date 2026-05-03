@@ -127,6 +127,8 @@ If you prefer manual upload via Thonny or `ampy`:
 
 The arcade includes **16+ games** accessible via the main menu:
 
+Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
+
 | Game ID | Name | Description |
 |---------|------|-------------|
 | `DEMOS` | Demo Showcase | Zero-player demos: Snake, Conway's Life, Langton's Ants, Floodfill Maze, Fire |
