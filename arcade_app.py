@@ -6197,27 +6197,79 @@ class DoomLiteGame:
     # Playfield ohne Score-Leiste
     PLAY_H = HEIGHT - 6
 
-    # Map: 16x16, '#' = Wand, '.' = frei
+    # Maps: 16x16, '#' = Wand, '.' = frei
     MAP_W = 16
     MAP_H = 16
-    MAP = (
+    MAPS = ((
         b"################",
         b"#..............#",
         b"#..####..####..#",
-        b"#..#..#..#..#..#",
-        b"#..#..#..#..#..#",
-        b"#..#..#..#..#..#",
+        b"#..####..####..#",
+        b"#..####..####..#",
+        b"#..####..####..#",
         b"#..####..####..#",
         b"#..............#",
         b"#..####..####..#",
-        b"#..#..#..#..#..#",
-        b"#..#..#..#..#..#",
-        b"#..#..#..#..#..#",
+        b"#..####..####..#",
+        b"#..####..####..#",
+        b"#..####..####..#",
         b"#..####..####..#",
         b"#..............#",
         b"#....######....#",
         b"################",
-    )
+    ), (
+        b"################",
+        b"#.....#........#",
+        b"#.###.#.######.#",
+        b"#.#...#......#.#",
+        b"#.#.####.###.#.#",
+        b"#.#......#...#.#",
+        b"#.######.#.###.#",
+        b"#........#.....#",
+        b"#.####.#####.#.#",
+        b"#....#.....#.#.#",
+        b"####.#####.#.#.#",
+        b"#....#.....#...#",
+        b"#.##.#.#######.#",
+        b"#....#.........#",
+        b"#.###########..#",
+        b"################",
+    ), (
+        b"################",
+        b"#........#.....#",
+        b"#.######.#.###.#",
+        b"#.#......#...#.#",
+        b"#.#.########.#.#",
+        b"#.#..........#.#",
+        b"#.####.#######.#",
+        b"#......#.......#",
+        b"#.######.#####.#",
+        b"#.#......#.....#",
+        b"#.#.####.#.###.#",
+        b"#.#....#.#...#.#",
+        b"#.####.#.###.#.#",
+        b"#......#.....#.#",
+        b"#..#########...#",
+        b"################",
+    ), (
+        b"################",
+        b"#..............#",
+        b"#.####.##.####.#",
+        b"#.#....##....#.#",
+        b"#.#.##.##.##.#.#",
+        b"#...##....##...#",
+        b"###.########.###",
+        b"#..............#",
+        b"#.####....####.#",
+        b"#....#.##.#....#",
+        b"####.#.##.#.####",
+        b"#....#....#....#",
+        b"#.##.######.##.#",
+        b"#..............#",
+        b"#..##########..#",
+        b"################",
+    ))
+    STARTS = ((2.5, 2.5), (1.5, 1.5), (2.5, 13.5), (1.5, 7.5))
 
     # Raycaster Parameter
     ANGLE_MAX = 256               # 0..255 entspricht 0..360°
@@ -6275,19 +6327,16 @@ class DoomLiteGame:
     def __init__(self):
         self._ensure_trig()
         self.zbuf = [self.MAX_DIST] * WIDTH  # Wanddistanz pro Screen-Spalte
-        # Pre-compute wall positions for fast minimap rendering (map never changes).
-        self._minimap_walls = [
-            (mx, my)
-            for my in range(self.MAP_H)
-            for mx in range(self.MAP_W)
-            if self.MAP[my][mx] == 35
-        ]
+        self.MAP = self.MAPS[0]
+        self.level = 1
+        self._minimap_walls = []
         self.reset()
 
     def reset(self):
+        self.level = 1
+        self._set_level(self.level)
         # Player (Map-Koordinaten, 1 Tile = 1.0)
-        self.px = 2.5
-        self.py = 2.5
+        self.px, self.py = self.STARTS[0]
         self.ang = 0  # 0 = nach rechts
 
         self.score = 0
@@ -6307,6 +6356,20 @@ class DoomLiteGame:
         self.frame = 0
 
     # --- helpers ---
+    def _set_level(self, level):
+        self.level = level
+        idx = (level - 1) % len(self.MAPS)
+        self.MAP = self.MAPS[idx]
+        self._minimap_walls = [
+            (mx, my)
+            for my in range(self.MAP_H)
+            for mx in range(self.MAP_W)
+            if self.MAP[my][mx] == 35
+        ]
+
+    def _player_start_for_level(self):
+        return self.STARTS[(self.level - 1) % len(self.STARTS)]
+
     def _is_wall_tile(self, mx, my):
         if mx < 0 or mx >= self.MAP_W or my < 0 or my >= self.MAP_H:
             return True
@@ -6314,6 +6377,19 @@ class DoomLiteGame:
 
     def _is_wall_pos(self, x, y):
         return self._is_wall_tile(int(x), int(y))
+
+    def _is_enemy_clear_pos(self, x, y):
+        # Keep enemies visually away from walls so sprites do not scrape along
+        # columns and corners. The margin is small enough for one-tile corridors.
+        if self._is_wall_pos(x, y):
+            return False
+        margin = 0.20
+        return (
+            not self._is_wall_pos(x - margin, y) and
+            not self._is_wall_pos(x + margin, y) and
+            not self._is_wall_pos(x, y - margin) and
+            not self._is_wall_pos(x, y + margin)
+        )
 
     def _cos_sin(self, a):
         a &= 255
@@ -6410,19 +6486,21 @@ class DoomLiteGame:
         return MAX_DIST, side
 
     def _spawn_wave(self, wave):
+        self._set_level(wave)
         # sehr klein halten: 2..6 Gegner
         n = 2 + (wave // 2)
-        if n > 6:
-            n = 6
+        if n > 7:
+            n = 7
         self.enemies = []
         
         # Precompute all valid spawn points
         valid_spawns = []
+        sx, sy = self._player_start_for_level()
         for x in range(1, self.MAP_W - 1):
             for y in range(1, self.MAP_H - 1):
                 if not self._is_wall_tile(x, y):
                     # nicht direkt am Start
-                    if abs(x + 0.5 - self.px) + abs(y + 0.5 - self.py) >= 4:
+                    if abs(x + 0.5 - sx) + abs(y + 0.5 - sy) >= 4 and self._is_enemy_clear_pos(x + 0.5, y + 0.5):
                         valid_spawns.append((x + 0.5, y + 0.5))
 
         # Shuffle or random choice valid spawns
@@ -6432,10 +6510,18 @@ class DoomLiteGame:
             spawn = random.choice(valid_spawns)
             valid_spawns.remove(spawn)
             
-            # HP based on wave
-            hp = 1 if wave < 3 else (2 if wave < 6 else 3)
-            # 4th parameter for enemy state/cooldown
-            self.enemies.append([spawn[0], spawn[1], hp, random.randint(0, 60)])
+            if wave >= 7 and random.randint(0, 99) < 25:
+                typ = 2
+            elif wave >= 3 and random.randint(0, 99) < 45:
+                typ = 1
+            else:
+                typ = 0
+
+            hp = 1 + typ
+            if wave >= 8 and typ > 0:
+                hp += 1
+            # x, y, hp, cooldown, type, animation phase
+            self.enemies.append([spawn[0], spawn[1], hp, random.randint(20, 90), typ, random.randint(0, 31)])
             
         self.wave_announce = 60  # show wave banner for ~2 s
 
@@ -6473,7 +6559,8 @@ class DoomLiteGame:
             self.enemies[best_i][2] -= 1
             self.hit_flash = 8  # flash crosshair on hit
             if self.enemies[best_i][2] <= 0:
-                self.score += 50
+                typ = self.enemies[best_i][4] if len(self.enemies[best_i]) > 4 else 0
+                self.score += 50 + typ * 25
             else:
                 self.score += 15
 
@@ -6487,6 +6574,8 @@ class DoomLiteGame:
         for e in self.enemies:
             if len(e) < 4:
                 e.append(0)  # upgrade legacy states to support cooldowns
+            while len(e) < 6:
+                e.append(0)
                 
             if e[2] <= 0:
                 continue
@@ -6505,13 +6594,17 @@ class DoomLiteGame:
                     game_over = True
                     return
                 # Respawn player
-                self.px, self.py = 2.5, 2.5
+                self.px, self.py = self._player_start_for_level()
                 return
+
+            typ = e[4]
+            e[5] = (e[5] + 1) & 31
 
             # Enemies might shoot back occasionally if wave > 2
             if self.wave > 2 and e[3] <= 0:
                 # Basic LOS check (can see player directly?)
-                if dist > 0.5 and dist < 8.0:
+                shoot_range = 7.0 + typ * 1.2
+                if dist > 0.5 and dist < shoot_range:
                     a = self._angle_to_units(dx, dy)
                     ray_dist, _ = self._cast_ray(a)
                     if ray_dist > dist - 0.2:
@@ -6523,9 +6616,11 @@ class DoomLiteGame:
                             global_score = self.score
                             game_over = True
                             return
-                        self.px, self.py = 2.5, 2.5
+                        self.px, self.py = self._player_start_for_level()
                         # Reload enemy weapon
-                        e[3] = random.randint(120, 240)
+                        e[3] = random.randint(90, 210) - typ * 15
+                        if e[3] < 55:
+                            e[3] = 55
                         return
                     else:
                         e[3] = 30 # retry sooner if blocked
@@ -6533,7 +6628,7 @@ class DoomLiteGame:
                 e[3] -= 1
 
             # Move toward player
-            step = 0.055 + (self.wave * 0.002)
+            step = 0.05 + (self.wave * 0.002) + typ * 0.006
             if step > 0.09:
                 step = 0.09
 
@@ -6541,23 +6636,85 @@ class DoomLiteGame:
             if abs(dx) > abs(dy):
                 sx = step if dx > 0 else -step
                 nx = e[0] + sx
-                if not self._is_wall_pos(nx, e[1]):
+                if self._is_enemy_clear_pos(nx, e[1]):
                     e[0] = nx
                 else:
                     sy = step if dy > 0 else -step
                     ny = e[1] + sy
-                    if not self._is_wall_pos(e[0], ny):
+                    if self._is_enemy_clear_pos(e[0], ny):
                         e[1] = ny
             else:
                 sy = step if dy > 0 else -step
                 ny = e[1] + sy
-                if not self._is_wall_pos(e[0], ny):
+                if self._is_enemy_clear_pos(e[0], ny):
                     e[1] = ny
                 else:
                     sx = step if dx > 0 else -step
                     nx = e[0] + sx
-                    if not self._is_wall_pos(nx, e[1]):
+                    if self._is_enemy_clear_pos(nx, e[1]):
                         e[0] = nx
+
+    def _enemy_palette(self, typ, hp):
+        if typ == 2:
+            return (150, 35, 255, 255, 140, 40)
+        if typ == 1:
+            return (255, 120, 20, 255, 220, 40)
+        if hp > 1:
+            return (255, 45, 180, 255, 220, 40)
+        return (230, 35, 35, 255, 230, 40)
+
+    def _draw_enemy_sprite(self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim):
+        body_r, body_g, body_b, eye_r, eye_g, eye_b = self._enemy_palette(typ, hp)
+        h = y1 - y0 + 1
+        w = x1 - x0 + 1
+        if h <= 0 or w <= 0:
+            return
+
+        for xx in range(x0, x1 + 1):
+            if xx < 0 or xx >= WIDTH or dist >= zbuf[xx]:
+                continue
+            rel_x = xx - x0
+            center = (w - 1) // 2
+            for yy in range(y0, y1 + 1):
+                if yy < 0 or yy >= self.PLAY_H:
+                    continue
+                rel_y = yy - y0
+
+                # Width profile: small horn/head, wider torso, separated legs.
+                if rel_y < h // 7:
+                    half = 0 if typ == 0 else 1
+                    horn = typ > 0 and (rel_x == center - 1 or rel_x == center + 1)
+                    if not horn and abs(rel_x - center) > half:
+                        continue
+                    rr, gg, bb = body_r // 2, body_g // 2, body_b // 2
+                elif rel_y < h // 3:
+                    half = max(1, w // 4)
+                    if abs(rel_x - center) > half:
+                        continue
+                    eye_row = y0 + h // 4
+                    eye_col = abs(rel_x - center) == 1 or w <= 2
+                    if yy == eye_row and eye_col:
+                        rr, gg, bb = eye_r, eye_g, eye_b
+                    else:
+                        rr, gg, bb = body_r, body_g // 2, body_b // 2
+                elif rel_y < (h * 3) // 4:
+                    half = max(1, w // 2 - 1)
+                    if abs(rel_x - center) > half:
+                        continue
+                    edge = abs(rel_x - center) == half
+                    if edge:
+                        rr, gg, bb = body_r // 3, body_g // 3, body_b // 3
+                    else:
+                        rr, gg, bb = body_r, body_g, body_b
+                else:
+                    stride = (anim >> 3) & 1
+                    leg_left = center - 1 - stride
+                    leg_right = center + 1 + stride
+                    if rel_x != leg_left and rel_x != leg_right:
+                        continue
+                    rr, gg, bb = body_r // 2, body_g // 2, body_b // 2
+
+                sp(xx, yy, rr, gg, bb)
 
     def _render(self):
         # Hoist frequently-accessed attributes to locals once.
@@ -6574,11 +6731,13 @@ class DoomLiteGame:
         # ray angles: fixedpoint, damit FOV/64 sauber läuft
         col_step = 2
         angle_step_fp = (self.FOV << 16) // WIDTH
-        ang_fp = ((self.ang - self.HALF_FOV) & 255) << 16
+        # Positive angle points upward in map coordinates, so screen-left is
+        # ang + HALF_FOV and screen-right is ang - HALF_FOV.
+        ang_fp = ((self.ang + self.HALF_FOV) & 255) << 16
 
         for x in range(0, WIDTH, col_step):
             ray_ang = (ang_fp >> 16) & 255
-            ang_fp += angle_step_fp * col_step
+            ang_fp -= angle_step_fp * col_step
 
             dist, side = self._cast_ray(ray_ang)
             zbuf[x] = dist
@@ -6682,7 +6841,7 @@ class DoomLiteGame:
             if abs(delta) > HALF_FOV:
                 continue
 
-            sx = int((delta + HALF_FOV) * WIDTH / FOV)
+            sx = int((HALF_FOV - delta) * WIDTH / FOV)
             if sx < 0 or sx >= WIDTH:
                 continue
 
@@ -6695,8 +6854,8 @@ class DoomLiteGame:
             sw = sh // 3
             if sw < 1:
                 sw = 1
-            if sw > 6:
-                sw = 6
+            if sw > 8:
+                sw = 8
 
             y0 = (PLAY_H - sh) // 2
             y1 = y0 + sh - 1
@@ -6704,17 +6863,9 @@ class DoomLiteGame:
             x0 = sx - sw // 2
             x1 = x0 + sw - 1
 
-            # hp color
-            if e[2] >= 2:
-                sr, sg, sb = 255, 0, 255
-            else:
-                sr, sg, sb = 255, 60, 60
-
-            # draw with z-buffer test per column; inline single-column draw
-            for xx in range(x0, x1 + 1):
-                if 0 <= xx < WIDTH and dist < zbuf[xx]:
-                    for y in range(y0, y1 + 1):
-                        sp(xx, y, sr, sg, sb)
+            typ = e[4] if len(e) > 4 else 0
+            anim = e[5] if len(e) > 5 else 0
+            self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim)
 
         # minimap overlay (16x16) – use pre-computed wall list instead of
         # iterating all 256 tiles every frame.
@@ -6733,7 +6884,13 @@ class DoomLiteGame:
                 ex = int(e[0])
                 ey = int(e[1])
                 if 0 <= ex < self.MAP_W and 0 <= ey < self.MAP_H:
-                    sp(ex, ey, 255, 0, 0)
+                    typ = e[4] if len(e) > 4 else 0
+                    if typ == 2:
+                        sp(ex, ey, 180, 60, 255)
+                    elif typ == 1:
+                        sp(ex, ey, 255, 130, 0)
+                    else:
+                        sp(ex, ey, 255, 0, 0)
 
         # lives indicator - 2x2 red blocks (oben rechts)
         for i in range(self.lives):
@@ -6743,7 +6900,7 @@ class DoomLiteGame:
 
         # wave announcement banner
         if self.wave_announce > 0:
-            wlabel = "W" + str(self.wave)
+            wlabel = "L" + str(self.level)
             wx = WIDTH // 2 - len(wlabel) * 3
             wy = PLAY_H // 2 - 3
             draw_rectangle(wx - 1, wy - 1, wx + len(wlabel) * 6, wy + 5, 0, 0, 0)
@@ -6800,9 +6957,9 @@ class DoomLiteGame:
                 # rotate
                 rot = 0
                 if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
-                    rot = -5
+                    rot = 5
                 elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
-                    rot = +5
+                    rot = -5
                 if rot:
                     self.ang = (self.ang + rot) & 255
 
@@ -6849,6 +7006,8 @@ class DoomLiteGame:
                     self.score += 100
                     self.wave += 1
                     self._spawn_wave(self.wave)
+                    self.px, self.py = self._player_start_for_level()
+                    self.ang = 0
 
                 global_score = self.score
                 self._render()

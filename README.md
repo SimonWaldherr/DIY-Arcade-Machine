@@ -169,7 +169,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
 | `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
-| `DOOMLT` | Doom Lite | Mini raycaster FPS with enemies |
+| `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites |
 
 Each game tracks high scores with optional initials entry.
 
