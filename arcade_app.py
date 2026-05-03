@@ -1,3 +1,10 @@
+"""
+Main application module for the DIY Arcade Machine.
+Contains all game engines, menu logic, and hardware abstraction layer (HAL)
+for running the game console on both CPytthon (emulator) and MicroPython.
+
+Mainly manages the frame buffer, UI updates, state transitions, and high scores.
+"""
 import random
 import time
 import math
@@ -2896,7 +2903,7 @@ class DodgeGame:
     """
     MAX_OBSTACLES = const(12)
     START_SPAWN_MS = const(520)
-    FRAME_MS = const(38)
+    FRAME_MS = 38
     MIN_SPAWN_MS = const(160)
     DIFFICULTY_SCORE_INTERVAL = const(6)
     SPAWN_MS_DECREMENT = const(12)
@@ -3013,7 +3020,7 @@ class TronGame:
       - Z: Turbo (double step)
       - C: Back to menu
     """
-    FRAME_MS = const(62)
+    FRAME_MS = 62
     TURBO_STEP = const(2)
     HUE_STEP = const(7)
     PALETTE_SIZE = const(128)

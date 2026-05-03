@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# This script handles the automated upload of the arcade machine code to a
+# connected MicroPython board (like the Raspberry Pi Pico).
+# It features auto-detection of USB ports, automated compilation (if mpy-cross is present),
+# and memory-safe bootstrap loading via a two-file system.
+
 # Interactive device selection if PORT not already set
 if [ -z "${PORT:-}" ]; then
 	echo "Scanning for USB devices..."

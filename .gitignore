@@ -4,3 +4,4 @@ __pycache__
 .mypy_cache
 .vscode
 .pytest_cache
+highscores.json

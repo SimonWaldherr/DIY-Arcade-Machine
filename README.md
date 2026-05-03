@@ -28,6 +28,7 @@ A complete mini arcade system that runs on **both hardware and desktop**: play a
 - [Installation](#installation)
   - [Desktop Setup](#desktop-setup)
   - [MicroPython Setup](#micropython-setup)
+- [Make Commands](#make-commands)
 - [Game List](#game-list)
 - [Controls](#controls)
 - [Usage](#usage)
@@ -81,7 +82,8 @@ A complete mini arcade system that runs on **both hardware and desktop**: play a
 
 2. **Run the game**:
    ```bash
-   python main.py
+   make run
+   # or manually: python main.py
    ```
 
 A 640×640 window will appear showing the emulated LED matrix (10× scale).
@@ -100,9 +102,10 @@ The project now uses a **tiny bootstrap** approach to avoid on-device compilatio
 
 2. **Connect your Interstate 75** via USB
 
-3. **Upload with the interactive script**:
+3. **Upload with Make**:
    ```bash
-   ./upload.sh
+   make upload
+   # or manually: ./upload.sh
    ```
    
    The script will:
@@ -120,6 +123,17 @@ If you prefer manual upload via Thonny or `ampy`:
 2. Upload `main.py` (tiny bootstrap file)
 3. Upload `arcade_app.py` or `arcade_app.mpy` (the main application)
 4. Optional: Upload `highscores.json` if you want to preserve scores
+
+---
+
+## Make Commands
+
+For ease of use, a `Makefile` is provided with the following commands:
+
+- `make run`: Runs the PyGame emulator locally (`python main.py`)
+- `make upload`: Compiles and uploads the code to the hardware (`./upload.sh`)
+- `make build`: Precompiles `arcade_app.py` into bytecode (`arcade_app.mpy`)
+- `make clean`: Cleans up previous build artifacts and pycache
 
 ---
 
