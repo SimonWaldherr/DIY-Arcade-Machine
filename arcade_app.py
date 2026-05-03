@@ -841,8 +841,8 @@ def _read_direction_from_xy(x, y, possible_directions):
 def _wait_for_primary_release(joystick, timeout_ms=1200):
     t0 = ticks_ms()
     while True:
-        _c, z = joystick.read_buttons()
-        if not z:
+        c, z = joystick.read_buttons()
+        if not z and not c:
             return
         if ticks_diff(ticks_ms(), t0) >= timeout_ms:
             return
@@ -1461,15 +1461,16 @@ class SnakeGame:
             body_positions = set(body)
         else:
             body_positions = body
-        contains_body = body_positions.__contains__
+            
         moves = {
             JOYSTICK_UP: (hx, hy - 1),
             JOYSTICK_DOWN: (hx, hy + 1),
             JOYSTICK_LEFT: (hx - 1, hy),
             JOYSTICK_RIGHT: (hx + 1, hy),
         }
-        safe_dirs = [d for d, p in moves.items() if not contains_body(p)]
-        if contains_body(moves[self.snake_direction]):
+        
+        safe_dirs = [d for d, p in moves.items() if p not in body_positions]
+        if moves[self.snake_direction] in body_positions:
             if safe_dirs:
                 self.snake_direction = random.choice(safe_dirs)
             else:
@@ -1576,7 +1577,7 @@ class PongGame:
     """Pong: two-player paddle game (AI-controlled opponent)."""
     def __init__(self):
         self.paddle_height = 10
-        self.paddle_speed = 2
+        self.paddle_speed = 3
         self.left_paddle_y = PLAY_HEIGHT // 2 - self.paddle_height // 2
         self.right_paddle_y = PLAY_HEIGHT // 2 - self.paddle_height // 2
         self.ball_speed = [1, 1]
@@ -1730,14 +1731,16 @@ class BreakoutGame:
         draw_rectangle(self.paddle_x, self.paddle_y, self.paddle_x + PADDLE_WIDTH - 1, self.paddle_y + PADDLE_HEIGHT - 1, 0, 0, 0)
 
     def draw_ball(self):
-        draw_rectangle(self.ball_x, self.ball_y, self.ball_x + 1, self.ball_y + 1, 255, 255, 255)
+        bx, by = int(self.ball_x), int(self.ball_y)
+        draw_rectangle(bx, by, bx + 1, by + 1, 255, 255, 255)
 
     def clear_ball(self):
-        draw_rectangle(self.ball_x, self.ball_y, self.ball_x + 1, self.ball_y + 1, 0, 0, 0)
+        bx, by = int(self.ball_x), int(self.ball_y)
+        draw_rectangle(bx, by, bx + 1, by + 1, 0, 0, 0)
 
     def draw_bricks(self):
         for x, y in self.bricks:
-            hue = (y * 360) // max(1, (BRICK_ROWS * BRICK_HEIGHT))
+            hue = (y * 300) // max(1, (BRICK_ROWS * (BRICK_HEIGHT + 1)))
             r, g, b = hsb_to_rgb(hue, 1, 1)
             draw_rectangle(x, y, x + BRICK_WIDTH - 1, y + BRICK_HEIGHT - 1, r, g, b)
 
@@ -1748,15 +1751,30 @@ class BreakoutGame:
         self.ball_y += self.ball_dy
 
         # wall bounce (ball is 2x2; top-left coords)
-        if self.ball_x <= 0 or self.ball_x >= WIDTH - 2:
-            self.ball_dx = -self.ball_dx
+        if self.ball_x <= 0:
+            self.ball_x = 0
+            self.ball_dx = abs(self.ball_dx)
+        elif self.ball_x >= WIDTH - 2:
+            self.ball_x = WIDTH - 2
+            self.ball_dx = -abs(self.ball_dx)
+            
         if self.ball_y <= 0:
             self.ball_dy = -self.ball_dy
 
         # paddle bounce
         if self.ball_y + 1 >= self.paddle_y:
-            if self.paddle_x <= self.ball_x <= self.paddle_x + PADDLE_WIDTH - 1:
+            if self.paddle_x <= self.ball_x + 1 and self.ball_x <= self.paddle_x + PADDLE_WIDTH - 1:
                 self.ball_dy = -abs(self.ball_dy)
+                self.ball_y = self.paddle_y - 2
+                
+                # apply spin based on paddle movement
+                last_move = getattr(self, "last_paddle_move", None)
+                if last_move == JOYSTICK_LEFT:
+                    self.ball_dx -= 0.5
+                elif last_move == JOYSTICK_RIGHT:
+                    self.ball_dx += 0.5
+                # clamp max x speed
+                self.ball_dx = max(-1.8, min(1.8, self.ball_dx))
 
         # below paddle -> lost
         if self.ball_y >= PLAY_HEIGHT:
@@ -1768,8 +1786,8 @@ class BreakoutGame:
 
     def check_collision_with_bricks(self):
         global global_score
-        bx = self.ball_x
-        by = self.ball_y
+        bx = int(self.ball_x)
+        by = int(self.ball_y)
         for brick in self.bricks:
             x, y = brick
             if x <= bx < x + BRICK_WIDTH and y <= by < y + BRICK_HEIGHT:
@@ -1784,6 +1802,7 @@ class BreakoutGame:
 
     def update_paddle(self, joystick):
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        self.last_paddle_move = d
         if d == JOYSTICK_LEFT:
             self.clear_paddle()
             self.paddle_x = max(self.paddle_x - self.paddle_speed, 0)
@@ -1864,7 +1883,7 @@ class AsteroidGame:
             self.draw_line((self.x, self.y), (ex, ey), (255, 0, 0))
 
     class Asteroid:
-        def __init__(self, x=None, y=None, size=None, start=False):
+        def __init__(self, x=None, y=None, size=None, start=False, speed_boost=0.0):
             self.x = 32 if x is None else x
             self.y = 24 if y is None else y
             if start:
@@ -1872,7 +1891,7 @@ class AsteroidGame:
                     self.x = random.uniform(0, PIXEL_WIDTH)
                     self.y = random.uniform(0, PIXEL_HEIGHT)
             self.angle = random.uniform(0, 360)
-            self.speed = random.uniform(0.6, 1.6)
+            self.speed = random.uniform(0.3 + speed_boost, 0.8 + speed_boost)
             self.size = size if size is not None else random.randint(4, 8)
 
         def update(self):
@@ -1895,7 +1914,7 @@ class AsteroidGame:
             self.y = PIXEL_HEIGHT / 2
             self.angle = 0
             self.speed = 0
-            self.max_speed = 2.2
+            self.max_speed = 3.0
             self.size = 3
             self.cooldown = 0
 
@@ -1905,14 +1924,14 @@ class AsteroidGame:
 
         def update(self, direction):
             if direction == JOYSTICK_LEFT:
-                self.angle = (self.angle + 6) % 360
+                self.angle = (self.angle + 7) % 360
             elif direction == JOYSTICK_RIGHT:
-                self.angle = (self.angle - 6) % 360
+                self.angle = (self.angle - 7) % 360
 
             if direction == JOYSTICK_UP:
-                self.speed = min(self.speed + 0.12, self.max_speed)
+                self.speed = min(self.speed + 0.20, self.max_speed)
             else:
-                self.speed = max(self.speed - 0.06, 0)
+                self.speed = max(self.speed - 0.08, 0)
 
             self.x += math.cos(math.radians(self.angle)) * self.speed
             self.y -= math.sin(math.radians(self.angle)) * self.speed
@@ -1956,6 +1975,7 @@ class AsteroidGame:
 
     def check_collisions(self):
         global game_over, global_score
+        speed_boost = min(self.score / 600.0, 1.5)
         # projectile vs asteroid
         hit_asteroids = bytearray(len(self.asteroids))
         hit_count = 0
@@ -1980,9 +2000,9 @@ class AsteroidGame:
                 if hit_a.size > 3:
                     half = max(2, hit_a.size // 2)
                     if len(self.asteroids) + len(spawned) < self.max_asteroids:
-                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
+                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half, speed_boost=speed_boost))
                     if len(self.asteroids) + len(spawned) < self.max_asteroids:
-                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half))
+                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half, speed_boost=speed_boost))
             else:
                 self.projectiles[keep_i] = p
                 keep_i += 1
@@ -2057,7 +2077,8 @@ class AsteroidGame:
 
             # new wave
             if not self.asteroids:
-                self.asteroids = [self.Asteroid(start=False) for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)]
+                speed_boost = min(self.score / 600.0, 1.5)
+                self.asteroids = [self.Asteroid(start=True, speed_boost=speed_boost) for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)]
 
             display.clear()
             self.ship.draw()
@@ -2271,7 +2292,7 @@ class QixGame:
                 self.initialize_game()
                 continue
 
-            sleep_ms(45)
+            sleep_ms(max(20, 35 - (self.level - 1) * 3))
             maybe_collect(180)
 
 # ---------- Tetris ----------
@@ -2789,7 +2810,7 @@ class FlappyGame:
 
     def flap(self):
         # compatibility for Z button: give an upward velocity impulse
-        self.vy = -4
+        self.vy = -3
 
     def collide(self):
         # out of bounds
@@ -2912,9 +2933,9 @@ class DodgeGame:
         self.reset()
 
     def reset(self):
-        self.player_x = WIDTH // 2
-        self.player_y = PLAY_HEIGHT - 3
-        self.obstacles = []      # [x, y]
+        self.player_x = float(WIDTH) / 2.0
+        self.player_y = float(PLAY_HEIGHT) - 4.0
+        self.obstacles = []      # [x, y, w, h, vx, vy, color_hue]
         self.score = 0
         self.last_dir = None
         self.last_spawn = ticks_ms()
@@ -2922,54 +2943,78 @@ class DodgeGame:
         self.frame_ms = self.FRAME_MS
 
     def _spawn_obstacle(self):
-        # kleine, feste Liste für RP2040 beibehalten
         if len(self.obstacles) >= self.MAX_OBSTACLES:
             return
-        ox = random.randint(0, WIDTH - 1)
-        self.obstacles.append([ox, 0])
+        w = random.randint(2, 6)
+        h = random.randint(2, 6)
+        ox = random.randint(0, WIDTH - w)
+        vx = random.uniform(-0.5, 0.5)
+        vy = random.uniform(0.6, 1.8)
+        hue = random.randint(0, 360)
+        self.obstacles.append([float(ox), 0.0, w, h, vx, vy, hue])
 
     def _move_player(self, joystick, z_button):
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
         if d:
             self.last_dir = d
 
-        step = 1
+        step = 1.0
         if z_button and self.last_dir:
             # Dash beschleunigt die letzte Richtung ohne neue Allokation.
-            step = 2
+            step = 2.5
 
         if self.last_dir == JOYSTICK_LEFT and (d == JOYSTICK_LEFT or z_button):
-            self.player_x = max(0, self.player_x - step)
+            self.player_x = max(0.0, self.player_x - step)
         elif self.last_dir == JOYSTICK_RIGHT and (d == JOYSTICK_RIGHT or z_button):
-            self.player_x = min(WIDTH - 2, self.player_x + step)
+            self.player_x = min(WIDTH - 3.0, self.player_x + step)
 
     def _advance_obstacles(self):
         new_obs = []
-        for ox, oy in self.obstacles:
-            ny = oy + 1
-            if ny >= PLAY_HEIGHT:
+        for o in self.obstacles:
+            o[0] += o[4] # x += vx
+            o[1] += o[5] # y += vy
+            # bounce off walls
+            if o[0] < 0:
+                o[0] = 0
+                o[4] *= -1
+            elif o[0] + o[2] > WIDTH:
+                o[0] = float(WIDTH - o[2])
+                o[4] *= -1
+
+            if o[1] >= PLAY_HEIGHT:
                 self.score += 1
                 continue
-            new_obs.append([ox, ny])
+            new_obs.append(o)
         self.obstacles = new_obs
 
     def _collides(self):
-        # Spieler 2x2 Block für bessere Sichtbarkeit
-        px2 = self.player_x + 1
-        py2 = self.player_y + 1
-        for ox, oy in self.obstacles:
-            if self.player_x <= ox <= px2 and self.player_y <= oy <= py2:
+        # Spieler 3x3 Block 
+        px = int(self.player_x)
+        py = int(self.player_y)
+        px2 = px + 2
+        py2 = py + 2
+        for o in self.obstacles:
+            ox = int(o[0])
+            oy = int(o[1])
+            ox2 = ox + o[2] - 1
+            oy2 = oy + o[3] - 1
+            if px <= ox2 and px2 >= ox and py <= oy2 and py2 >= oy:
                 return True
         return False
 
     def _draw(self):
         display.clear()
         # Hindernisse
-        sp = display.set_pixel
-        for ox, oy in self.obstacles:
-            sp(ox, oy, 255, 60, 60)
+        for o in self.obstacles:
+            ox = int(o[0])
+            oy = int(o[1])
+            r, g, b = hsb_to_rgb(o[6], 1, 1)
+            draw_rectangle(ox, oy, ox + o[2] - 1, oy + o[3] - 1, r, g, b)
+            
         # Spieler
-        draw_rectangle(self.player_x, self.player_y, self.player_x + 1, self.player_y + 1, 0, 220, 255)
+        px = int(self.player_x)
+        py = int(self.player_y)
+        draw_rectangle(px, py, px + 2, py + 2, 0, 220, 255)
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
@@ -3535,18 +3580,18 @@ class PacmanGame:
     # 16 Zeichen pro Zeile, 14 Zeilen
     MAP = [
         "################",
-        "#P....#....G...#",
-        "#.##.#.##.#.##.#",
-        "#o#..#....#..#o#",
-        "#....###.###...#",
-        "#.##........##.#",
-        "#....#.##.#....#",
-        "#....#.##.#....#",
-        "#.##........##.#",
-        "#...###.###....#",
-        "#o#..#....#..#o#",
-        "#.##.#.##.#.##.#",
-        "#...G#....#....#",
+        "#P.....##......#",
+        "#.o###....###o.#",
+        "#......##......#",
+        "###.########.###",
+        "#......##......#",
+        "#.####.##.####.#",
+        "#.####....####.#",
+        "#...##.##.##...#",
+        "###....##....###",
+        "#.o....G......o#",
+        "#.###.####.###.#",
+        "#......##....G.#",
         "################",
     ]
 
@@ -5806,6 +5851,7 @@ class DoomLiteGame:
         self.shot_cd = 0
         self.wave_announce = 0  # frames left to show wave banner
         self.hit_flash = 0      # frames left to flash crosshair on hit
+        self.dmg_flash = 0      # frames left to flash screen red when damaged
 
         self.enemies = []
         self._spawn_wave(self.wave)
@@ -5923,18 +5969,28 @@ class DoomLiteGame:
         if n > 6:
             n = 6
         self.enemies = []
-        tries = 0
-        while len(self.enemies) < n and tries < 200:
-            tries += 1
-            ex = random.randint(1, self.MAP_W - 2) + 0.5
-            ey = random.randint(1, self.MAP_H - 2) + 0.5
-            if self._is_wall_pos(ex, ey):
-                continue
-            # nicht direkt am Start
-            if abs(ex - self.px) + abs(ey - self.py) < 4:
-                continue
-            hp = 1 if wave < 4 else 2
-            self.enemies.append([ex, ey, hp])
+        
+        # Precompute all valid spawn points
+        valid_spawns = []
+        for x in range(1, self.MAP_W - 1):
+            for y in range(1, self.MAP_H - 1):
+                if not self._is_wall_tile(x, y):
+                    # nicht direkt am Start
+                    if abs(x + 0.5 - self.px) + abs(y + 0.5 - self.py) >= 4:
+                        valid_spawns.append((x + 0.5, y + 0.5))
+
+        # Shuffle or random choice valid spawns
+        for _ in range(n):
+            if not valid_spawns:
+                break
+            spawn = random.choice(valid_spawns)
+            valid_spawns.remove(spawn)
+            
+            # HP based on wave
+            hp = 1 if wave < 3 else (2 if wave < 6 else 3)
+            # 4th parameter for enemy state/cooldown
+            self.enemies.append([spawn[0], spawn[1], hp, random.randint(0, 60)])
+            
         self.wave_announce = 60  # show wave banner for ~2 s
 
     def _shoot(self):
@@ -5983,23 +6039,52 @@ class DoomLiteGame:
             return
 
         for e in self.enemies:
+            if len(e) < 4:
+                e.append(0)  # upgrade legacy states to support cooldowns
+                
             if e[2] <= 0:
                 continue
 
             dx = self.px - e[0]
             dy = self.py - e[1]
             dist2 = dx * dx + dy * dy
+            dist = math.sqrt(dist2)
 
             # Contact damage
             if dist2 < 0.20:
                 self.lives -= 1
+                self.dmg_flash = 12
                 if self.lives <= 0:
                     global_score = self.score
                     game_over = True
                     return
-                # Respawn player (aber Score behalten)
+                # Respawn player
                 self.px, self.py = 2.5, 2.5
                 return
+
+            # Enemies might shoot back occasionally if wave > 2
+            if self.wave > 2 and e[3] <= 0:
+                # Basic LOS check (can see player directly?)
+                if dist > 0.5 and dist < 8.0:
+                    a = self._angle_to_units(dx, dy)
+                    ray_dist, _ = self._cast_ray(a)
+                    if ray_dist > dist - 0.2:
+                        # Player visible! Bam.
+                        self.lives -= 1
+                        self.hit_flash = 10
+                        self.dmg_flash = 12
+                        if self.lives <= 0:
+                            global_score = self.score
+                            game_over = True
+                            return
+                        self.px, self.py = 2.5, 2.5
+                        # Reload enemy weapon
+                        e[3] = random.randint(120, 240)
+                        return
+                    else:
+                        e[3] = 30 # retry sooner if blocked
+            elif e[3] > 0:
+                e[3] -= 1
 
             # Move toward player
             step = 0.055 + (self.wave * 0.002)
@@ -6036,16 +6121,12 @@ class DoomLiteGame:
         PLAY_H = self.PLAY_H
         zbuf = self.zbuf
 
-        # background sky/floor
-        # Intentionally no display.clear(): we always redraw the full playfield
-        # background first. With the buffered framebuffer this means only pixels
-        # that actually changed (walls/sprites/movement) are flushed.
-        half = PLAY_H // 2
-        draw_rectangle(0, 0, WIDTH - 1, half - 1, 0, 0, 25)                 # sky
-        draw_rectangle(0, half, WIDTH - 1, PLAY_H - 1, 18, 10, 0)           # floor
-
+        # We combine sky, wall, and floor rendering in one pass per column
+        # to prevent overwriting pixels multiple times. This dramatically
+        # reduces the dirty-pixel mask modifications and saves CPU time.
+        
         # ray angles: fixedpoint, damit FOV/64 sauber läuft
-        col_step = 2 if CONFIG_LOW_RAM_MODE else 1
+        col_step = 2
         angle_step_fp = (self.FOV << 16) // WIDTH
         ang_fp = ((self.ang - self.HALF_FOV) & 255) << 16
 
@@ -6069,20 +6150,68 @@ class DoomLiteGame:
             if start < 0: start = 0
             if end >= PLAY_H: end = PLAY_H - 1
 
-            # warm brownish tint (x-side lighter, y-side darker).
-            # Compute the brightness scaler once, then derive g/b from it.
+            # Level color variation based on wave
+            theme = (self.wave - 1) % 4
             b = 220 - int(dist * 18)
             if b < 40:
                 b = 40
+            
             wr = b if side == 0 else (b * 3) // 4
-            wg = wr * 3 // 5
-            wb = wr // 4
-            # Inline single-column draw (avoids draw_rectangle call overhead +
-            # its swap/clamp checks + inner x-loop that would run exactly once).
+            
+            # Apply theme color to wall
+            if theme == 0:   # Brown
+                wg = wr * 3 // 5
+                wb = wr // 4
+            elif theme == 1: # Blue
+                wb = wr
+                wg = wr * 3 // 5
+                wr = wr // 4
+            elif theme == 2: # Greenish
+                wg = wr
+                wb = wr // 3
+                wr = wr // 3
+            else:            # Purple
+                wb = wr
+                wg = wr // 4
+                
+            # Base sky and floor colors depending on theme
+            if theme == 0:
+                sky_r, sky_g, sky_b = 0, 0, 25
+                fl_r, fl_g, fl_b = 18, 10, 0
+            elif theme == 1:
+                sky_r, sky_g, sky_b = 20, 0, 0
+                fl_r, fl_g, fl_b = 0, 10, 18
+            elif theme == 2:
+                sky_r, sky_g, sky_b = 25, 10, 0
+                fl_r, fl_g, fl_b = 0, 18, 0
+            else:
+                sky_r, sky_g, sky_b = 0, 20, 10
+                fl_r, fl_g, fl_b = 18, 0, 18
+
+            # apply damage flash overeverything in this column
+            if self.dmg_flash > 0:
+                flash_r = 150 + self.dmg_flash * 6
+                if flash_r > 255: flash_r = 255
+                sky_r, sky_g, sky_b = flash_r, 0, 0
+                wr, wg, wb = flash_r, 0, 0
+                fl_r, fl_g, fl_b = flash_r, 0, 0
+
+            # Inline single-column draw (avoids draw_rectangle call overhead).
+            # Draw sky, wall, and floor in order!
+            for y in range(0, start):
+                sp(x, y, sky_r, sky_g, sky_b)
+                if col_step == 2 and x + 1 < WIDTH:
+                    sp(x + 1, y, sky_r, sky_g, sky_b)
+            
             for y in range(start, end + 1):
                 sp(x, y, wr, wg, wb)
                 if col_step == 2 and x + 1 < WIDTH:
                     sp(x + 1, y, wr, wg, wb)
+                    
+            for y in range(end + 1, PLAY_H):
+                sp(x, y, fl_r, fl_g, fl_b)
+                if col_step == 2 and x + 1 < WIDTH:
+                    sp(x + 1, y, fl_r, fl_g, fl_b)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -6213,6 +6342,8 @@ class DoomLiteGame:
                     self.wave_announce -= 1
                 if self.hit_flash > 0:
                     self.hit_flash -= 1
+                if self.dmg_flash > 0:
+                    self.dmg_flash -= 1
 
                 # input
                 d = joystick.read_direction([
@@ -6370,6 +6501,8 @@ class GameSelect:
         else:
             self.game_registry = tuple(g for g in self.GAME_REGISTRY if not (g[2] & GAME_FLAG_HEAVY))
         self.sorted_games = tuple(g[0] for g in self.game_registry)
+        self.selected = 0
+        self.top = 0
 
     def _game_class(self, name):
         for game_name, cls, _flags in self.game_registry:
@@ -6378,78 +6511,56 @@ class GameSelect:
         return None
 
     def run_game_selector(self):
+        # wait for lingering button presses to prevent instant re-entry
+        _wait_for_primary_release(self.joystick, timeout_ms=2000)
         games = self.sorted_games
-        selected = 0
-        top = 0
         prev_selected = -1
         prev_top = -1
         view = 4
         last_move = ticks_ms()
-        hold_dir = None
-        move_delay = 150
+        move_delay = 140
 
         while True:
             now = ticks_ms()
 
-            if selected != prev_selected or top != prev_top:
-                prev_selected = selected
-                prev_top = top
+            if self.selected != prev_selected or self.top != prev_top:
+                prev_selected = self.selected
+                prev_top = self.top
                 display.clear()
-                draw_text_small(1, 1, "SELECT GAME", 180, 180, 255)
-                draw_text_small(1, 8, "Z/C=PLAY", 90, 90, 120)
                 for i in range(view):
-                    gi = top + i
+                    gi = self.top + i
                     if gi >= len(games):
                         break
                     name = games[gi]
-                    is_sel = gi == selected
-                    col = (255, 255, 255) if is_sel else (100, 100, 100)
-                    y = 14 + i * 12
-                    if is_sel:
-                        draw_text_small(1, y + 2, ">", 255, 255, 255)
+                    is_sel = gi == self.selected
+                    col = (255, 255, 255) if is_sel else (111, 111, 111)
+                    y = 5 + i * 15
                     draw_text(8, y, name, *col)
 
                     hs = self.highscores.best(name)
                     hn = self.highscores.best_name(name)
                     hs_str = str(hs) + " " + str(hn)
-                    draw_text_small(WIDTH - len(hs_str) * 6, y + 7, hs_str, 120, 120, 0)
+                    draw_text_small(WIDTH - len(hs_str) * 6, y + 8, hs_str, 120, 120, 0)
 
-            d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
-            if d is None:
-                hold_dir = None
-                move_delay = 150
-            elif ticks_diff(now, last_move) > move_delay:
-                if d != hold_dir:
-                    hold_dir = d
-                    move_delay = 150
-                else:
-                    move_delay = 85
-
-                if d == JOYSTICK_UP:
-                    selected = (selected - 1) % len(games)
-                elif d == JOYSTICK_DOWN:
-                    selected = (selected + 1) % len(games)
-
-                max_top = max(0, len(games) - view)
-                if selected < top:
-                    top = selected
-                elif selected > top + view - 1:
-                    top = selected - (view - 1)
-                if top < 0:
-                    top = 0
-                elif top > max_top:
-                    top = max_top
-                last_move = now
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
+                if d == JOYSTICK_UP and self.selected > 0:
+                    self.selected -= 1
+                    if self.selected < self.top:
+                        self.top -= 1
+                    last_move = now
+                elif d == JOYSTICK_DOWN and self.selected < len(games) - 1:
+                    self.selected += 1
+                    if self.selected > self.top + view - 1:
+                        self.top += 1
+                    last_move = now
 
             c_button, z_button = self.joystick.read_buttons()
-            if z_button:
+            if z_button or c_button:
                 _wait_for_primary_release(self.joystick)
-                return games[selected]
-            if c_button:
-                _wait_for_primary_release(self.joystick, timeout_ms=400)
-                return games[selected]
+                return games[self.selected]
 
-            sleep_ms(14)  # minimum sleep for responsive scrolling on long game lists
+            sleep_ms(30)
 
     def run(self):
         global game_over, global_score
