@@ -867,6 +867,20 @@ def _wait_for_primary_release(joystick, timeout_ms=1200):
             return
         sleep_ms(10)
 
+async def _wait_for_primary_release_async(joystick, timeout_ms=1200):
+    """Async version: yields to the browser event loop on every iteration."""
+    if asyncio is None:
+        _wait_for_primary_release(joystick, timeout_ms)
+        return
+    t0 = ticks_ms()
+    while True:
+        c, z = joystick.read_buttons()
+        if not z and not c:
+            return
+        if ticks_diff(ticks_ms(), t0) >= timeout_ms:
+            return
+        await asyncio.sleep(0.010)
+
 if IS_MICROPYTHON:
     class Nunchuck:
         def __init__(self, i2c, poll=True, poll_interval=50):
@@ -1323,6 +1337,49 @@ class InitialsEntryMenu:
                 return "".join(self.letters)
 
             sleep_ms(20)
+
+    async def run_async(self):
+        """Async version of run() for use in pygbag/browser environments."""
+        if asyncio is None:
+            return self.run()
+        last_move = ticks_ms()
+        move_delay = 140
+        while True:
+            display.clear()
+            draw_text(2, 6, self.title, 0, 220, 0)
+            draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+            draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
+            bn = self.best_name if isinstance(self.best_name, str) else "---"
+            bs = "B" + str(self.best) + " " + bn
+            draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
+            for i in range(3):
+                col = (255, 255, 255) if i == self.idx else (120, 120, 120)
+                draw_text(10 + i * 18, 28, self.letters[i], *col)
+                if i == self.idx:
+                    draw_rectangle(8 + i * 18, 41, 20 + i * 18, 42, 255, 255, 255)
+            draw_text_small(2, 50, "A=OK B=BACK", 120, 120, 120)
+            display_flush()
+            now = ticks_ms()
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                if d == JOYSTICK_LEFT and self.idx > 0:
+                    self.idx -= 1; last_move = now
+                elif d == JOYSTICK_RIGHT and self.idx < 2:
+                    self.idx += 1; last_move = now
+                elif d == JOYSTICK_UP:
+                    c = ord(self.letters[self.idx])
+                    self.letters[self.idx] = chr(65 if c >= 90 else c + 1); last_move = now
+                elif d == JOYSTICK_DOWN:
+                    c = ord(self.letters[self.idx])
+                    self.letters[self.idx] = chr(90 if c <= 65 else c - 1); last_move = now
+            c_button, z_button = self.joystick.read_buttons()
+            if c_button:
+                await _wait_for_primary_release_async(self.joystick)
+                return None
+            if z_button:
+                await _wait_for_primary_release_async(self.joystick)
+                return "".join(self.letters)
+            await asyncio.sleep(0.020)
 
 # ======================================================================
 #                                 GAMES
@@ -11211,6 +11268,41 @@ class GameOverMenu:
 
             sleep_ms(16)  # minimum sleep to keep menu smooth without busy looping
 
+    async def run_async(self):
+        """Async version of run() for use in pygbag/browser environments."""
+        if asyncio is None:
+            return self.run()
+        idx = 0
+        prev = -1
+        last_move = ticks_ms()
+        move_delay = 130
+        while True:
+            now = ticks_ms()
+            if idx != prev:
+                prev = idx
+                display.clear()
+                draw_text(10, 8, "LOST", 255, 20, 20)
+                draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+                draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
+                bn = self.best_name if isinstance(self.best_name, str) else "---"
+                bs = "B" + str(self.best) + " " + bn
+                draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
+                for i, o in enumerate(self.opts):
+                    col = (255, 255, 255) if i == idx else (111, 111, 111)
+                    draw_text(8, 28 + i * 15, o, *col)
+                display_flush()
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
+                if d == JOYSTICK_UP and idx > 0:
+                    idx -= 1; last_move = now
+                elif d == JOYSTICK_DOWN and idx < len(self.opts) - 1:
+                    idx += 1; last_move = now
+            _c, z = self.joystick.read_buttons()
+            if z:
+                await _wait_for_primary_release_async(self.joystick)
+                return self.opts[idx]
+            await asyncio.sleep(0.016)
+
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
     GAME_REGISTRY = (
@@ -11260,7 +11352,7 @@ class GameSelect:
 
     async def run_game_selector(self):
         # wait for lingering button presses to prevent instant re-entry
-        _wait_for_primary_release(self.joystick, timeout_ms=2000)
+        await _wait_for_primary_release_async(self.joystick, timeout_ms=2000)
         games = self.sorted_games
         prev_selected = -1
         prev_top = -1
@@ -11342,18 +11434,28 @@ class GameSelect:
                         pass
                 else:
                     game.main_loop(self.joystick)
+                # Yield to the browser event loop after returning from any game loop
+                # (critical on web: sync game loops don't yield via time.sleep)
+                if asyncio is not None:
+                    await asyncio.sleep(0)
 
                 if game_over:
                     best = self.highscores.best(game_name)
                     best_name = self.highscores.best_name(game_name)
                     if global_score > best:
-                        initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
+                        if asyncio is not None:
+                            initials = await InitialsEntryMenu(self.joystick, global_score, best, best_name).run_async()
+                        else:
+                            initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
                         if initials:
                             self.highscores.update(game_name, global_score, initials)
                     # refresh best name in case initials were saved
                     best = self.highscores.best(game_name)
                     best_name = self.highscores.best_name(game_name)
-                    choice = GameOverMenu(self.joystick, global_score, best, best_name).run()
+                    if asyncio is not None:
+                        choice = await GameOverMenu(self.joystick, global_score, best, best_name).run_async()
+                    else:
+                        choice = GameOverMenu(self.joystick, global_score, best, best_name).run()
                     if choice == "RETRY":
                         continue
                     else:
