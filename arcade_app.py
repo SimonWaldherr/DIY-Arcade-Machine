@@ -173,6 +173,49 @@ def draw_centered_text_lines(lines, start_y=18, line_height=12, r=255, g=255, b=
         y = start_y + idx * line_height
         draw_text(x, y, line, r, g, b)
 
+def begin_game(score=0):
+    """Reset shared game-over state at the start of a playable game."""
+    global game_over, global_score
+    game_over = False
+    global_score = int(score or 0)
+    display_score_and_time(global_score, force=True)
+
+def set_game_over_score(score):
+    """Record the final score before returning to the shared game-over flow."""
+    global game_over, global_score
+    global_score = int(score or 0)
+    game_over = True
+
+async def yield_runtime(delay=0):
+    """Yield cooperatively on web/desktop async runtimes; no-op on sync-only builds."""
+    if asyncio is None:
+        return
+    try:
+        await asyncio.sleep(delay)
+    except Exception:
+        pass
+
+def _run_game_loop_sync(frame_ms, loop_fn):
+    """Small sync counterpart to _run_game_loop_async for games with frame callbacks."""
+    last_frame = ticks_ms()
+    while True:
+        now = ticks_ms()
+        if ticks_diff(now, last_frame) < frame_ms:
+            sleep_ms(4)
+            continue
+        last_frame = now
+        if not loop_fn():
+            return
+
+def reset_menu_display(score=0):
+    """Return the matrix to the common menu/HUD baseline after errors or restarts."""
+    display.clear()
+    display_score_and_time(score, force=True)
+    try:
+        display_flush()
+    except Exception:
+        pass
+
 async def _run_game_loop_async(frame_ms, loop_fn):
     """
     Generic async game loop runner with frame pacing for pygbag compatibility.
@@ -732,6 +775,10 @@ def _get_font5(ch):
     return out
 
 # ---------- Drawing ----------
+def set_pixel_clipped(x, y, r, g, b):
+    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+        display.set_pixel(x, y, r, g, b)
+
 def draw_rectangle(x1, y1, x2, y2, r, g, b):
     if x1 > x2: x1, x2 = x2, x1
     if y1 > y2: y1, y2 = y2, y1
@@ -3709,8 +3756,10 @@ class InvaderGame:
       - C: return to menu
     """
     FRAME_MS = const(38)
-    ALIEN_COLS = const(7)
-    ALIEN_ROWS = const(4)
+    ALIEN_COLS = const(8)
+    ALIEN_ROWS = const(5)
+    SHIELD_W = const(9)
+    SHIELD_H = const(5)
 
     def __init__(self):
         self.reset()
@@ -3721,25 +3770,50 @@ class InvaderGame:
         self.bullet = None
         self.bombs = []
         self.aliens = []
+        self.shields = []
+        self.ufo = None
         self.alien_dir = 1
         self.alien_drop = 0
         self.score = 0
+        self.wave = 1
         self.last_alien_step = ticks_ms()
-        self.alien_step_ms = 520
+        self.alien_step_ms = 560
         self.last_bomb = ticks_ms()
+        self.last_ufo = ticks_ms()
+        self.last_z = False
         self._spawn_wave(speed_up=False)
+        self._build_shields()
 
     def _spawn_wave(self, speed_up=True):
         self.aliens = []
-        start_x = 6
-        start_y = 8
+        start_x = 1
+        start_y = 6
+        # Keep the formation dense enough to read like Space Invaders on 64 px.
         for row in range(self.ALIEN_ROWS):
             for col in range(self.ALIEN_COLS):
-                self.aliens.append([start_x + col * 8, start_y + row * 6, 1])
+                self.aliens.append([start_x + col * 7, start_y + row * 5, 1, row])
         self.alien_dir = 1
         self.alien_drop = 0
-        if speed_up and self.alien_step_ms > 180:
-            self.alien_step_ms -= 35
+        if speed_up:
+            self.wave += 1
+            if self.alien_step_ms > 170:
+                self.alien_step_ms -= 35
+
+    def _build_shields(self):
+        self.shields = []
+        y = PLAY_HEIGHT - 15
+        for sx in (7, 28, 49):
+            # Store shield pixels as a byte mask so impacts can erode them cheaply.
+            cells = bytearray(self.SHIELD_W * self.SHIELD_H)
+            for yy in range(self.SHIELD_H):
+                for xx in range(self.SHIELD_W):
+                    solid = True
+                    if yy == self.SHIELD_H - 1 and 3 <= xx <= 5:
+                        solid = False
+                    if yy == 0 and (xx == 0 or xx == self.SHIELD_W - 1):
+                        solid = False
+                    cells[yy * self.SHIELD_W + xx] = 1 if solid else 0
+            self.shields.append([sx, y, cells])
 
     def _move_player(self, joystick):
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
@@ -3752,6 +3826,28 @@ class InvaderGame:
         if self.bullet is None:
             self.bullet = [self.player_x, self.player_y - 2]
 
+    def _hit_shield(self, x, y):
+        for shield in self.shields:
+            sx = shield[0]
+            sy = shield[1]
+            if x < sx or y < sy or x >= sx + self.SHIELD_W or y >= sy + self.SHIELD_H:
+                continue
+            lx = x - sx
+            ly = y - sy
+            cells = shield[2]
+            idx = ly * self.SHIELD_W + lx
+            if not cells[idx]:
+                return False
+            # Classic shield damage: one hit eats a small chunk, not just one pixel.
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    nx = lx + dx
+                    ny = ly + dy
+                    if 0 <= nx < self.SHIELD_W and 0 <= ny < self.SHIELD_H:
+                        cells[ny * self.SHIELD_W + nx] = 0
+            return True
+        return False
+
     def _step_bullet(self):
         if self.bullet is None:
             return
@@ -3759,6 +3855,9 @@ class InvaderGame:
         bx = self.bullet[0]
         by = self.bullet[1]
         if by < 0:
+            self.bullet = None
+            return
+        if self._hit_shield(bx, by):
             self.bullet = None
             return
         for alien in self.aliens:
@@ -3771,6 +3870,13 @@ class InvaderGame:
                 self.bullet = None
                 self.score += 10
                 break
+        if self.bullet is not None and self.ufo is not None:
+            ux = self.ufo[0]
+            uy = self.ufo[1]
+            if ux <= bx <= ux + 7 and uy <= by <= uy + 2:
+                self.ufo = None
+                self.bullet = None
+                self.score += 150
 
     def _step_aliens(self):
         now = ticks_ms()
@@ -3803,20 +3909,30 @@ class InvaderGame:
         if not self.aliens:
             return
         now = ticks_ms()
-        interval = max(260, 850 - self.score * 2)
+        live_count = self._live_count()
+        interval = max(230, 900 - self.wave * 55 - (self.ALIEN_ROWS * self.ALIEN_COLS - live_count) * 8)
         if ticks_diff(now, self.last_bomb) < interval:
             return
         self.last_bomb = now
         if len(self.bombs) >= 5:
             return
 
-        live = []
+        bottom = []
         for alien in self.aliens:
-            if alien[2]:
-                live.append(alien)
-        if not live:
+            if not alien[2]:
+                continue
+            col = (alien[0] - 1) // 7
+            # Bombs should come from the visible bottom alien in each column.
+            is_bottom = True
+            for other in self.aliens:
+                if other[2] and ((other[0] - 1) // 7) == col and other[1] > alien[1]:
+                    is_bottom = False
+                    break
+            if is_bottom:
+                bottom.append(alien)
+        if not bottom:
             return
-        alien = live[random.randint(0, len(live) - 1)]
+        alien = bottom[random.randint(0, len(bottom) - 1)]
         self.bombs.append([alien[0] + 2, alien[1] + 4])
 
     def _step_bombs(self):
@@ -3830,12 +3946,30 @@ class InvaderGame:
             bomb[1] += 2
             bx = bomb[0]
             by = bomb[1]
-            if px1 <= bx <= px2 and py1 <= by <= py2:
+            if self._hit_shield(bx, by):
+                continue
+            elif px1 <= bx <= px2 and py1 <= by <= py2:
                 hit = True
             elif by < PLAY_HEIGHT:
                 new_bombs.append(bomb)
         self.bombs = new_bombs
         return hit
+
+    def _step_ufo(self):
+        now = ticks_ms()
+        if self.ufo is None:
+            # Long irregular delay keeps the saucer as an occasional bonus target.
+            if ticks_diff(now, self.last_ufo) > 9000 + random.randint(0, 4500):
+                direction = random.choice([-1, 1])
+                x = -8 if direction > 0 else WIDTH
+                self.ufo = [x, 2, direction]
+                self.last_ufo = now
+            return
+
+        self.ufo[0] += self.ufo[2]
+        if self.ufo[0] < -9 or self.ufo[0] > WIDTH + 1:
+            self.ufo = None
+            self.last_ufo = now
 
     def _aliens_reached_player(self):
         for alien in self.aliens:
@@ -3849,6 +3983,37 @@ class InvaderGame:
                 return False
         return True
 
+    def _live_count(self):
+        count = 0
+        for alien in self.aliens:
+            if alien[2]:
+                count += 1
+        return count
+
+    def _draw_alien(self, x, y, typ):
+        # Three tiny sprite silhouettes preserve the original row hierarchy.
+        if typ == 0:
+            pts = ((2, 0), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (3, 2), (4, 2), (0, 3), (4, 3))
+            color = (200, 120, 255)
+        elif typ < 3:
+            pts = ((1, 0), (3, 0), (0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (0, 2), (2, 2), (4, 2), (1, 3), (3, 3))
+            color = (0, 220, 80)
+        else:
+            pts = ((0, 0), (4, 0), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (3, 2), (4, 2), (1, 3), (3, 3))
+            color = (0, 180, 255)
+        for px, py in pts:
+            display.set_pixel(x + px, y + py, color[0], color[1], color[2])
+
+    def _draw_shields(self):
+        for shield in self.shields:
+            sx = shield[0]
+            sy = shield[1]
+            cells = shield[2]
+            for yy in range(self.SHIELD_H):
+                for xx in range(self.SHIELD_W):
+                    if cells[yy * self.SHIELD_W + xx]:
+                        display.set_pixel(sx + xx, sy + yy, 40, 220, 80)
+
     def _draw(self):
         display.clear()
         for alien in self.aliens:
@@ -3856,11 +4021,9 @@ class InvaderGame:
                 continue
             ax = alien[0]
             ay = alien[1]
-            draw_rectangle(ax, ay + 1, ax + 4, ay + 2, 0, 220, 80)
-            display.set_pixel(ax + 1, ay, 0, 180, 255)
-            display.set_pixel(ax + 3, ay, 0, 180, 255)
-            display.set_pixel(ax, ay + 3, 0, 120, 60)
-            display.set_pixel(ax + 4, ay + 3, 0, 120, 60)
+            self._draw_alien(ax, ay, alien[3])
+
+        self._draw_shields()
 
         if self.bullet is not None:
             display.set_pixel(self.bullet[0], self.bullet[1], 255, 255, 80)
@@ -3869,6 +4032,14 @@ class InvaderGame:
 
         for bomb in self.bombs:
             display.set_pixel(bomb[0], bomb[1], 255, 60, 60)
+
+        if self.ufo is not None:
+            ux = self.ufo[0]
+            uy = self.ufo[1]
+            draw_rectangle(ux + 1, uy, ux + 6, uy, 255, 60, 60)
+            draw_rectangle(ux, uy + 1, ux + 7, uy + 1, 255, 120, 120)
+            set_pixel_clipped(ux + 2, uy + 2, 255, 220, 80)
+            set_pixel_clipped(ux + 5, uy + 2, 255, 220, 80)
 
         px = self.player_x
         py = self.player_y
@@ -3879,15 +4050,16 @@ class InvaderGame:
     def _step(self, joystick, z_button):
         global game_over, global_score
         self._move_player(joystick)
-        if z_button:
+        if z_button and not self.last_z:
             self._fire()
+        self.last_z = z_button
         self._step_bullet()
         self._step_aliens()
         self._drop_bomb()
+        self._step_ufo()
 
         if self._step_bombs() or self._aliens_reached_player():
-            global_score = self.score
-            game_over = True
+            set_game_over_score(self.score)
             return False
 
         if self._all_clear():
@@ -3901,34 +4073,23 @@ class InvaderGame:
         return True
 
     def main_loop(self, joystick):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
         self.reset()
-        display_score_and_time(0, force=True)
-        last_frame = ticks_ms()
+        begin_game(0)
 
-        while True:
+        def loop_iteration():
             c_button, z_button = joystick.read_buttons()
             if c_button:
-                return
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < self.FRAME_MS:
-                sleep_ms(4)
-                continue
-            last_frame = now
-            if not self._step(joystick, z_button):
-                return
+                return False
+            return self._step(joystick, z_button)
+
+        _run_game_loop_sync(self.FRAME_MS, loop_iteration)
 
     async def main_loop_async(self, joystick):
         if asyncio is None:
             return self.main_loop(joystick)
 
-        global game_over, global_score
-        game_over = False
-        global_score = 0
         self.reset()
-        display_score_and_time(0, force=True)
+        begin_game(0)
 
         def loop_iteration():
             c_button, z_button = joystick.read_buttons()
@@ -9039,8 +9200,8 @@ class BejeweledGame:
 class DemosGame:
     """Zero-player demos: simple animations and cellular automata."""
     def __init__(self):
-        # Additional hardware-demo effects implemented: MATRIX (falling code), STARS (starfield), MYSTIFY (bouncing lines), PLASMA (color waves), CUBE (3D wireframe), TUNNEL (zooming vector tunnel)
-        self.demos = ("SNAKE", "LIFE", "PLASMA", "CUBE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE", "MATRIX", "STARS")
+        # Additional hardware-demo effects implemented: MATRIX, STARS, MYSTIFY, PLASMA, CUBE, ORBIT, TUNNEL, WARP, BOUNCE.
+        self.demos = ("SNAKE", "LIFE", "PLASMA", "CUBE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE", "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE", "MATRIX", "STARS")
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
@@ -9108,6 +9269,17 @@ class DemosGame:
 
         # ORBIT
         self._orbit_phase = 0
+
+        # WARP
+        self._warp_stars = []
+        self._warp_phase = 0
+
+        # BOUNCE
+        self._bounce_x = 0
+        self._bounce_y = 0
+        self._bounce_dx = 1
+        self._bounce_dy = 1
+        self._bounce_hue = 0
 
         # SNAKE
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
@@ -9795,6 +9967,85 @@ class DemosGame:
 
         draw_rectangle(cx - 2, cy - 2, cx + 2, cy + 2, 255, 255, 255)
 
+    # --- WARP ---
+    def _warp_init(self):
+        self._warp_phase = 0
+        self._warp_stars = []
+        for _ in range(28):
+            angle = random.randint(0, 359) * 3.14159 / 180.0
+            radius = random.randint(1, 26)
+            speed = random.randint(2, 5)
+            self._warp_stars.append([angle, radius, speed])
+        display.clear()
+
+    def _warp_step(self):
+        display.clear()
+        self._warp_phase = (self._warp_phase + 1) & 255
+        cx = WIDTH // 2 + int(math.sin(self._warp_phase * 0.05) * 3)
+        cy = HEIGHT // 2 + int(math.cos(self._warp_phase * 0.04) * 3)
+        for star in self._warp_stars:
+            a = star[0]
+            old_r = star[1]
+            star[1] += star[2]
+            if star[1] > 46:
+                star[0] = random.randint(0, 359) * 3.14159 / 180.0
+                star[1] = random.randint(1, 5)
+                star[2] = random.randint(2, 5)
+                old_r = 1
+                a = star[0]
+
+            x0 = int(cx + math.cos(a) * old_r)
+            y0 = int(cy + math.sin(a) * old_r)
+            x1 = int(cx + math.cos(a) * star[1])
+            y1 = int(cy + math.sin(a) * star[1])
+            hue = (self._warp_phase * 4 + int(star[1]) * 6) % 360
+            r, g, b = hsb_to_rgb(hue, 0.8, 1)
+            draw_line(x0, y0, x1, y1, r, g, b)
+
+    # --- BOUNCE (classic screensaver) ---
+    def _bounce_init(self):
+        self._bounce_x = random.randint(0, WIDTH - 25)
+        self._bounce_y = random.randint(0, HEIGHT - 9)
+        self._bounce_dx = random.choice([-1, 1])
+        self._bounce_dy = random.choice([-1, 1])
+        self._bounce_hue = random.randint(0, 359)
+        display.clear()
+
+    def _bounce_step(self):
+        display.clear()
+        label = "ARCADE"
+        w = 48
+        h = 8
+        self._bounce_x += self._bounce_dx
+        self._bounce_y += self._bounce_dy
+        bounced = False
+
+        if self._bounce_x <= 0:
+            self._bounce_x = 0
+            self._bounce_dx = 1
+            bounced = True
+        elif self._bounce_x >= WIDTH - w:
+            self._bounce_x = WIDTH - w
+            self._bounce_dx = -1
+            bounced = True
+
+        if self._bounce_y <= 0:
+            self._bounce_y = 0
+            self._bounce_dy = 1
+            bounced = True
+        elif self._bounce_y >= HEIGHT - h:
+            self._bounce_y = HEIGHT - h
+            self._bounce_dy = -1
+            bounced = True
+
+        if bounced:
+            # The original screensaver's color pop is the main visual cue.
+            self._bounce_hue = (self._bounce_hue + 67) % 360
+
+        r, g, b = hsb_to_rgb(self._bounce_hue, 1, 1)
+        draw_text(self._bounce_x, self._bounce_y, label, r, g, b)
+        draw_rectangle(self._bounce_x, self._bounce_y + 8, self._bounce_x + w - 1, self._bounce_y + 8, r // 3, g // 3, b // 3)
+
     # --- PLASMA ---
     def _plasma_init(self):
         self._plasma_time = 0
@@ -10060,6 +10311,10 @@ class DemosGame:
             self._tunnel_init()
         elif demo == "ORBIT":
             self._orbit_init()
+        elif demo == "WARP":
+            self._warp_init()
+        elif demo == "BOUNCE":
+            self._bounce_init()
         elif demo == "PLASMA":
             self._plasma_init()
         else:
@@ -10096,6 +10351,10 @@ class DemosGame:
             self._tunnel_step()
         elif demo == "ORBIT":
             self._orbit_step()
+        elif demo == "WARP":
+            self._warp_step()
+        elif demo == "BOUNCE":
+            self._bounce_step()
         elif demo == "PLASMA":
             if not getattr(self, "_plasma_palette", None):
                 self._plasma_init()
@@ -11906,6 +12165,32 @@ class GameSelect:
                 return cls
         return None
 
+    async def _run_game_instance(self, game):
+        # Prefer async loops when available so pygbag/browser frames keep rendering.
+        if asyncio is not None and hasattr(game, "main_loop_async"):
+            await game.main_loop_async(self.joystick)
+        else:
+            game.main_loop(self.joystick)
+        await yield_runtime(0)
+
+    async def _handle_game_over(self, game_name):
+        # Highscore prompts live here so every game can just set global_score.
+        best = self.highscores.best(game_name)
+        best_name = self.highscores.best_name(game_name)
+        if global_score > best:
+            if asyncio is not None:
+                initials = await InitialsEntryMenu(self.joystick, global_score, best, best_name).run_async()
+            else:
+                initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
+            if initials:
+                self.highscores.update(game_name, global_score, initials)
+
+        best = self.highscores.best(game_name)
+        best_name = self.highscores.best_name(game_name)
+        if asyncio is not None:
+            return await GameOverMenu(self.joystick, global_score, best, best_name).run_async()
+        return GameOverMenu(self.joystick, global_score, best, best_name).run()
+
     async def run_game_selector(self):
         # wait for lingering button presses to prevent instant re-entry
         await _wait_for_primary_release_async(self.joystick, timeout_ms=2000)
@@ -11958,13 +12243,9 @@ class GameSelect:
                 _wait_for_primary_release(self.joystick)
                 return games[self.selected]
 
-            # async sleep: lets the browser render the frame (pygbag)
+            await yield_runtime(0.030)
             if asyncio is not None:
-                try:
-                    await asyncio.sleep(0.030)
-                    continue
-                except Exception:
-                    pass
+                continue
             sleep_ms(30)
 
     async def run(self):
@@ -11982,53 +12263,19 @@ class GameSelect:
                 if game_cls is None:
                     break
                 game = game_cls()
-                # prefer async loop if the game provides one (web-friendly)
-                if asyncio is not None and hasattr(game, "main_loop_async"):
-                    try:
-                        await game.main_loop_async(self.joystick)
-                    except Exception:
-                        pass
-                else:
-                    game.main_loop(self.joystick)
-                # Yield to the browser event loop after returning from any game loop
-                # (critical on web: sync game loops don't yield via time.sleep)
-                if asyncio is not None:
-                    await asyncio.sleep(0)
+                await self._run_game_instance(game)
 
                 if game_over:
-                    best = self.highscores.best(game_name)
-                    best_name = self.highscores.best_name(game_name)
-                    if global_score > best:
-                        if asyncio is not None:
-                            initials = await InitialsEntryMenu(self.joystick, global_score, best, best_name).run_async()
-                        else:
-                            initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
-                        if initials:
-                            self.highscores.update(game_name, global_score, initials)
-                    # refresh best name in case initials were saved
-                    best = self.highscores.best(game_name)
-                    best_name = self.highscores.best_name(game_name)
-                    if asyncio is not None:
-                        choice = await GameOverMenu(self.joystick, global_score, best, best_name).run_async()
-                    else:
-                        choice = GameOverMenu(self.joystick, global_score, best, best_name).run()
-                    if choice == "RETRY":
+                    if await self._handle_game_over(game_name) == "RETRY":
                         continue
-                    else:
-                        break
-                else:
-                    break
+                break
 
 # ---------- Intro ----------
 async def _show_intro():
     """Show logo.png on desktop/web or a colour-fade animation on MicroPython."""
 
     async def _yield():
-        if asyncio is not None:
-            try:
-                await asyncio.sleep(0)
-            except Exception:
-                pass
+        await yield_runtime(0)
 
     display.clear()
     shown = False
@@ -12128,9 +12375,8 @@ async def _show_intro():
     display_flush()
     await _yield()
 
-
-# ---------- Main ----------
-async def main():
+async def _start_display_runtime():
+    """Bring up the display and optional framebuffer before intro/menu code runs."""
     try:
         gc.collect()
     except Exception:
@@ -12138,55 +12384,47 @@ async def main():
     _boot_log("before display.start")
     display.start()
     _boot_log("after display.start")
-    # After hub75 has allocated its internal buffers, we can try to enable
-    # the optional software framebuffer diff layer.
     try:
         refresh_runtime_config()
         init_buffered_display()
     except Exception:
         pass
     _boot_log("buffered on" if USE_BUFFERED_DISPLAY else "buffered off")
+    reset_menu_display(0)
+    await yield_runtime(0)
+
+async def _recover_to_menu(delay_ms=800):
+    """Show a brief error marker and restore enough state for the selector to continue."""
     display.clear()
-    display_score_and_time(0, force=True)
-    if asyncio is not None:
-        try:
-            await asyncio.sleep(0)
-        except Exception:
-            pass
+    draw_text(1, 20, "ERR", 255, 0, 0)
+    sleep_ms(delay_ms)
+    reset_menu_display(0)
+    maybe_collect(1)
+    await yield_runtime(0)
+
+
+# ---------- Main ----------
+async def main():
+    await _start_display_runtime()
 
     try:
         await _show_intro()
     except RestartProgram:
-        display.clear()
-        display_flush()
-        if asyncio is not None:
-            try:
-                await asyncio.sleep(0)
-            except Exception:
-                pass
+        reset_menu_display(0)
+        await yield_runtime(0)
 
     selector = GameSelect()
     while True:
-        # yield to browser event loop (pygbag) between game sessions
-        if asyncio is not None:
-            try:
-                await asyncio.sleep(0)
-            except Exception:
-                pass
+        await yield_runtime(0)
         try:
             await selector.run()
         except RestartProgram:
-            display.clear()
-            display_score_and_time(0, force=True)
+            reset_menu_display(0)
             continue
         except Exception as e:
             # Failsafe: show simple error marker and reset to menu
             print("Error:", e)
-            display.clear()
-            draw_text(1, 20, "ERR", 255, 0, 0)
-            sleep_ms(800)
-            display.clear()
-            maybe_collect(1)
+            await _recover_to_menu()
 
 if __name__ == "__main__":
     if asyncio is not None:

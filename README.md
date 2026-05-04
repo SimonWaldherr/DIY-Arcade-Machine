@@ -180,7 +180,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 
 | Game ID | Name | Description |
 |---------|------|-------------|
-| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Plasma, Cube, Orbit, Tunnel, Matrix, Fire |
+| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Plasma, Cube, Orbit, Warp, Bounce, Tunnel, Matrix, Fire |
 | `2048` | 2048 | Sliding tile puzzle with merge scoring |
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
@@ -189,7 +189,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
 | `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
-| `INVADR` | Invaders | Shoot descending alien waves while dodging bombs |
+| `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
 | `LOCO` | LocoMotion | Sliding railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
