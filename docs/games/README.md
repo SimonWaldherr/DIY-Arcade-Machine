@@ -8,27 +8,34 @@ Each file combines gameplay notes with technical descriptions in two views:
 
 ## Games
 
+**DEMOS** is always the first entry in the menu; all other games are listed alphabetically.
+
 | Game ID | Name | File |
 | --- | --- | --- |
 | `DEMOS` | Demo Showcase | [DEMOS.md](./DEMOS.md) |
+| `2048` | 2048 | [2048.md](./2048.md) |
+| `ASTRD` | Asteroids | [ASTRD.md](./ASTRD.md) |
+| `BEJWL` | Bejeweled | [BEJWL.md](./BEJWL.md) |
+| `BRKOUT` | Breakout | [BRKOUT.md](./BRKOUT.md) |
+| `CAVEFL` | Cave Flyer | [CAVEFL.md](./CAVEFL.md) |
+| `DODGE` | Dodge | [DODGE.md](./DODGE.md) |
+| `DOOMLT` | Doom Lite | [DOOMLT.md](./DOOMLT.md) |
+| `FLAPPY` | Flappy Bird | [FLAPPY.md](./FLAPPY.md) |
+| `LANDER` | Lunar Lander | [LANDER.md](./LANDER.md) |
+| `LOCO` | LocoMotion | [LOCO.md](./LOCO.md) |
+| `MAZE` | Maze Explorer | [MAZE.md](./MAZE.md) |
+| `PACMAN` | Pac-Man | [PACMAN.md](./PACMAN.md) |
+| `PITFAL` | Pitfall Runner | [PITFAL.md](./PITFAL.md) |
+| `PONG` | Pong | [PONG.md](./PONG.md) |
+| `QIX` | Qix | [QIX.md](./QIX.md) |
+| `REVRS` | Othello/Reversi | [REVRS.md](./REVRS.md) |
+| `RTYPE` | R-Type Shooter | [RTYPE.md](./RTYPE.md) |
 | `SIMON` | Simon Says | [SIMON.md](./SIMON.md) |
 | `SNAKE` | Snake | [SNAKE.md](./SNAKE.md) |
-| `PONG` | Pong | [PONG.md](./PONG.md) |
-| `BRKOUT` | Breakout | [BRKOUT.md](./BRKOUT.md) |
-| `ASTRD` | Asteroids | [ASTRD.md](./ASTRD.md) |
-| `QIX` | Qix | [QIX.md](./QIX.md) |
+| `SOKO` | Sokoban | [SOKO.md](./SOKO.md) |
 | `TETRIS` | Tetris | [TETRIS.md](./TETRIS.md) |
-| `MAZE` | Maze Explorer | [MAZE.md](./MAZE.md) |
-| `FLAPPY` | Flappy Bird | [FLAPPY.md](./FLAPPY.md) |
-| `DODGE` | Dodge | [DODGE.md](./DODGE.md) |
 | `TRON` | Tron Lightcycle | [TRON.md](./TRON.md) |
-| `RTYPE` | R-Type Shooter | [RTYPE.md](./RTYPE.md) |
-| `PACMAN` | Pac-Man | [PACMAN.md](./PACMAN.md) |
-| `CAVEFL` | Cave Flyer | [CAVEFL.md](./CAVEFL.md) |
-| `PITFAL` | Pitfall Runner | [PITFAL.md](./PITFAL.md) |
-| `LANDER` | Lunar Lander | [LANDER.md](./LANDER.md) |
 | `UFODEF` | UFO Defense | [UFODEF.md](./UFODEF.md) |
-| `DOOMLT` | Doom Lite | [DOOMLT.md](./DOOMLT.md) |
 
 ## Shared technical context
 
