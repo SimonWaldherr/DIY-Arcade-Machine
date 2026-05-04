@@ -6500,11 +6500,6 @@ class LiquidWarGame:
         draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
         draw_text_small(1, PLAY_HEIGHT, "B:{}".format(self.score_blue), 180, 220, 255)
         draw_text_small(42, PLAY_HEIGHT, "R:{}".format(self.score_red), 255, 180, 180)
-        draw_text_small(
-            84, PLAY_HEIGHT, "P:{}".format(self.N_PER_TEAM * 2), 200, 200, 200
-        )
-
-        display_score_and_time(self.score_blue - self.score_red)
 
     def main_loop(self, joystick):
         # main loop: returns to menu on C press
@@ -10057,7 +10052,7 @@ class DemosGame:
     """Zero-player demos: simple animations and cellular automata."""
     def __init__(self):
         # Additional hardware-demo effects implemented: MATRIX (falling code), STARS (starfield), MYSTIFY (bouncing lines), PLASMA (color waves), CUBE (3D wireframe), TUNNEL (zooming vector tunnel)
-        self.demos = ("SNAKE", "LIFE", "PLASMA", "CUBE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "PLASMA", "CUBE", "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE", "MATRIX", "STARS")
+        self.demos = ("SNAKE", "LIFE", "PLASMA", "CUBE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE", "MATRIX", "STARS")
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
@@ -10122,6 +10117,9 @@ class DemosGame:
 
         # TUNNEL
         self._tunnel_phase = 0
+
+        # ORBIT
+        self._orbit_phase = 0
 
         # SNAKE
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
@@ -10783,6 +10781,32 @@ class DemosGame:
             draw_line(x2, y2, x1, y2, r, g, b)
             draw_line(x1, y2, x1, y1, r, g, b)
 
+    # --- ORBIT ---
+    def _orbit_init(self):
+        self._orbit_phase = 0
+        display.clear()
+
+    def _orbit_step(self):
+        display.clear()
+        self._orbit_phase = (self._orbit_phase + 3) % 360
+        phase = self._orbit_phase
+        cx = WIDTH // 2
+        cy = HEIGHT // 2
+
+        for ring in range(4):
+            radius = 7 + ring * 6
+            hue = (phase * 2 + ring * 70) % 360
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            points = 6 + ring * 2
+            for i in range(points):
+                a = (phase + i * (360 // points) + ring * 19) * 3.14159 / 180.0
+                wobble = math.sin((phase + i * 23) * 0.07) * 2.5
+                x = int(cx + math.cos(a) * (radius + wobble))
+                y = int(cy + math.sin(a) * (radius - wobble))
+                draw_rectangle(x - 1, y - 1, x + 1, y + 1, r, g, b)
+
+        draw_rectangle(cx - 2, cy - 2, cx + 2, cy + 2, 255, 255, 255)
+
     # --- PLASMA ---
     def _plasma_init(self):
         self._plasma_time = 0
@@ -10997,11 +11021,107 @@ class DemosGame:
         self._snake_check_green_target_collision()
         self._snake_draw()
 
-    def main_loop(self, joystick):
+    def _select_prev_next_demo(self, joystick):
+        now = ticks_ms()
+        if ticks_diff(now, self._last_move) <= self._move_delay:
+            return
+
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if d == JOYSTICK_LEFT:
+            self.idx = (self.idx - 1) % len(self.demos)
+        elif d == JOYSTICK_RIGHT:
+            self.idx = (self.idx + 1) % len(self.demos)
+        else:
+            return
+
+        self._reset_demo_state()
+        try:
+            gc.collect()
+        except Exception:
+            pass
+        self._last_move = now
+
+    def _ensure_demo_initialized(self, demo):
+        if self._init:
+            return
+
+        display.clear()
+        # No HUD in demos: use full 64x64 for visuals.
+        if demo == "LIFE":
+            self._life_cur = bytearray(self._life_w * self._life_h)
+            self._life_nxt = bytearray(self._life_w * self._life_h)
+            self._life_prev = bytearray(self._life_w * self._life_h)
+            for i in range(self._life_w * self._life_h):
+                self._life_cur[i] = 1 if random.randint(0, 99) < 18 else 0
+                self._life_prev[i] = 2
+        elif demo == "ANTS":
+            self._ants_init()
+        elif demo == "FLOOD":
+            self._flood_init()
+        elif demo == "FIRE":
+            self._fire_init()
+        elif demo == "MATRIX":
+            self._matrix_init()
+        elif demo == "STARS":
+            self._stars_init()
+        elif demo == "MYSTIFY":
+            self._mystify_init()
+        elif demo == "CUBE":
+            self._cube_init()
+        elif demo == "TUNNEL":
+            self._tunnel_init()
+        elif demo == "ORBIT":
+            self._orbit_init()
+        elif demo == "PLASMA":
+            self._plasma_init()
+        else:
+            self._snake_init()
+        self._init = True
+
+    def _step_current_demo(self):
+        demo = self.demos[self.idx]
+        self._ensure_demo_initialized(demo)
+
+        if demo == "LIFE":
+            self._life_step(self._life_w, self._life_h, self._life_cur, self._life_nxt)
+            self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
+            self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
+        elif demo == "ANTS":
+            self._ants_step()
+        elif demo == "FLOOD":
+            self._flood_step()
+        elif demo == "FIRE":
+            self._fire_step()
+        elif demo == "MATRIX":
+            self._matrix_step()
+        elif demo == "STARS":
+            self._stars_step()
+        elif demo == "MYSTIFY":
+            if not getattr(self, "_mystify_pts", None):
+                self._mystify_init()
+            self._mystify_step()
+        elif demo == "CUBE":
+            if not getattr(self, "_cube_vertices", None):
+                self._cube_init()
+            self._cube_step()
+        elif demo == "TUNNEL":
+            self._tunnel_step()
+        elif demo == "ORBIT":
+            self._orbit_step()
+        elif demo == "PLASMA":
+            if not getattr(self, "_plasma_palette", None):
+                self._plasma_init()
+            self._plasma_step()
+        else:
+            self._snake_step()
+
+    def _prepare_demo_loop(self):
         global game_over, global_score
         game_over = False
         global_score = 0
 
+    def main_loop(self, joystick):
+        self._prepare_demo_loop()
         frame_ms = 35
         last_frame = ticks_ms()
 
@@ -11010,104 +11130,15 @@ class DemosGame:
             if c_button:
                 return
 
-            now = ticks_ms()
-            if ticks_diff(now, self._last_move) > self._move_delay:
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-                if d == JOYSTICK_LEFT:
-                    self.idx = (self.idx - 1) % len(self.demos)
-                    self._reset_demo_state()
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-                    self._last_move = now
-                elif d == JOYSTICK_RIGHT:
-                    self.idx = (self.idx + 1) % len(self.demos)
-                    self._reset_demo_state()
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-                    self._last_move = now
+            self._select_prev_next_demo(joystick)
 
+            now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 sleep_ms(1)
                 continue
             last_frame = now
             self._frame += 1
-
-            demo = self.demos[self.idx]
-            if not self._init:
-                display.clear()
-                # No HUD in demos: use full 64x64 for visuals.
-                if demo == "LIFE":
-                    self._life_cur = bytearray(self._life_w * self._life_h)
-                    self._life_nxt = bytearray(self._life_w * self._life_h)
-                    self._life_prev = bytearray(self._life_w * self._life_h)
-                    for i in range(self._life_w * self._life_h):
-                        self._life_cur[i] = 1 if random.randint(0, 99) < 18 else 0
-                        self._life_prev[i] = 2  # force draw
-                elif demo == "ANTS":
-                    self._ants_init()
-                elif demo == "FLOOD":
-                    self._flood_init()
-                elif demo == "FIRE":
-                    self._fire_init()
-                elif demo == "MATRIX":
-                    self._matrix_init()
-                elif demo == "STARS":
-                    self._stars_init()
-                elif demo == "MYSTIFY":
-                    self._mystify_init()
-                elif demo == "CUBE":
-                    self._cube_init()
-                elif demo == "TUNNEL":
-                    self._tunnel_init()
-                elif demo == "PLASMA":
-                    self._plasma_init()
-                else:  # SNAKE
-                    self._snake_init()
-                self._init = True
-
-            if demo == "LIFE":
-                self._life_step(self._life_w, self._life_h, self._life_cur, self._life_nxt)
-                self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
-                self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
-
-            elif demo == "ANTS":
-                self._ants_step()
-
-            elif demo == "FLOOD":
-                self._flood_step()
-
-            elif demo == "FIRE":
-                self._fire_step()
-                
-            elif demo == "MATRIX":
-                self._matrix_step()
-                
-            elif demo == "STARS":
-                self._stars_step()
-                
-            elif demo == "MYSTIFY":
-                if not getattr(self, '_mystify_pts', None):
-                    self._mystify_init()
-                self._mystify_step()
-                
-            elif demo == "CUBE":
-                if not getattr(self, '_cube_vertices', None):
-                    self._cube_init()
-                self._cube_step()
-            elif demo == "TUNNEL":
-                self._tunnel_step()
-            elif demo == "PLASMA":
-                if not getattr(self, '_plasma_palette', None):
-                    self._plasma_init()
-                self._plasma_step()
-
-            else:  # SNAKE
-                self._snake_step()
-
+            self._step_current_demo()
             maybe_collect(120)
 
     async def main_loop_async(self, joystick):
@@ -11115,10 +11146,7 @@ class DemosGame:
         if asyncio is None:
             return self.main_loop(joystick)
 
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
+        self._prepare_demo_loop()
         frame_ms = 35
         last_frame = ticks_ms()
 
@@ -11127,104 +11155,15 @@ class DemosGame:
             if c_button:
                 return
 
-            now = ticks_ms()
-            if ticks_diff(now, self._last_move) > self._move_delay:
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-                if d == JOYSTICK_LEFT:
-                    self.idx = (self.idx - 1) % len(self.demos)
-                    self._reset_demo_state()
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-                    self._last_move = now
-                elif d == JOYSTICK_RIGHT:
-                    self.idx = (self.idx + 1) % len(self.demos)
-                    self._reset_demo_state()
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-                    self._last_move = now
+            self._select_prev_next_demo(joystick)
 
+            now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 await asyncio.sleep(0.001)
                 continue
             last_frame = now
             self._frame += 1
-
-            demo = self.demos[self.idx]
-            if not self._init:
-                display.clear()
-                # No HUD in demos: use full 64x64 for visuals.
-                if demo == "LIFE":
-                    self._life_cur = bytearray(self._life_w * self._life_h)
-                    self._life_nxt = bytearray(self._life_w * self._life_h)
-                    self._life_prev = bytearray(self._life_w * self._life_h)
-                    for i in range(self._life_w * self._life_h):
-                        self._life_cur[i] = 1 if random.randint(0, 99) < 18 else 0
-                        self._life_prev[i] = 2  # force draw
-                elif demo == "ANTS":
-                    self._ants_init()
-                elif demo == "FLOOD":
-                    self._flood_init()
-                elif demo == "FIRE":
-                    self._fire_init()
-                elif demo == "MATRIX":
-                    self._matrix_init()
-                elif demo == "STARS":
-                    self._stars_init()
-                elif demo == "MYSTIFY":
-                    self._mystify_init()
-                elif demo == "CUBE":
-                    self._cube_init()
-                elif demo == "TUNNEL":
-                    self._tunnel_init()
-                elif demo == "PLASMA":
-                    self._plasma_init()
-                else:  # SNAKE
-                    self._snake_init()
-                self._init = True
-
-            if demo == "LIFE":
-                self._life_step(self._life_w, self._life_h, self._life_cur, self._life_nxt)
-                self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
-                self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
-
-            elif demo == "ANTS":
-                self._ants_step()
-
-            elif demo == "FLOOD":
-                self._flood_step()
-
-            elif demo == "FIRE":
-                self._fire_step()
-                
-            elif demo == "MATRIX":
-                self._matrix_step()
-                
-            elif demo == "STARS":
-                self._stars_step()
-                
-            elif demo == "MYSTIFY":
-                if not getattr(self, '_mystify_pts', None):
-                    self._mystify_init()
-                self._mystify_step()
-                
-            elif demo == "CUBE":
-                if not getattr(self, '_cube_vertices', None):
-                    self._cube_init()
-                self._cube_step()
-            elif demo == "TUNNEL":
-                self._tunnel_step()
-            elif demo == "PLASMA":
-                if not getattr(self, '_plasma_palette', None):
-                    self._plasma_init()
-                self._plasma_step()
-
-            else:  # SNAKE
-                self._snake_step()
-
+            self._step_current_demo()
             maybe_collect(120)
 
 
@@ -12944,6 +12883,7 @@ class GameSelect:
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
+        ("LIQWAR", LiquidWarGame, GAME_FLAG_HEAVY),
         ("LOCO", LocoMotionGame, GAME_FLAG_HEAVY),
         ("MAZE", MazeGame, GAME_FLAG_HEAVY),
         ("PACMAN", PacmanGame, 0),
@@ -12956,6 +12896,7 @@ class GameSelect:
         ("SNAKE", SnakeGame, 0),
         ("SOKO", SokobanGame, GAME_FLAG_HEAVY),
         ("TETRIS", TetrisGame, GAME_FLAG_HEAVY),
+        ("TOWER", TowerDefenseGame, GAME_FLAG_HEAVY),
         ("TRON", TronGame, 0),
         ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
     )
