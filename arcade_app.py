@@ -145,7 +145,7 @@ def ticks_ms():
     now = time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
     # Desktop: auto-present at ~60 Hz even if the game loop doesn't sleep
     # after drawing (many loops use ticks_ms/ticks_diff for pacing).
-    if not IS_MICROPYTHON:
+    if not IS_MICROPYTHON and not IS_WEB:
         try:
             last = getattr(ticks_ms, "_last_flush", 0)
             if (now - last) >= 16:
@@ -159,6 +159,7 @@ def ticks_diff(a, b):
     return time.ticks_diff(a, b) if hasattr(time, "ticks_diff") else (a - b)
 
 _gc_ctr = 0
+_FRAME_PRESENT_MANAGED = False
 def maybe_collect(period=90):
     global _gc_ctr
     _gc_ctr += 1
@@ -223,6 +224,7 @@ async def _run_game_loop_async(frame_ms, loop_fn):
         return
     
     # Async mode: frame pacing with asyncio.sleep()
+    global _FRAME_PRESENT_MANAGED
     last_frame = ticks_ms()
     while True:
         now = ticks_ms()
@@ -230,9 +232,17 @@ async def _run_game_loop_async(frame_ms, loop_fn):
             await asyncio.sleep(0.005)
             continue
         last_frame = now
-        
-        if not loop_fn():
-            return
+
+        _FRAME_PRESENT_MANAGED = True
+        try:
+            if not loop_fn():
+                return
+            try:
+                display_flush()
+            except Exception:
+                pass
+        finally:
+            _FRAME_PRESENT_MANAGED = False
         
         try:
             maybe_collect(150)
@@ -267,6 +277,7 @@ else:
             self._pg = None
             self._screen = None
             self._surface = None
+            self._scaled_surface = None
             self._inited = False
 
         def start(self):
@@ -290,6 +301,7 @@ else:
             else:
                 self._screen = pygame.display.set_mode(target)
             self._surface = pygame.Surface((self.w, self.h))
+            self._scaled_surface = pygame.Surface(target)
             self.clear()
             self.show()
             self._inited = True
@@ -309,8 +321,12 @@ else:
                 return
             # keep window responsive
             self._pg.event.pump()
-            scaled = self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale))
-            self._screen.blit(scaled, (0, 0))
+            if self._scaled_surface is not None:
+                self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale), self._scaled_surface)
+                self._screen.blit(self._scaled_surface, (0, 0))
+            else:
+                scaled = self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale))
+                self._screen.blit(scaled, (0, 0))
             self._pg.display.flip()
 
     display = _PyGameDisplay(WIDTH, HEIGHT, scale=10)
@@ -804,10 +820,11 @@ def display_score_and_time(score, force=False):
     time_x = WIDTH - (len(_hud_time_str) * 6)
     draw_text_small(time_x, PLAY_HEIGHT, _hud_time_str, 255, 255, 255)
     # flush buffered drawing to hardware (only changed pixels)
-    try:
-        display_flush()
-    except Exception:
-        pass
+    if not (IS_WEB and _FRAME_PRESENT_MANAGED):
+        try:
+            display_flush()
+        except Exception:
+            pass
 
 # ---------- Grid (nibble-packed) for Maze/Qix ----------
 GRID_W = WIDTH
@@ -5412,117 +5429,98 @@ class PitfallGame:
 
         self.reset()
         self._ensure_obstacles()
+        def loop_iteration():
+            global game_over, global_score
+            c_button, z_button = joystick.read_buttons()
+            if c_button or game_over:
+                return False
 
-        frame_ms = 33
-        last_frame = ticks_ms()
+            self.frame += 1
 
-        while not game_over:
-            try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
+            # difficulty
+            self.speed = 1.2 + (self.distance / 800.0)
+            if self.speed > 2.6:
+                self.speed = 2.6
 
-                now = ticks_ms()
-                if ticks_diff(now, last_frame) < frame_ms:
-                    await asyncio.sleep(0.002)
-                    continue
-                last_frame = now
-                self.frame += 1
+            # scroll obstacles
+            for o in self.obstacles:
+                o["x"] -= self.speed
 
-                # difficulty
-                self.speed = 1.2 + (self.distance / 800.0)
-                if self.speed > 2.6:
-                    self.speed = 2.6
+            # cleanup
+            self.obstacles = [o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2]
+            self._ensure_obstacles()
 
-                # scroll obstacles
-                for o in self.obstacles:
-                    o["x"] -= self.speed
+            # move
+            d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+            if d == JOYSTICK_LEFT:
+                self.px = max(0, self.px - 2)
+            elif d == JOYSTICK_RIGHT:
+                self.px = min(WIDTH - self.pw, self.px + 2)
 
-                # cleanup
-                self.obstacles = [o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2]
-                self._ensure_obstacles()
+            # jump with variable height
+            if self.jump_cd > 0:
+                self.jump_cd -= 1
 
-                # move
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
-                if d == JOYSTICK_LEFT:
-                    self.px = max(0, self.px - 2)
-                elif d == JOYSTICK_RIGHT:
-                    self.px = min(WIDTH - self.pw, self.px + 2)
-
-                # jump with variable height
-                if self.jump_cd > 0:
-                    self.jump_cd -= 1
-                
-                jump_pressed = (z_button or d == JOYSTICK_UP)
-                if jump_pressed and self.on_ground and self.jump_cd == 0:
-                    if not self.jump_charging:
-                        self.jump_charging = True
-                        self.jump_start_frame = self.frame
-                    else:
-                        # cap charge: auto-release after max frames
-                        hold_frames = self.frame - self.jump_start_frame
-                        if hold_frames >= self.jump_charge_max_frames:
-                            self.vy = self.jump_max_power
-                            self.on_ground = False
-                            self.jump_cd = 10
-                            self.jump_charging = False
-                elif not jump_pressed and self.jump_charging:
-                    # release: jump with height based on hold duration
+            jump_pressed = (z_button or d == JOYSTICK_UP)
+            if jump_pressed and self.on_ground and self.jump_cd == 0:
+                if not self.jump_charging:
+                    self.jump_charging = True
+                    self.jump_start_frame = self.frame
+                else:
                     hold_frames = self.frame - self.jump_start_frame
-                    if hold_frames < 0:
-                        hold_frames = 0
-                    if hold_frames > self.jump_charge_max_frames:
-                        hold_frames = self.jump_charge_max_frames
-
-                    jump_power = self.jump_min_power - (hold_frames * 0.35)
-                    # clamp: don't exceed max power
-                    if jump_power < self.jump_max_power:
-                        jump_power = self.jump_max_power
-
-                    self.vy = jump_power
-                    self.on_ground = False
-                    self.jump_cd = 10
-                    self.jump_charging = False
-
-                # physics
-                in_pit = self._player_in_pit()
-                self.vy += 0.45
-                self.py += self.vy
-
-                if not in_pit:
-                    if (self.py + self.ph - 1) >= self.ground_y:
-                        self.py = float(self.ground_y - self.ph + 1)
-                        self.vy = 0.0
-                        self.on_ground = True
-                    else:
+                    if hold_frames >= self.jump_charge_max_frames:
+                        self.vy = self.jump_max_power
                         self.on_ground = False
+                        self.jump_cd = 10
+                        self.jump_charging = False
+            elif not jump_pressed and self.jump_charging:
+                hold_frames = self.frame - self.jump_start_frame
+                if hold_frames < 0:
+                    hold_frames = 0
+                if hold_frames > self.jump_charge_max_frames:
+                    hold_frames = self.jump_charge_max_frames
+
+                jump_power = self.jump_min_power - (hold_frames * 0.35)
+                if jump_power < self.jump_max_power:
+                    jump_power = self.jump_max_power
+
+                self.vy = jump_power
+                self.on_ground = False
+                self.jump_cd = 10
+                self.jump_charging = False
+
+            # physics
+            in_pit = self._player_in_pit()
+            self.vy += 0.45
+            self.py += self.vy
+
+            if not in_pit:
+                if (self.py + self.ph - 1) >= self.ground_y:
+                    self.py = float(self.ground_y - self.ph + 1)
+                    self.vy = 0.0
+                    self.on_ground = True
                 else:
                     self.on_ground = False
+            else:
+                self.on_ground = False
 
-                # collect
-                self._check_treasure()
+            self._check_treasure()
 
-                # lose
-                if self._check_snake_collision() or self.py > PLAY_HEIGHT + 2:
-                    global_score = self.score
-                    game_over = True
-                    return
-
-                # score
-                self.distance += self.speed
-                self.score = int(self.distance / 6) + self.bonus
+            if self._check_snake_collision() or self.py > PLAY_HEIGHT + 2:
                 global_score = self.score
+                game_over = True
+                return False
 
-                self._render()
+            self.distance += self.speed
+            self.score = int(self.distance / 6) + self.bonus
+            global_score = self.score
+            self._render()
+            return True
 
-                if self.frame % 40 == 0:
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-
-            except RestartProgram:
-                return
+        try:
+            await _run_game_loop_async(33, loop_iteration)
+        except RestartProgram:
+            return
 
 
 class MonkeyBallLiteGame:
@@ -6575,10 +6573,10 @@ class LiquidWarGame:
         self.reset()
         display.clear()
         last_logic = ticks_ms()
-        while True:
-            # input handling
+        def loop_iteration():
+            nonlocal last_logic
+
             c_button, z_button = joystick.read_buttons()
-            # joystick movement of cursor -> player attractor
             d = joystick.read_direction(
                 [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
             )
@@ -6591,42 +6589,32 @@ class LiquidWarGame:
             elif d == JOYSTICK_RIGHT:
                 self.cursor_x = min(self.w - 2, self.cursor_x + 1)
 
-            # update player attractor to follow cursor smoothly
-            # small smoothing
             self.player_ax += (self.cursor_x - self.player_ax) * 0.35
             self.player_ay += (self.cursor_y - self.player_ay) * 0.35
 
-            # Z -> reset quickly (if pressed)
             if z_button:
                 self.reset()
-                # wait release
-                while joystick.read_buttons()[1]:
-                    await asyncio.sleep(0.008)
+                last_logic = ticks_ms()
 
             if c_button:
-                # return to menu
-                return
+                return False
 
             now = ticks_ms()
             if ticks_diff(now, last_logic) >= self.tick_dt_ms:
-                # compute dt (seconds)
                 dt = ticks_diff(now, last_logic) / 1000.0
                 last_logic = now
-
-                # AI update
                 self._update_ai(dt)
-                # forces
                 self._apply_forces(dt)
-                # integrate
                 self._integrate(dt)
-                # scoring and respawn
                 self._score_and_respawn()
 
-            # render
             self._draw()
+            return True
 
-            maybe_collect(40)
-            await asyncio.sleep(0.006)
+        try:
+            await _run_game_loop_async(self.tick_dt_ms, loop_iteration)
+        except RestartProgram:
+            return
 
 
 # Hinweise zur Integration:
