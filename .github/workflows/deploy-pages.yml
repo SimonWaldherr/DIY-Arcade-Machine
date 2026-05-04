@@ -44,6 +44,7 @@ jobs:
             --build build/src
           mkdir -p dist
           cp -R build/src/build/web/. dist/
+          cp web/coi-serviceworker.js dist/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

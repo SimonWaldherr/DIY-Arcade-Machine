@@ -1,4 +1,7 @@
 <html lang="en-us">
+<!-- COI Service Worker: enables SharedArrayBuffer on static hosts (GitHub Pages)
+     by injecting Cross-Origin-Isolation headers via a service worker. -->
+<script src="coi-serviceworker.js"></script>
 <script src="{{cookiecutter.cdn}}pythons.js" type="module" id="site" data-LINES="{{cookiecutter.LINES}}" data-CONSOLE="{{cookiecutter.CONSOLE}}" data-python="python{{cookiecutter.PYBUILD}}" data-os="vtx,fs,snd,gui" async defer>#<!--
 
 print("""
