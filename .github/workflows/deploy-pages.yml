@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install pygbag
-        run: pip install pygbag
+        run: pip install pygbag==0.9.2
 
       - name: Build with pygbag
         run: |
