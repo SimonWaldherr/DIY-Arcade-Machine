@@ -1,0 +1,62 @@
+name: Build & Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pygbag
+        run: pip install pygbag
+
+      - name: Build with pygbag
+        run: |
+          mkdir -p build/src
+          cp main.py arcade_app.py logo.png build/src/
+          if [ -f highscores.json ]; then cp highscores.json build/src/; fi
+          python -m pygbag \
+            --ume_block 0 \
+            --width 640 \
+            --height 640 \
+            --title "DIY Arcade Machine" \
+            --icon logo.png \
+            --template "${{ github.workspace }}/web/default.tmpl" \
+            --build build/src
+          mkdir -p dist
+          cp -R build/src/build/web/. dist/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
