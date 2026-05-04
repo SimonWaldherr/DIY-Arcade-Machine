@@ -21,8 +21,8 @@ Each file combines gameplay notes with technical descriptions in two views:
 | `DODGE` | Dodge | [DODGE.md](./DODGE.md) |
 | `DOOMLT` | Doom Lite | [DOOMLT.md](./DOOMLT.md) |
 | `FLAPPY` | Flappy Bird | [FLAPPY.md](./FLAPPY.md) |
+| `INVADR` | Invaders | [INVADR.md](./INVADR.md) |
 | `LANDER` | Lunar Lander | [LANDER.md](./LANDER.md) |
-| `LIQWAR` | Liquid War | [LIQWAR.md](./LIQWAR.md) |
 | `LOCO` | LocoMotion | [LOCO.md](./LOCO.md) |
 | `MAZE` | Maze Explorer | [MAZE.md](./MAZE.md) |
 | `PACMAN` | Pac-Man | [PACMAN.md](./PACMAN.md) |
@@ -35,7 +35,6 @@ Each file combines gameplay notes with technical descriptions in two views:
 | `SNAKE` | Snake | [SNAKE.md](./SNAKE.md) |
 | `SOKO` | Sokoban | [SOKO.md](./SOKO.md) |
 | `TETRIS` | Tetris | [TETRIS.md](./TETRIS.md) |
-| `TOWER` | Tower Defense | [TOWER.md](./TOWER.md) |
 | `TRON` | Tron Lightcycle | [TRON.md](./TRON.md) |
 | `UFODEF` | UFO Defense | [UFODEF.md](./UFODEF.md) |
 

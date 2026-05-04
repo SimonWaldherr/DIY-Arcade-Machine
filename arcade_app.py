@@ -3699,6 +3699,246 @@ class DodgeGame:
 
         await _run_game_loop_async(35, loop_iteration)
 
+
+class InvaderGame:
+    """
+    INVADR
+    Controls:
+      - Left/Right: move ship
+      - Z: fire
+      - C: return to menu
+    """
+    FRAME_MS = const(38)
+    ALIEN_COLS = const(7)
+    ALIEN_ROWS = const(4)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.player_x = WIDTH // 2
+        self.player_y = PLAY_HEIGHT - 4
+        self.bullet = None
+        self.bombs = []
+        self.aliens = []
+        self.alien_dir = 1
+        self.alien_drop = 0
+        self.score = 0
+        self.last_alien_step = ticks_ms()
+        self.alien_step_ms = 520
+        self.last_bomb = ticks_ms()
+        self._spawn_wave(speed_up=False)
+
+    def _spawn_wave(self, speed_up=True):
+        self.aliens = []
+        start_x = 6
+        start_y = 8
+        for row in range(self.ALIEN_ROWS):
+            for col in range(self.ALIEN_COLS):
+                self.aliens.append([start_x + col * 8, start_y + row * 6, 1])
+        self.alien_dir = 1
+        self.alien_drop = 0
+        if speed_up and self.alien_step_ms > 180:
+            self.alien_step_ms -= 35
+
+    def _move_player(self, joystick):
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if d == JOYSTICK_LEFT:
+            self.player_x = max(2, self.player_x - 2)
+        elif d == JOYSTICK_RIGHT:
+            self.player_x = min(WIDTH - 3, self.player_x + 2)
+
+    def _fire(self):
+        if self.bullet is None:
+            self.bullet = [self.player_x, self.player_y - 2]
+
+    def _step_bullet(self):
+        if self.bullet is None:
+            return
+        self.bullet[1] -= 3
+        bx = self.bullet[0]
+        by = self.bullet[1]
+        if by < 0:
+            self.bullet = None
+            return
+        for alien in self.aliens:
+            if not alien[2]:
+                continue
+            ax = alien[0]
+            ay = alien[1]
+            if ax <= bx <= ax + 4 and ay <= by <= ay + 3:
+                alien[2] = 0
+                self.bullet = None
+                self.score += 10
+                break
+
+    def _step_aliens(self):
+        now = ticks_ms()
+        if ticks_diff(now, self.last_alien_step) < self.alien_step_ms:
+            return False
+        self.last_alien_step = now
+
+        hit_edge = False
+        for alien in self.aliens:
+            if not alien[2]:
+                continue
+            nx = alien[0] + self.alien_dir * 2
+            if nx < 1 or nx > WIDTH - 6:
+                hit_edge = True
+                break
+
+        if hit_edge:
+            self.alien_dir *= -1
+            self.alien_drop += 1
+            for alien in self.aliens:
+                if alien[2]:
+                    alien[1] += 3
+        else:
+            for alien in self.aliens:
+                if alien[2]:
+                    alien[0] += self.alien_dir * 2
+        return True
+
+    def _drop_bomb(self):
+        if not self.aliens:
+            return
+        now = ticks_ms()
+        interval = max(260, 850 - self.score * 2)
+        if ticks_diff(now, self.last_bomb) < interval:
+            return
+        self.last_bomb = now
+        if len(self.bombs) >= 5:
+            return
+
+        live = []
+        for alien in self.aliens:
+            if alien[2]:
+                live.append(alien)
+        if not live:
+            return
+        alien = live[random.randint(0, len(live) - 1)]
+        self.bombs.append([alien[0] + 2, alien[1] + 4])
+
+    def _step_bombs(self):
+        new_bombs = []
+        px1 = self.player_x - 2
+        px2 = self.player_x + 2
+        py1 = self.player_y - 1
+        py2 = self.player_y + 1
+        hit = False
+        for bomb in self.bombs:
+            bomb[1] += 2
+            bx = bomb[0]
+            by = bomb[1]
+            if px1 <= bx <= px2 and py1 <= by <= py2:
+                hit = True
+            elif by < PLAY_HEIGHT:
+                new_bombs.append(bomb)
+        self.bombs = new_bombs
+        return hit
+
+    def _aliens_reached_player(self):
+        for alien in self.aliens:
+            if alien[2] and alien[1] + 4 >= self.player_y - 1:
+                return True
+        return False
+
+    def _all_clear(self):
+        for alien in self.aliens:
+            if alien[2]:
+                return False
+        return True
+
+    def _draw(self):
+        display.clear()
+        for alien in self.aliens:
+            if not alien[2]:
+                continue
+            ax = alien[0]
+            ay = alien[1]
+            draw_rectangle(ax, ay + 1, ax + 4, ay + 2, 0, 220, 80)
+            display.set_pixel(ax + 1, ay, 0, 180, 255)
+            display.set_pixel(ax + 3, ay, 0, 180, 255)
+            display.set_pixel(ax, ay + 3, 0, 120, 60)
+            display.set_pixel(ax + 4, ay + 3, 0, 120, 60)
+
+        if self.bullet is not None:
+            display.set_pixel(self.bullet[0], self.bullet[1], 255, 255, 80)
+            if self.bullet[1] + 1 < PLAY_HEIGHT:
+                display.set_pixel(self.bullet[0], self.bullet[1] + 1, 255, 180, 30)
+
+        for bomb in self.bombs:
+            display.set_pixel(bomb[0], bomb[1], 255, 60, 60)
+
+        px = self.player_x
+        py = self.player_y
+        draw_rectangle(px - 2, py, px + 2, py + 1, 80, 180, 255)
+        display.set_pixel(px, py - 1, 255, 255, 255)
+        display_score_and_time(self.score)
+
+    def _step(self, joystick, z_button):
+        global game_over, global_score
+        self._move_player(joystick)
+        if z_button:
+            self._fire()
+        self._step_bullet()
+        self._step_aliens()
+        self._drop_bomb()
+
+        if self._step_bombs() or self._aliens_reached_player():
+            global_score = self.score
+            game_over = True
+            return False
+
+        if self._all_clear():
+            self.score += 100
+            global_score = self.score
+            self._spawn_wave()
+
+        global_score = self.score
+        self._draw()
+        maybe_collect(100)
+        return True
+
+    def main_loop(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+        self.reset()
+        display_score_and_time(0, force=True)
+        last_frame = ticks_ms()
+
+        while True:
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return
+            now = ticks_ms()
+            if ticks_diff(now, last_frame) < self.FRAME_MS:
+                sleep_ms(4)
+                continue
+            last_frame = now
+            if not self._step(joystick, z_button):
+                return
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        def loop_iteration():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            return self._step(joystick, z_button)
+
+        await _run_game_loop_async(self.FRAME_MS, loop_iteration)
+
+
 class TronGame:
     """
     TRON LIGHT CYCLE (Endless)
@@ -6184,1258 +6424,6 @@ class MonkeyBallLiteGame:
                 except Exception:
                     pass
 
-
-class LiquidWarGame:
-    """
-    Liquid War — einfache Partikel-/pushing-Simulation.
-
-    Steuerung:
-      - Stick: bewege Spieler-Attractor (ziehpunkt für blaue Partikel)
-      - Z: Reset / neues Spiel (lange drücken zum Zurück)
-      - C: Zurück zum Menü
-
-    Hinweis: passt sich an WIDTH, PLAY_HEIGHT, HEIGHT, joystick, display, draw_* Hilfsfunktionen etc. an.
-    """
-
-    TEAM_BLUE = 0
-    TEAM_RED = 1
-
-    def __init__(
-        self,
-        n_per_team=110,
-        particle_radius=3,
-        attractor_strength=0.7,
-        collision_strength=0.9,
-    ):
-        # Parameter — anpassbar
-        self.N_PER_TEAM = n_per_team
-        self.P_RADIUS = particle_radius
-        self.ATTRACTION = attractor_strength
-        self.COLLIDE = collision_strength
-
-        # Spielfeld in Pixelkoordinaten (0..WIDTH-1, 0..PLAY_HEIGHT-1)
-        self.w = WIDTH
-        self.h = PLAY_HEIGHT
-
-        # initialise
-        self.reset()
-
-    def reset(self):
-        # particles: list of dicts: {'x','y','vx','vy','team'}
-        self.particles = []
-        self.score_blue = 0
-        self.score_red = 0
-        self.spawn_border = 6  # Abstand zur Grundlinie für respawn
-        self._init_particles()
-
-        # Attractors: player controlled for blue, AI for red
-        self.player_ax = self.w * 0.25
-        self.player_ay = self.h * 0.5
-        self.ai_ax = self.w * 0.75
-        self.ai_ay = self.h * 0.5
-
-        # Cursor for player (visual)
-        self.cursor_x = int(self.player_ax)
-        self.cursor_y = int(self.player_ay)
-
-        # time tracking
-        self.last_tick = ticks_ms()
-        self.tick_dt_ms = 18
-
-        # difficulty / AI parameters
-        self.ai_noise = 0.6
-        self.running = True
-
-    def _init_particles(self):
-        self.particles.clear()
-        # spawn blue on left half, red on right half
-        for i in range(self.N_PER_TEAM):
-            # blue
-            x = random.uniform(self.P_RADIUS + 2, self.w * 0.45)
-            y = random.uniform(self.P_RADIUS + 2, self.h - self.P_RADIUS - 2)
-            self.particles.append(
-                {"x": x, "y": y, "vx": 0.0, "vy": 0.0, "team": self.TEAM_BLUE}
-            )
-            # red
-            x = random.uniform(self.w * 0.55, self.w - self.P_RADIUS - 2)
-            y = random.uniform(self.P_RADIUS + 2, self.h - self.P_RADIUS - 2)
-            self.particles.append(
-                {"x": x, "y": y, "vx": 0.0, "vy": 0.0, "team": self.TEAM_RED}
-            )
-
-    def _respawn_particle(self, p):
-        # wenn blau: respawn links, wenn rot: respawn rechts
-        if p["team"] == self.TEAM_BLUE:
-            p["x"] = random.uniform(self.P_RADIUS + 2, self.w * 0.25)
-            p["y"] = random.uniform(self.P_RADIUS + 2, self.h - self.P_RADIUS - 2)
-        else:
-            p["x"] = random.uniform(self.w * 0.75, self.w - self.P_RADIUS - 2)
-            p["y"] = random.uniform(self.P_RADIUS + 2, self.h - self.P_RADIUS - 2)
-        p["vx"] = 0.0
-        p["vy"] = 0.0
-
-    def _apply_forces(self, dt):
-        # dt in seconds approx
-        # simple pairwise collision resolution (O(n^2) — moderate N ok)
-
-        # attractor targets
-        pax, pay = self.player_ax, self.player_ay
-        aax, aay = self.ai_ax, self.ai_ay
-
-        # first: attraction toward attractor (player for blue, ai for red)
-        for p in self.particles:
-            if p["team"] == self.TEAM_BLUE:
-                tx, ty = pax, pay
-            else:
-                tx, ty = aax, aay
-            dx = tx - p["x"]
-            dy = ty - p["y"]
-            dist = math.hypot(dx, dy) + 1e-6
-            # normalized attraction
-            ax = (dx / dist) * self.ATTRACTION
-            ay = (dy / dist) * self.ATTRACTION
-            p["vx"] += ax * dt * 60.0  # scale so dt stable across rates
-            p["vy"] += ay * dt * 60.0
-
-            # small randomness so the flock spreads
-            p["vx"] += (random.random() - 0.5) * 0.05
-            p["vy"] += (random.random() - 0.5) * 0.05
-
-        # pairwise separation to avoid heavy overlap (spatial hashing optimization)
-        min_dist = self.P_RADIUS * 2.0
-        min_dist_sq = min_dist * min_dist
-        # build spatial grid to limit neighbor checks
-        cell = max(6, int(self.P_RADIUS * 3))
-        cols = int(self.w / cell) + 1
-        rows = int(self.h / cell) + 1
-        buckets = [[] for _ in range(cols * rows)]
-        # fill buckets with particle indices
-        for idx, p in enumerate(self.particles):
-            cx = int(p["x"] / cell)
-            cy = int(p["y"] / cell)
-            if cx < 0:
-                cx = 0
-            if cy < 0:
-                cy = 0
-            if cx >= cols:
-                cx = cols - 1
-            if cy >= rows:
-                cy = rows - 1
-            buckets[cy * cols + cx].append(idx)
-
-        # check neighbors only inside nearby buckets
-        for i, pi in enumerate(self.particles):
-            xi, yi = pi["x"], pi["y"]
-            cx = int(xi / cell)
-            cy = int(yi / cell)
-            if cx < 0:
-                cx = 0
-            if cy < 0:
-                cy = 0
-            if cx >= cols:
-                cx = cols - 1
-            if cy >= rows:
-                cy = rows - 1
-
-            for dx_cell in (-1, 0, 1):
-                for dy_cell in (-1, 0, 1):
-                    ncx = cx + dx_cell
-                    ncy = cy + dy_cell
-                    if ncx < 0 or ncy < 0 or ncx >= cols or ncy >= rows:
-                        continue
-                    bucket = buckets[ncy * cols + ncx]
-                    for j in bucket:
-                        if j <= i:
-                            continue
-                        pj = self.particles[j]
-                        dx = pj["x"] - xi
-                        dy = pj["y"] - yi
-                        d2 = dx * dx + dy * dy
-                        if d2 == 0.0:
-                            dx = (random.random() - 0.5) * 0.01
-                            dy = (random.random() - 0.5) * 0.01
-                            d2 = dx * dx + dy * dy
-                        if d2 < min_dist_sq:
-                            d = math.sqrt(d2) + 1e-6
-                            overlap = min_dist - d
-                            direction_x = dx / d
-                            direction_y = dy / d
-                            strength = self.COLLIDE
-                            if pi["team"] != pj["team"]:
-                                strength *= 1.6
-                            imp = overlap * 0.5 * strength
-                            px = direction_x * imp
-                            py = direction_y * imp
-                            pj["vx"] += px
-                            pj["vy"] += py
-                            pi["vx"] -= px
-                            pi["vy"] -= py
-
-    def _integrate(self, dt):
-        # integrate velocities, apply damping and bounding
-        damping = 0.92
-        max_speed = 3.4
-        for p in self.particles:
-            # clamp speed
-            spd = math.hypot(p["vx"], p["vy"])
-            if spd > max_speed:
-                scale = max_speed / (spd + 1e-9)
-                p["vx"] *= scale
-                p["vy"] *= scale
-            # integrate
-            p["x"] += p["vx"] * dt * 60.0
-            p["y"] += p["vy"] * dt * 60.0
-            # damping
-            p["vx"] *= damping
-            p["vy"] *= damping
-
-            # bounds keep inside play area
-            r = self.P_RADIUS + 1
-            if p["x"] < r:
-                p["x"] = r
-                p["vx"] *= -0.3
-            if p["x"] > self.w - r:
-                p["x"] = self.w - r
-                p["vx"] *= -0.3
-            if p["y"] < r:
-                p["y"] = r
-                p["vy"] *= -0.3
-            if p["y"] > self.h - r:
-                p["y"] = self.h - r
-                p["vy"] *= -0.3
-
-    def _score_and_respawn(self):
-        # if particle crosses opponent ground line, score and respawn
-        # blue scores when x > w - spawn_border, red scores when x < spawn_border
-        for p in self.particles:
-            if p["team"] == self.TEAM_BLUE:
-                if p["x"] >= self.w - self.spawn_border:
-                    self.score_blue += 1
-                    self._respawn_particle(p)
-            else:
-                if p["x"] <= self.spawn_border:
-                    self.score_red += 1
-                    self._respawn_particle(p)
-
-    def _update_ai(self, dt):
-        # simple AI: move its attractor toward the centroid of blue particles with some noise,
-        # or towards player's attractor to be aggressive
-        # compute blue centroid
-        bx = 0.0
-        by = 0.0
-        bc = 0
-        for p in self.particles:
-            if p["team"] == self.TEAM_BLUE:
-                bx += p["x"]
-                by += p["y"]
-                bc += 1
-        if bc > 0:
-            bx /= bc
-            by /= bc
-            # aim between blue centroid and blue groundline to be more aggressive
-            target_x = bx * 0.8 + self.w * 0.1 * 0.9
-            target_y = by
-            # also try to move attractor leftwards to push
-            # small noisy motion
-            self.ai_ax += (target_x - self.ai_ax) * 0.03 + (
-                random.random() - 0.5
-            ) * self.ai_noise
-            self.ai_ay += (target_y - self.ai_ay) * 0.03 + (
-                random.random() - 0.5
-            ) * self.ai_noise
-        else:
-            # random wander
-            self.ai_ax += (random.random() - 0.5) * self.ai_noise
-            self.ai_ay += (random.random() - 0.5) * self.ai_noise
-
-        # clamp
-        self.ai_ax = max(self.spawn_border, min(self.w - self.spawn_border, self.ai_ax))
-        self.ai_ay = max(2, min(self.h - 2, self.ai_ay))
-
-    def _draw(self):
-        # clear play area
-        display.clear()
-
-        # draw background subtle grid
-        # left and right base indicators
-        draw_rectangle(
-            0, 0, self.spawn_border, self.h - 1, 10, 10, 60
-        )  # blue goal area (dark blue)
-        draw_rectangle(
-            self.w - self.spawn_border, 0, self.w - 1, self.h - 1, 60, 10, 10
-        )  # red goal area
-
-        # draw particles
-        for p in self.particles:
-            x = int(p["x"])
-            y = int(p["y"])
-            if p["team"] == self.TEAM_BLUE:
-                # blue particle (filled small rectangle)
-                draw_rectangle(x - 1, y - 1, x + 1, y + 1, 30, 120, 220)
-            else:
-                draw_rectangle(x - 1, y - 1, x + 1, y + 1, 220, 60, 60)
-
-        # draw player attractor (cursor)
-        draw_rectangle(
-            self.cursor_x - 2,
-            self.cursor_y - 2,
-            self.cursor_x + 2,
-            self.cursor_y + 2,
-            200,
-            200,
-            60,
-        )
-        # draw AI attractor small
-        draw_rectangle(
-            int(self.ai_ax) - 1,
-            int(self.ai_ay) - 1,
-            int(self.ai_ax) + 1,
-            int(self.ai_ay) + 1,
-            200,
-            80,
-            80,
-        )
-
-        # HUD
-        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-        draw_text_small(1, PLAY_HEIGHT, "B:{}".format(self.score_blue), 180, 220, 255)
-        draw_text_small(42, PLAY_HEIGHT, "R:{}".format(self.score_red), 255, 180, 180)
-
-    def main_loop(self, joystick):
-        # main loop: returns to menu on C press
-        self.reset()
-        display.clear()
-        last_logic = ticks_ms()
-        while True:
-            # input handling
-            c_button, z_button = joystick.read_buttons()
-            # joystick movement of cursor -> player attractor
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d == JOYSTICK_UP:
-                self.cursor_y = max(2, self.cursor_y - 1)
-            elif d == JOYSTICK_DOWN:
-                self.cursor_y = min(self.h - 2, self.cursor_y + 1)
-            elif d == JOYSTICK_LEFT:
-                self.cursor_x = max(2, self.cursor_x - 1)
-            elif d == JOYSTICK_RIGHT:
-                self.cursor_x = min(self.w - 2, self.cursor_x + 1)
-
-            # update player attractor to follow cursor smoothly
-            # small smoothing
-            self.player_ax += (self.cursor_x - self.player_ax) * 0.35
-            self.player_ay += (self.cursor_y - self.player_ay) * 0.35
-
-            # Z -> reset quickly (if pressed)
-            if z_button:
-                self.reset()
-                # wait release
-                while joystick.read_buttons()[1]:
-                    sleep_ms(8)
-
-            if c_button:
-                # return to menu
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last_logic) >= self.tick_dt_ms:
-                # compute dt (seconds)
-                dt = ticks_diff(now, last_logic) / 1000.0
-                last_logic = now
-
-                # AI update
-                self._update_ai(dt)
-                # forces
-                self._apply_forces(dt)
-                # integrate
-                self._integrate(dt)
-                # scoring and respawn
-                self._score_and_respawn()
-
-            # render
-            self._draw()
-
-            maybe_collect(40)
-            sleep_ms(6)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        # main loop: returns to menu on C press
-        self.reset()
-        display.clear()
-        last_logic = ticks_ms()
-        def loop_iteration():
-            nonlocal last_logic
-
-            c_button, z_button = joystick.read_buttons()
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d == JOYSTICK_UP:
-                self.cursor_y = max(2, self.cursor_y - 1)
-            elif d == JOYSTICK_DOWN:
-                self.cursor_y = min(self.h - 2, self.cursor_y + 1)
-            elif d == JOYSTICK_LEFT:
-                self.cursor_x = max(2, self.cursor_x - 1)
-            elif d == JOYSTICK_RIGHT:
-                self.cursor_x = min(self.w - 2, self.cursor_x + 1)
-
-            self.player_ax += (self.cursor_x - self.player_ax) * 0.35
-            self.player_ay += (self.cursor_y - self.player_ay) * 0.35
-
-            if z_button:
-                self.reset()
-                last_logic = ticks_ms()
-
-            if c_button:
-                return False
-
-            now = ticks_ms()
-            if ticks_diff(now, last_logic) >= self.tick_dt_ms:
-                dt = ticks_diff(now, last_logic) / 1000.0
-                last_logic = now
-                self._update_ai(dt)
-                self._apply_forces(dt)
-                self._integrate(dt)
-                self._score_and_respawn()
-
-            self._draw()
-            return True
-
-        try:
-            await _run_game_loop_async(self.tick_dt_ms, loop_iteration)
-        except RestartProgram:
-            return
-
-
-# Hinweise zur Integration:
-# - Füge "LIQ": LiquidWarGame in GameSelect.game_classes hinzu
-# - Die Implementierung nutzt dieselben Hilfsfunktionen wie deine anderen Spiele:
-#   ticks_ms(), ticks_diff(), draw_rectangle(), draw_text_small(), display, joystick, maybe_collect(), sleep_ms()
-#
-# Erweiterungsmöglichkeiten (falls du willst, kann ich sie hinzufügen):
-# - Koop/Hotseat: lokaler zweiter Spieler für Rot
-# - Optionen: Partikelanzahl, Teamgrößen, Farbe, KI-Aggressivität
-# - Powerups: kurzfristige Vergrößerung, Magnet, Explosion
-# - Lokal bessere Performance: spatial hashing für Kollisionen (O(n) vs O(n^2))
-
-
-class TowerDefenseGame:
-    """
-    Tower Defense (build-anywhere-as-long-as-path-exists)
-
-    Controls:
-      - Stick: move build cursor (cell-by-cell)
-      - Z: place tower (if allowed)
-      - C: return to menu
-    Rules:
-      - You may place towers on any empty cell except source/destination,
-        but only if a path from src -> dst still exists after placement.
-    Notes:
-      - Uses a logical tile grid (cols x rows). Each tile maps to a few pixels.
-      - Path check is BFS on tiles (fast, allocation-light).
-    """
-
-    # tile layout (adjust for density / performance)
-    COLS = 16
-    ROWS = max(8, PLAY_HEIGHT // 4)  # PLAY_HEIGHT is from the shared file
-
-    def __init__(self):
-        self.tile_w = max(1, WIDTH // self.COLS)
-        self.tile_h = max(1, PLAY_HEIGHT // self.ROWS)
-        self.reset()
-
-    def reset(self):
-        # occupancy: 0 empty, 1 tower
-        self.cols = self.COLS
-        self.rows = self.ROWS
-        self.occ = bytearray(self.cols * self.rows)
-        # define src on left-middle, dst on right-middle
-        self.src = (0, self.rows // 2)
-        self.dst = (self.cols - 1, self.rows // 2)
-        # ensure src/dst are empty
-        self._set_occ(self.src[0], self.src[1], 0)
-        self._set_occ(self.dst[0], self.dst[1], 0)
-
-        # cursor starts near center
-        self.cursor_x = self.cols // 2
-        self.cursor_y = self.rows // 2
-
-        # enemies: each is dict with px,py (float pixel pos), path (list of (cx,cy)), idx (next target)
-        self.enemies = []
-        # each enemy gets an hp value so projectiles can interact
-        # spawn timing
-        self.spawn_ms = 900
-        self.last_spawn = ticks_ms()
-        self.wave_timer = 0
-        self.enemy_speed = 0.7  # pixels per frame (scaled)
-        self.lives = 10
-        self.score = 0
-        self.money = 0
-
-        # towers: map (x,y) -> tower dict {level, last_shot, fire_rate_ms, range_px}
-        self.towers = {}
-        # projectiles: list of dicts {x,y,vx,vy,damage}
-        self.projectiles = []
-        # mouse movement throttling (slower cursor motion)
-        self._last_mouse_move = 0
-        self._mouse_move_delay = 120  # ms between cursor tile updates when using mouse
-
-        # precompute tile center pixel offsets
-        self._compute_tile_centers()
-
-    def _compute_tile_centers(self):
-        self.tile_centers = []
-        for cy in range(self.rows):
-            row = []
-            for cx in range(self.cols):
-                px = int(cx * self.tile_w + self.tile_w // 2)
-                py = int(cy * self.tile_h + self.tile_h // 2)
-                row.append((px, py))
-            self.tile_centers.append(row)
-
-    def _idx(self, x, y):
-        return y * self.cols + x
-
-    def _get_occ(self, x, y):
-        if x < 0 or x >= self.cols or y < 0 or y >= self.rows:
-            return 1
-        return self.occ[self._idx(x, y)]
-
-    def _set_occ(self, x, y, v):
-        if 0 <= x < self.cols and 0 <= y < self.rows:
-            self.occ[self._idx(x, y)] = v
-
-    def _neighbors(self, x, y):
-        # 4-neighbors
-        if x + 1 < self.cols:
-            yield (x + 1, y)
-        if x - 1 >= 0:
-            yield (x - 1, y)
-        if y + 1 < self.rows:
-            yield (x, y + 1)
-        if y - 1 >= 0:
-            yield (x, y - 1)
-
-    def path_exists(self, sx, sy, dx, dy, occ_override=None):
-        """BFS from (sx,sy) to (dx,dy). occ_override can be a temporary occupancy array or None."""
-        # fast, allocation-light queue using list append/pop(0) avoided: use head index
-        occ = occ_override if occ_override is not None else self.occ
-        cols = self.cols
-        rows = self.rows
-
-        if sx < 0 or sx >= cols or sy < 0 or sy >= rows:
-            return False
-        if dx < 0 or dx >= cols or dy < 0 or dy >= rows:
-            return False
-        # treat out-of-bounds as blocked
-        start_idx = sy * cols + sx
-        dst_idx = dy * cols + dx
-        if occ[start_idx] != 0 or occ[dst_idx] != 0:
-            return False
-
-        q = [0] * (cols * rows)
-        qh = 0
-        qt = 0
-        visited = bytearray(cols * rows)
-        q[qt] = (sy << 8) | sx
-        qt += 1
-        visited[start_idx] = 1
-
-        while qh < qt:
-            v = q[qh]
-            qh += 1
-            cx = v & 0xFF
-            cy = v >> 8
-            if cx == dx and cy == dy:
-                return True
-            # neighbors
-            nx = cx + 1
-            if nx < cols:
-                i = cy * cols + nx
-                if not visited[i] and occ[i] == 0:
-                    visited[i] = 1
-                    q[qt] = (cy << 8) | nx
-                    qt += 1
-            nx = cx - 1
-            if nx >= 0:
-                i = cy * cols + nx
-                if not visited[i] and occ[i] == 0:
-                    visited[i] = 1
-                    q[qt] = (cy << 8) | nx
-                    qt += 1
-            ny = cy + 1
-            if ny < rows:
-                i = ny * cols + cx
-                if not visited[i] and occ[i] == 0:
-                    visited[i] = 1
-                    q[qt] = (ny << 8) | cx
-                    qt += 1
-            ny = cy - 1
-            if ny >= 0:
-                i = ny * cols + cx
-                if not visited[i] and occ[i] == 0:
-                    visited[i] = 1
-                    q[qt] = (ny << 8) | cx
-                    qt += 1
-        return False
-
-    def compute_path(self, sx, sy, dx, dy):
-        """Return list of (cx,cy) from src to dst (BFS + parent map) or [] if none."""
-        cols = self.cols
-        rows = self.rows
-        start_idx = sy * cols + sx
-        dst_idx = dy * cols + dx
-        if self._get_occ(sx, sy) != 0 or self._get_occ(dx, dy) != 0:
-            return []
-
-        q = [0] * (cols * rows)
-        parent = [-1] * (cols * rows)
-        qh = 0
-        qt = 0
-        visited = bytearray(cols * rows)
-        q[qt] = (sy << 8) | sx
-        qt += 1
-        visited[start_idx] = 1
-        parent[start_idx] = -2  # root
-
-        found = False
-        while qh < qt:
-            v = q[qh]
-            qh += 1
-            cx = v & 0xFF
-            cy = v >> 8
-            if cx == dx and cy == dy:
-                found = True
-                break
-            for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
-                if 0 <= nx < cols and 0 <= ny < rows:
-                    idx = ny * cols + nx
-                    if visited[idx] or self.occ[idx] != 0:
-                        continue
-                    visited[idx] = 1
-                    parent[idx] = cy * cols + cx
-                    q[qt] = (ny << 8) | nx
-                    qt += 1
-
-        if not found:
-            return []
-
-        # reconstruct path
-        path = []
-        cur = dst_idx
-        while cur != -2 and cur != -1:
-            cy = cur // cols
-            cx = cur % cols
-            path.append((cx, cy))
-            cur = parent[cur]
-        path.reverse()
-        return path
-
-    def spawn_enemy(self):
-        # compute current path
-        path = self.compute_path(self.src[0], self.src[1], self.dst[0], self.dst[1])
-        if not path:
-            return
-        cx, cy = path[0]
-        px, py = self.tile_centers[cy][cx]
-        e = {
-            "x": float(px),
-            "y": float(py),
-            "path": path,
-            "pi": 1,
-            "hp": 1,
-        }  # pi is next path index
-        self.enemies.append(e)
-
-    def _draw_grid(self):
-        # light grid for visual feedback
-        for y in range(self.rows):
-            for x in range(self.cols):
-                px = x * self.tile_w
-                py = y * self.tile_h
-                # background for tile
-                if (x, y) == self.src:
-                    draw_rectangle(
-                        px, py, px + self.tile_w - 1, py + self.tile_h - 1, 0, 100, 0
-                    )
-                elif (x, y) == self.dst:
-                    draw_rectangle(
-                        px, py, px + self.tile_w - 1, py + self.tile_h - 1, 100, 0, 0
-                    )
-                elif self._get_occ(x, y):
-                    draw_rectangle(
-                        px, py, px + self.tile_w - 1, py + self.tile_h - 1, 90, 90, 90
-                    )
-                else:
-                    # subtle floor
-                    # draw thin border to make tiles visible
-                    # center darker
-                    cx, cy = self.tile_centers[y][x]
-                    # no per-pixel heavy drawing - just outline
-                    if x % 2 == 0 and y % 2 == 0:
-                        pass
-
-    def _draw_towers(self):
-        # draw towers from tower state (show level by size)
-        for (x, y), t in list(self.towers.items()):
-            cx, cy = self.tile_centers[y][x]
-            lvl = t.get("level", 1)
-            s = 1 + lvl  # visual size
-            draw_rectangle(cx - s, cy - s, cx + s, cy + s, 0, 120, 180)
-
-    def _draw_enemies(self):
-        for e in self.enemies:
-            # draw enemy as red pixel (2x2)
-            ex = int(e["x"])
-            ey = int(e["y"])
-            draw_rectangle(ex - 1, ey - 1, ex + 1, ey + 1, 255, 80, 80)
-        # draw projectiles as small yellow pixels
-        for p in self.projectiles:
-            px = int(p["x"])
-            py = int(p["y"])
-            draw_rectangle(px - 1, py - 1, px + 1, py + 1, 255, 220, 60)
-
-    def _move_enemies(self):
-        # move enemies toward their next path tile center
-        new_enemies = []
-        for e in self.enemies:
-            path = e["path"]
-            pi = e["pi"]
-            if pi >= len(path):
-                # reached destination
-                self.lives -= 1
-                continue
-            target = path[pi]
-            tx, ty = self.tile_centers[target[1]][target[0]]
-            dx = tx - e["x"]
-            dy = ty - e["y"]
-            dist = math.hypot(dx, dy)
-            if dist < 0.6:
-                # snap to tile center and advance
-                e["x"] = float(tx)
-                e["y"] = float(ty)
-                e["pi"] += 1
-                # recompute path occasionally to react to newly placed towers
-                if e["pi"] < len(path) and (e["pi"] % 4) == 0:
-                    # attempt to recompute path from current tile
-                    cur_tile_x = target[0]
-                    cur_tile_y = target[1]
-                    new_path = self.compute_path(
-                        cur_tile_x, cur_tile_y, self.dst[0], self.dst[1]
-                    )
-                    if new_path:
-                        # convert to absolute path starting with current tile (which may repeat)
-                        e["path"] = [(cur_tile_x, cur_tile_y)] + new_path[1:]
-                        e["pi"] = 1
-                new_enemies.append(e)
-            else:
-                # move fractionally
-                step = self.enemy_speed
-                nx = e["x"] + dx / dist * step
-                ny = e["y"] + dy / dist * step
-                e["x"], e["y"] = nx, ny
-                new_enemies.append(e)
-        self.enemies = new_enemies
-
-    def main_loop(self, joystick):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display.clear()
-        display_score_and_time(0, force=True)
-        last_logic = ticks_ms()
-        logic_ms = 40
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-
-            # handle joystick movement for cursor (coarse cell move, with small debounce)
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d == JOYSTICK_UP:
-                self.cursor_y = max(0, self.cursor_y - 1)
-            elif d == JOYSTICK_DOWN:
-                self.cursor_y = min(self.rows - 1, self.cursor_y + 1)
-            elif d == JOYSTICK_LEFT:
-                self.cursor_x = max(0, self.cursor_x - 1)
-            elif d == JOYSTICK_RIGHT:
-                self.cursor_x = min(self.cols - 1, self.cursor_x + 1)
-
-            # mouse-based cursor movement (throttled to be slower)
-            try:
-                mx, my = pygame.mouse.get_pos()
-                if my < PLAY_HEIGHT:
-                    tx = min(self.cols - 1, int(mx // self.tile_w))
-                    ty = min(self.rows - 1, int(my // self.tile_h))
-                    if ticks_diff(
-                        now, self._last_mouse_move
-                    ) >= self._mouse_move_delay and (
-                        tx != self.cursor_x or ty != self.cursor_y
-                    ):
-                        # small step towards target to slow movement
-                        if tx > self.cursor_x:
-                            self.cursor_x += 1
-                        elif tx < self.cursor_x:
-                            self.cursor_x -= 1
-                        if ty > self.cursor_y:
-                            self.cursor_y += 1
-                        elif ty < self.cursor_y:
-                            self.cursor_y -= 1
-                        self._last_mouse_move = now
-            except Exception:
-                pass
-
-            # place tower (Z)
-            if z_button:
-                # don't place on src/dst
-                if (self.cursor_x, self.cursor_y) not in (self.src, self.dst):
-                    idx = self._idx(self.cursor_x, self.cursor_y)
-                    if self.occ[idx] == 0:
-                        # simulate occupancy and test path existence
-                        temp = bytearray(
-                            self.occ
-                        )  # small allocation but needed to test
-                        temp[idx] = 1
-                        if self.path_exists(
-                            self.src[0],
-                            self.src[1],
-                            self.dst[0],
-                            self.dst[1],
-                            occ_override=temp,
-                        ):
-                            # commit placement
-                            self.occ[idx] = 1
-                            # create tower state for this placement
-                            if (self.cursor_x, self.cursor_y) not in self.towers:
-                                self.towers[(self.cursor_x, self.cursor_y)] = {
-                                    "level": 1,
-                                    "last_shot": 0,
-                                    "fire_rate": 700,
-                                    "range": max(self.tile_w, self.tile_h) * 2,
-                                }
-                            self.money += 1
-                        else:
-                            # feedback: flash (draw a quick red rectangle)
-                            cx, cy = self.tile_centers[self.cursor_y][self.cursor_x]
-                            draw_rectangle(
-                                cx - self.tile_w // 2,
-                                cy - self.tile_h // 2,
-                                cx + self.tile_w // 2 - 1,
-                                cy + self.tile_h // 2 - 1,
-                                200,
-                                30,
-                                30,
-                            )
-                            sleep_ms(220)
-                    else:
-                        # occupied: try to upgrade tower under cursor (controller-friendly)
-                        key = (self.cursor_x, self.cursor_y)
-                        if key in self.towers:
-                            t = self.towers[key]
-                            cost = 3 * t.get("level", 1)
-                            if self.money >= cost:
-                                self.money -= cost
-                                t["level"] = t.get("level", 1) + 1
-                                t["fire_rate"] = max(
-                                    120, int(t.get("fire_rate", 700) * 0.8)
-                                )
-                                t["range"] = int(
-                                    t.get("range", max(self.tile_w, self.tile_h) * 2)
-                                    * 1.2
-                                )
-                # wait until button released
-                while joystick.read_buttons()[1]:
-                    sleep_ms(10)
-
-            # spawn enemies on schedule
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
-                self.last_spawn = now
-                # only spawn if path exists
-                if self.path_exists(self.src[0], self.src[1], self.dst[0], self.dst[1]):
-                    self.spawn_enemy()
-
-            # per-logic step updates (move enemies, tower firing, projectiles, mouse interactions)
-            if ticks_diff(now, last_logic) >= logic_ms:
-                last_logic = now
-                # move enemies
-                self._move_enemies()
-
-                # desktop mouse placement / upgrade (if available)
-                try:
-                    mpress = pygame.mouse.get_pressed()
-                    if any(mpress):
-                        mx, my = pygame.mouse.get_pos()
-                        if my < PLAY_HEIGHT:
-                            tx = min(self.cols - 1, int(mx // self.tile_w))
-                            ty = min(self.rows - 1, int(my // self.tile_h))
-                            # left click: place tower (like Z)
-                            if mpress[0]:
-                                if (tx, ty) not in (self.src, self.dst):
-                                    idx2 = self._idx(tx, ty)
-                                    if self.occ[idx2] == 0:
-                                        temp2 = bytearray(self.occ)
-                                        temp2[idx2] = 1
-                                        if self.path_exists(
-                                            self.src[0],
-                                            self.src[1],
-                                            self.dst[0],
-                                            self.dst[1],
-                                            occ_override=temp2,
-                                        ):
-                                            self.occ[idx2] = 1
-                                            if (tx, ty) not in self.towers:
-                                                self.towers[(tx, ty)] = {
-                                                    "level": 1,
-                                                    "last_shot": 0,
-                                                    "fire_rate": 700,
-                                                    "range": max(
-                                                        self.tile_w, self.tile_h
-                                                    )
-                                                    * 2,
-                                                }
-                                            self.money += 1
-                                        else:
-                                            cx, cy = self.tile_centers[ty][tx]
-                                            draw_rectangle(
-                                                cx - self.tile_w // 2,
-                                                cy - self.tile_h // 2,
-                                                cx + self.tile_w // 2 - 1,
-                                                cy + self.tile_h // 2 - 1,
-                                                200,
-                                                30,
-                                                30,
-                                            )
-                                            sleep_ms(220)
-                                while pygame.mouse.get_pressed()[0]:
-                                    sleep_ms(10)
-                            # right click: upgrade tower
-                            if mpress[2]:
-                                if (tx, ty) in self.towers:
-                                    t = self.towers[(tx, ty)]
-                                    cost = 3 * t.get("level", 1)
-                                    if self.money >= cost:
-                                        self.money -= cost
-                                        t["level"] = t.get("level", 1) + 1
-                                        t["fire_rate"] = max(
-                                            120, int(t.get("fire_rate", 700) * 0.8)
-                                        )
-                                        t["range"] = int(
-                                            t.get(
-                                                "range",
-                                                max(self.tile_w, self.tile_h) * 2,
-                                            )
-                                            * 1.2
-                                        )
-                                while pygame.mouse.get_pressed()[2]:
-                                    sleep_ms(10)
-                except Exception:
-                    pass
-
-                # towers: shooting -> spawn projectiles when enemies in range (squared-distance checks)
-                proj_cap = 64
-                for (tx, ty), t in list(self.towers.items()):
-                    last_shot = t.get("last_shot", 0)
-                    if ticks_diff(now, last_shot) >= t.get("fire_rate", 700):
-                        cx, cy = self.tile_centers[ty][tx]
-                        best = None
-                        bd2 = None
-                        rng = t.get("range", max(self.tile_w, self.tile_h) * 2)
-                        rng2 = rng * rng
-                        for e in self.enemies:
-                            dx = e["x"] - cx
-                            dy = e["y"] - cy
-                            d2 = dx * dx + dy * dy
-                            if d2 <= rng2 and (bd2 is None or d2 < bd2):
-                                bd2 = d2
-                                best = e
-                        if best:
-                            if bd2 and bd2 > 0:
-                                dist = math.sqrt(bd2)
-                                sp = 3.0
-                                vx = (best["x"] - cx) / dist * sp
-                                vy = (best["y"] - cy) / dist * sp
-                            else:
-                                vx = vy = 0.0
-                            if len(self.projectiles) < proj_cap:
-                                self.projectiles.append(
-                                    {
-                                        "x": float(cx),
-                                        "y": float(cy),
-                                        "vx": vx,
-                                        "vy": vy,
-                                        "damage": 1,
-                                    }
-                                )
-                            t["last_shot"] = now
-
-                # update projectiles and apply hits (use squared distances)
-                new_proj = []
-                for p in self.projectiles:
-                    p["x"] += p["vx"]
-                    p["y"] += p["vy"]
-                    hit = False
-                    px = p["x"]
-                    py = p["y"]
-                    for e in list(self.enemies):
-                        dx = e["x"] - px
-                        dy = e["y"] - py
-                        if dx * dx + dy * dy < 9.0:  # 3px radius
-                            e["hp"] = e.get("hp", 1) - p.get("damage", 1)
-                            hit = True
-                            if e["hp"] <= 0:
-                                try:
-                                    self.enemies.remove(e)
-                                except ValueError:
-                                    pass
-                                self.score += 5
-                                self.money += 1
-                            break
-                    if not hit:
-                        if 0 <= p["x"] < WIDTH and 0 <= p["y"] < PLAY_HEIGHT:
-                            new_proj.append(p)
-                self.projectiles = new_proj
-
-                # lose condition
-                if self.lives <= 0:
-                    global_score = self.score
-                    game_over = True
-                    return
-
-            # rendering
-            display.clear()
-            # draw play background grid + towers
-            self._draw_grid()
-            self._draw_towers()
-            # draw enemies
-            self._draw_enemies()
-            # draw cursor highlight
-            ccx, ccy = self.tile_centers[self.cursor_y][self.cursor_x]
-            # highlight center pixel
-            display.set_pixel(ccx, ccy, 255, 255, 0)
-
-            # HUD: lives/score/money
-            draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-            draw_text_small(1, PLAY_HEIGHT, "S{}".format(self.score), 255, 255, 255)
-            draw_text_small(22, PLAY_HEIGHT, "L{}".format(self.lives), 255, 255, 255)
-            draw_text_small(42, PLAY_HEIGHT, "M{}".format(self.money), 255, 255, 255)
-
-            display_score_and_time(self.score)
-
-            maybe_collect(60)
-            sleep_ms(8)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display.clear()
-        display_score_and_time(0, force=True)
-        last_logic = ticks_ms()
-        logic_ms = 40
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-
-            # handle joystick movement for cursor (coarse cell move, with small debounce)
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d == JOYSTICK_UP:
-                self.cursor_y = max(0, self.cursor_y - 1)
-            elif d == JOYSTICK_DOWN:
-                self.cursor_y = min(self.rows - 1, self.cursor_y + 1)
-            elif d == JOYSTICK_LEFT:
-                self.cursor_x = max(0, self.cursor_x - 1)
-            elif d == JOYSTICK_RIGHT:
-                self.cursor_x = min(self.cols - 1, self.cursor_x + 1)
-
-            # place tower (Z)
-            if z_button:
-                # don't place on src/dst
-                if (self.cursor_x, self.cursor_y) not in (self.src, self.dst):
-                    idx = self._idx(self.cursor_x, self.cursor_y)
-                    if self.occ[idx] == 0:
-                        # simulate occupancy and test path existence
-                        temp = bytearray(self.occ)
-                        temp[idx] = 1
-                        if self.path_exists(
-                            self.src[0],
-                            self.src[1],
-                            self.dst[0],
-                            self.dst[1],
-                            occ_override=temp,
-                        ):
-                            # commit placement
-                            self.occ[idx] = 1
-                            # create tower state for this placement
-                            if (self.cursor_x, self.cursor_y) not in self.towers:
-                                self.towers[(self.cursor_x, self.cursor_y)] = {
-                                    "level": 1,
-                                    "last_shot": 0,
-                                    "fire_rate": 700,
-                                    "range": max(self.tile_w, self.tile_h) * 2,
-                                }
-                            self.money += 1
-                        else:
-                            # feedback: flash (draw a quick red rectangle)
-                            cx, cy = self.tile_centers[self.cursor_y][self.cursor_x]
-                            draw_rectangle(
-                                cx - self.tile_w // 2,
-                                cy - self.tile_h // 2,
-                                cx + self.tile_w // 2 - 1,
-                                cy + self.tile_h // 2 - 1,
-                                200,
-                                30,
-                                30,
-                            )
-                            await asyncio.sleep(0.22)
-                    else:
-                        # occupied: try to upgrade tower under cursor (controller-friendly)
-                        key = (self.cursor_x, self.cursor_y)
-                        if key in self.towers:
-                            t = self.towers[key]
-                            cost = 3 * t.get("level", 1)
-                            if self.money >= cost:
-                                self.money -= cost
-                                t["level"] = t.get("level", 1) + 1
-                                t["fire_rate"] = max(
-                                    120, int(t.get("fire_rate", 700) * 0.8)
-                                )
-                                t["range"] = int(
-                                    t.get("range", max(self.tile_w, self.tile_h) * 2)
-                                    * 1.2
-                                )
-                # wait until button released
-                while joystick.read_buttons()[1]:
-                    await asyncio.sleep(0.01)
-
-            # spawn enemies on schedule
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
-                self.last_spawn = now
-                # only spawn if path exists
-                if self.path_exists(self.src[0], self.src[1], self.dst[0], self.dst[1]):
-                    self.spawn_enemy()
-
-            # per-logic step updates (move enemies, tower firing, projectiles, mouse interactions)
-            if ticks_diff(now, last_logic) >= logic_ms:
-                last_logic = now
-                # move enemies
-                self._move_enemies()
-
-                # towers: shooting -> spawn projectiles when enemies in range (squared-distance checks)
-                proj_cap = 64
-                for (tx, ty), t in list(self.towers.items()):
-                    last_shot = t.get("last_shot", 0)
-                    if ticks_diff(now, last_shot) >= t.get("fire_rate", 700):
-                        cx, cy = self.tile_centers[ty][tx]
-                        best = None
-                        bd2 = None
-                        rng = t.get("range", max(self.tile_w, self.tile_h) * 2)
-                        rng2 = rng * rng
-                        for e in self.enemies:
-                            dx = e["x"] - cx
-                            dy = e["y"] - cy
-                            d2 = dx * dx + dy * dy
-                            if d2 <= rng2 and (bd2 is None or d2 < bd2):
-                                bd2 = d2
-                                best = e
-                        if best:
-                            if bd2 and bd2 > 0:
-                                dist = math.sqrt(bd2)
-                                sp = 3.0
-                                vx = (best["x"] - cx) / dist * sp
-                                vy = (best["y"] - cy) / dist * sp
-                            else:
-                                vx = vy = 0.0
-                            if len(self.projectiles) < proj_cap:
-                                self.projectiles.append(
-                                    {
-                                        "x": float(cx),
-                                        "y": float(cy),
-                                        "vx": vx,
-                                        "vy": vy,
-                                        "damage": 1,
-                                    }
-                                )
-                            t["last_shot"] = now
-
-                # update projectiles and apply hits (use squared distances)
-                new_proj = []
-                for p in self.projectiles:
-                    p["x"] += p["vx"]
-                    p["y"] += p["vy"]
-                    hit = False
-                    px = p["x"]
-                    py = p["y"]
-                    for e in list(self.enemies):
-                        dx = e["x"] - px
-                        dy = e["y"] - py
-                        if dx * dx + dy * dy < 9.0:  # 3px radius
-                            e["hp"] = e.get("hp", 1) - p.get("damage", 1)
-                            hit = True
-                            if e["hp"] <= 0:
-                                try:
-                                    self.enemies.remove(e)
-                                except ValueError:
-                                    pass
-                                self.score += 5
-                                self.money += 1
-                            break
-                    if not hit:
-                        if 0 <= p["x"] < WIDTH and 0 <= p["y"] < PLAY_HEIGHT:
-                            new_proj.append(p)
-                self.projectiles = new_proj
-
-                # lose condition
-                if self.lives <= 0:
-                    global_score = self.score
-                    game_over = True
-                    return
-
-            # rendering
-            display.clear()
-            # draw play background grid + towers
-            self._draw_grid()
-            self._draw_towers()
-            # draw enemies
-            self._draw_enemies()
-            # draw cursor highlight
-            ccx, ccy = self.tile_centers[self.cursor_y][self.cursor_x]
-            # highlight center pixel
-            display.set_pixel(ccx, ccy, 255, 255, 0)
-
-            # HUD: lives/score/money
-            draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-            draw_text_small(1, PLAY_HEIGHT, "S{}".format(self.score), 255, 255, 255)
-            draw_text_small(22, PLAY_HEIGHT, "L{}".format(self.lives), 255, 255, 255)
-            draw_text_small(42, PLAY_HEIGHT, "M{}".format(self.money), 255, 255, 255)
-
-            display_score_and_time(self.score)
-
-            maybe_collect(60)
-            await asyncio.sleep(0.008)
 
 
 class Game2048:
@@ -12882,8 +11870,8 @@ class GameSelect:
         ("DODGE", DodgeGame, 0),
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
+        ("INVADR", InvaderGame, 0),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
-        ("LIQWAR", LiquidWarGame, GAME_FLAG_HEAVY),
         ("LOCO", LocoMotionGame, GAME_FLAG_HEAVY),
         ("MAZE", MazeGame, GAME_FLAG_HEAVY),
         ("PACMAN", PacmanGame, 0),
@@ -12896,7 +11884,6 @@ class GameSelect:
         ("SNAKE", SnakeGame, 0),
         ("SOKO", SokobanGame, GAME_FLAG_HEAVY),
         ("TETRIS", TetrisGame, GAME_FLAG_HEAVY),
-        ("TOWER", TowerDefenseGame, GAME_FLAG_HEAVY),
         ("TRON", TronGame, 0),
         ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
     )

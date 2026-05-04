@@ -14,7 +14,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **26 Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, Liquid War, Tower Defense, UFO Defense, Doom-Lite, Bejeweled, Sokoban, and more
+- **25 Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, Invaders, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, Bejeweled, Sokoban, and more
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -174,7 +174,7 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes **26 games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
+The arcade includes **25 games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
@@ -189,8 +189,8 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
 | `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
+| `INVADR` | Invaders | Shoot descending alien waves while dodging bombs |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
-| `LIQWAR` | Liquid War | Particle territory battle with player and AI attractors |
 | `LOCO` | LocoMotion | Sliding railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
@@ -203,7 +203,6 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
 | `SOKO` | Sokoban | Crate-pushing puzzle levels |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
-| `TOWER` | Tower Defense | Place and upgrade towers while keeping a path open |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
 | `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
 
