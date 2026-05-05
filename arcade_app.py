@@ -184,6 +184,7 @@ def show_center_message(lines, start_y=18, line_height=12, r=255, g=255, b=255, 
         sleep_ms(delay_ms)
 
 def clamp(value, lo, hi):
+    """Clamp value to the inclusive [lo, hi] range."""
     if value < lo:
         return lo
     if value > hi:
@@ -191,15 +192,19 @@ def clamp(value, lo, hi):
     return value
 
 def in_bounds(x, y, w=WIDTH, h=PLAY_HEIGHT):
+    """Return True when (x, y) is inside 0..w-1 and 0..h-1."""
     return (0 <= x < w) and (0 <= y < h)
 
 def point_in_rect(px, py, rx, ry, rw, rh):
+    """Return True when point (px, py) is inside rectangle (rx, ry, rw, rh)."""
     return (rx <= px < (rx + rw)) and (ry <= py < (ry + rh))
 
 def rects_overlap(ax, ay, aw, ah, bx, by, bw, bh):
+    """Return True when rectangles A(ax,ay,aw,ah) and B(bx,by,bw,bh) overlap."""
     return (ax < (bx + bw)) and (bx < (ax + aw)) and (ay < (by + bh)) and (by < (ay + ah))
 
 def draw_rect_outline(x1, y1, x2, y2, r, g, b):
+    """Draw a one-pixel rectangle outline."""
     draw_rectangle(x1, y1, x2, y1, r, g, b)
     draw_rectangle(x1, y2, x2, y2, r, g, b)
     draw_rectangle(x1, y1, x1, y2, r, g, b)
@@ -686,6 +691,7 @@ JOYSTICK_DOWN_LEFT = "DOWN-LEFT"
 JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 
 def direction_to_delta(direction, default_dx=0, default_dy=0):
+    """Map 4-way joystick direction constants to (dx, dy)."""
     if direction == JOYSTICK_UP:
         return 0, -1
     if direction == JOYSTICK_DOWN:
@@ -697,6 +703,7 @@ def direction_to_delta(direction, default_dx=0, default_dy=0):
     return default_dx, default_dy
 
 def direction_to_delta_8way(direction, default_dx=0, default_dy=0):
+    """Map 8-way joystick direction constants to (dx, dy)."""
     if direction == JOYSTICK_UP:
         return 0, -1
     if direction == JOYSTICK_DOWN:
