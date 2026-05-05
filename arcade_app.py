@@ -243,6 +243,7 @@ def _run_game_loop_sync(frame_ms, loop_fn):
         last_frame = now
         if not loop_fn():
             return
+        maybe_collect(150)
 
 def reset_menu_display(score=0):
     """Return the matrix to the common menu/HUD baseline after errors or restarts."""
@@ -2087,7 +2088,7 @@ class PongGame:
         global_score = self.left_score
         self.draw_ball()
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over
         game_over = False
         display.clear()
@@ -2095,48 +2096,24 @@ class PongGame:
         self._prev_left_paddle_y = self.left_paddle_y
         self._prev_right_paddle_y = self.right_paddle_y
         display_score_and_time(0, force=True)
-
-        while True:
-            c_button, _ = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            self.update_paddles(joystick)
-            self.update_ball()
-            self.draw_paddles()
-            display_score_and_time(self.left_score)
-
-            sleep_ms(45)
-            maybe_collect(150)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over
-        game_over = False
-        display.clear()
-        self.reset_ball()
-        self._prev_left_paddle_y = self.left_paddle_y
-        self._prev_right_paddle_y = self.right_paddle_y
-        display_score_and_time(0, force=True)
-        
-        def loop_iteration():
-            global game_over
+        def step():
             c_button, _ = joystick.read_buttons()
             if c_button or game_over:
                 return False
-            
             self.update_paddles(joystick)
             self.update_ball()
             self.draw_paddles()
             display_score_and_time(self.left_score)
             return True
-        
-        await _run_game_loop_async(45, loop_iteration)
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(45, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(45, self._build_step(joystick))
 
 # ---------- Breakout ----------
 PADDLE_WIDTH = const(12)
@@ -2526,111 +2503,31 @@ class AsteroidGame:
                 global_score = self.score
                 return
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.ship = self.Ship()
         self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
         self.projectiles = []
         self.max_projectiles = 4 if CONFIG_LOW_RAM_MODE else 6
         self.max_asteroids = 8 if CONFIG_LOW_RAM_MODE else 12
         self.score = 0
-
-        frame_ms = 1000 // FPS
         display.clear()
         display_score_and_time(0, force=True)
-
-        while True:
-            t0 = ticks_ms()
-
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            self.ship.update(direction)
-
-            if z_button:
-                pr = self.ship.shoot()
-                if pr and len(self.projectiles) < self.max_projectiles:
-                    self.projectiles.append(pr)
-
-            for a in self.asteroids:
-                a.update()
-
-            keep_i = 0
-            for p in self.projectiles:
-                p.update()
-                if p.is_alive():
-                    self.projectiles[keep_i] = p
-                    keep_i += 1
-            del self.projectiles[keep_i:]
-
-            self.check_collisions()
-            if game_over:
-                return
-
-            # new wave
-            if not self.asteroids:
-                speed_boost = min(self.score / 600.0, 1.5)
-                self.asteroids = [self.Asteroid(start=True, speed_boost=speed_boost) for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)]
-
-            display.clear()
-            self.ship.draw()
-            for a in self.asteroids:
-                a.draw()
-            for p in self.projectiles:
-                p.draw()
-
-            display_score_and_time(self.score)
-            global_score = self.score
-
-            elapsed = ticks_diff(ticks_ms(), t0)
-            if elapsed < frame_ms:
-                sleep_ms(frame_ms - elapsed)
-
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.ship = self.Ship()
-        self.asteroids = [self.Asteroid(start=True) for _ in range(3)]
-        self.projectiles = []
-        self.max_projectiles = 4 if CONFIG_LOW_RAM_MODE else 6
-        self.max_asteroids = 8 if CONFIG_LOW_RAM_MODE else 12
-        self.score = 0
-
-        display.clear()
-        display_score_and_time(0, force=True)
-
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button or game_over:
                 return False
-
             direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT])
             self.ship.update(direction)
-
             if z_button:
                 pr = self.ship.shoot()
                 if pr and len(self.projectiles) < self.max_projectiles:
                     self.projectiles.append(pr)
-
             for a in self.asteroids:
                 a.update()
-
             keep_i = 0
             for p in self.projectiles:
                 p.update()
@@ -2638,28 +2535,30 @@ class AsteroidGame:
                     self.projectiles[keep_i] = p
                     keep_i += 1
             del self.projectiles[keep_i:]
-
             self.check_collisions()
             if game_over:
                 return False
-
-            # new wave
             if not self.asteroids:
                 speed_boost = min(self.score / 600.0, 1.5)
                 self.asteroids = [self.Asteroid(start=True, speed_boost=speed_boost) for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)]
-
             display.clear()
             self.ship.draw()
             for a in self.asteroids:
                 a.draw()
             for p in self.projectiles:
                 p.draw()
-
             display_score_and_time(self.score)
             global_score = self.score
             return True
+        return step
 
-        await _run_game_loop_async(50, loop_iteration)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(50, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(50, self._build_step(joystick))
 
 # ---------- Qix ----------
 class QixGame:
@@ -2827,86 +2726,41 @@ class QixGame:
         self.occupied_percentage = (occ / (self.width * self.height)) * 100
         display_score_and_time(int(self.occupied_percentage))
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
         self.initialize_game()
-
-        while True:
+        def step():
+            global game_over, global_score
             c_button, _ = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
+            if c_button or game_over:
+                return False
             self.move_player(joystick)
             self.move_opponent()
             if game_over:
-                return
-
+                return False
             if self.occupied_percentage > 75:
-                # level cleared: advance to next level with an extra opponent
                 global_score = int(self.occupied_percentage)
                 display.clear()
                 draw_text(6, 18, "LEVEL", 0, 255, 0)
                 draw_text(6, 33, str(self.level), 0, 255, 0)
                 sleep_ms(900)
-                # advance level
                 self.level += 1
                 self.num_opponents += 1
-                # cap number of opponents to a reasonable amount
                 if self.num_opponents > 8:
                     self.num_opponents = 8
-                # reinit the game for next level
                 self.initialize_game()
-                continue
+            return True
+        return step
 
-            sleep_ms(max(20, 35 - (self.level - 1) * 3))
-            maybe_collect(180)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(35, self._build_step(joystick))
 
     async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
         if asyncio is None:
             return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self.initialize_game()
-
-        def loop_iteration():
-            global game_over, global_score
-            c_button, _ = joystick.read_buttons()
-            if c_button:
-                return False
-            if game_over:
-                return False
-
-            self.move_player(joystick)
-            self.move_opponent()
-            if game_over:
-                return False
-
-            if self.occupied_percentage > 75:
-                # level cleared: advance to next level with an extra opponent
-                global_score = int(self.occupied_percentage)
-                display.clear()
-                draw_text(6, 18, "LEVEL", 0, 255, 0)
-                draw_text(6, 33, str(self.level), 0, 255, 0)
-                sleep_ms(900)  # Display level for a bit
-                # advance level
-                self.level += 1
-                self.num_opponents += 1
-                # cap number of opponents to a reasonable amount
-                if self.num_opponents > 8:
-                    self.num_opponents = 8
-                # reinit the game for next level
-                self.initialize_game()
-            
-            return True
-
-        await _run_game_loop_async(35, loop_iteration)
+        await _run_game_loop_async(35, self._build_step(joystick))
 
 # ---------- Tetris ----------
 class TetrisGame:
@@ -3034,7 +2888,7 @@ class TetrisGame:
                     if py >= 0:
                         self.draw_block(px, py, self.current.color)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -3045,87 +2899,12 @@ class TetrisGame:
         self.last_input = ticks_ms()
         self.fall_ms = 520
         display_score_and_time(0, force=True)
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-
-            # input
-            if ticks_diff(now, self.last_input) >= self.input_ms:
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP])
-                if d == JOYSTICK_LEFT and self.valid(self.current, dx=-1):
-                    self.current.x -= 1
-                elif d == JOYSTICK_RIGHT and self.valid(self.current, dx=1):
-                    self.current.x += 1
-                elif d == JOYSTICK_DOWN and self.valid(self.current, dy=1):
-                    self.current.y += 1
-                elif d == JOYSTICK_UP or z_button:
-                    # rotate
-                    rot = tuple(tuple(row) for row in zip(*self.current.shape[::-1]))
-                    if self.valid(self.current, rotated_shape=rot):
-                        self.current.shape = rot
-                self.last_input = now
-
-            # fall
-            if ticks_diff(now, self.last_fall) >= self.fall_ms:
-                self.last_fall = now
-                if self.valid(self.current, dy=1):
-                    self.current.y += 1
-                else:
-                    # lock
-                    ok = self.lock_piece(self.current)
-                    if not ok:
-                        global_score = self.score
-                        game_over = True
-                        return
-
-                    cleared = self.clear_rows()
-                    if cleared:
-                        self.score += cleared * 10
-                        self.fall_ms = max(160, self.fall_ms - cleared * 15)
-                    else:
-                        self.score += 1
-
-                    self.current = TetrisGame.Piece()
-                    if not self.valid(self.current, dy=0):
-                        global_score = self.score
-                        game_over = True
-                        return
-
-            self.render()
-            display_score_and_time(self.score)
-
-            sleep_ms(35)
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self.locked = bytearray(self.GRID_WIDTH * self.GRID_HEIGHT)
-        self.current = TetrisGame.Piece()
-        self.score = 0
-        self.last_fall = ticks_ms()
-        self.last_input = ticks_ms()
-        self.fall_ms = 520
-        display_score_and_time(0, force=True)
-
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-
             now = ticks_ms()
-            
-            # input
             if ticks_diff(now, self.last_input) >= self.input_ms:
                 d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP])
                 if d == JOYSTICK_LEFT and self.valid(self.current, dx=-1):
@@ -3135,43 +2914,43 @@ class TetrisGame:
                 elif d == JOYSTICK_DOWN and self.valid(self.current, dy=1):
                     self.current.y += 1
                 elif d == JOYSTICK_UP or z_button:
-                    # rotate
                     rot = tuple(tuple(row) for row in zip(*self.current.shape[::-1]))
                     if self.valid(self.current, rotated_shape=rot):
                         self.current.shape = rot
                 self.last_input = now
-
-            # fall
             if ticks_diff(now, self.last_fall) >= self.fall_ms:
                 self.last_fall = now
                 if self.valid(self.current, dy=1):
                     self.current.y += 1
                 else:
-                    # lock
                     ok = self.lock_piece(self.current)
                     if not ok:
                         global_score = self.score
                         game_over = True
                         return False
-
                     cleared = self.clear_rows()
                     if cleared:
                         self.score += cleared * 10
                         self.fall_ms = max(160, self.fall_ms - cleared * 15)
                     else:
                         self.score += 1
-
                     self.current = TetrisGame.Piece()
                     if not self.valid(self.current, dy=0):
                         global_score = self.score
                         game_over = True
                         return False
-
             self.render()
             display_score_and_time(self.score)
             return True
+        return step
 
-        await _run_game_loop_async(35, loop_iteration)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(35, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(35, self._build_step(joystick))
 
 # ---------- Maze ----------
 class MazeGame:
@@ -3424,11 +3203,10 @@ class MazeGame:
             keep_i += 1
         del self.projectiles[keep_i:]
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         initialize_grid()
         self.explored = bytearray(WIDTH * PLAY_HEIGHT)
         self.score = 0
@@ -3437,84 +3215,36 @@ class MazeGame:
         self.place_player()
         self.place_gems(10)
         self.place_enemies(3)
-
         display_score_and_time(0, force=True)
-
-        while True:
-            c_button, _ = joystick.read_buttons()
-            if c_button:
-                return
-
-            # lose if enemy on player
-            if (self.player_x, self.player_y) in self.enemies:
-                global_score = self.score
-                game_over = True
-                return
-
-            self.move_player(joystick)
-            self.handle_shooting(joystick)
-            self.update_projectiles()
-            self.move_enemies()
-
-            self.render()
-            display_score_and_time(self.score)
-
-            if not self.enemies and not self.gems:
-                global_score = self.score
-                show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, delay_ms=1500)
-                return
-
-            sleep_ms(90)
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        initialize_grid()
-        self.explored = bytearray(WIDTH * PLAY_HEIGHT)
-        self.score = 0
-        self.projectiles = []
-        self.generate_maze()
-        self.place_player()
-        self.place_gems(10)
-        self.place_enemies(3)
-
-        display_score_and_time(0, force=True)
-
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, _ = joystick.read_buttons()
             if c_button:
                 return False
-
-            # lose if enemy on player
             if (self.player_x, self.player_y) in self.enemies:
                 global_score = self.score
                 game_over = True
                 return False
-
             self.move_player(joystick)
             self.handle_shooting(joystick)
             self.update_projectiles()
             self.move_enemies()
-
             self.render()
             display_score_and_time(self.score)
-
             if not self.enemies and not self.gems:
                 global_score = self.score
                 show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, delay_ms=1500)
                 return False
-
             return True
+        return step
 
-        await _run_game_loop_async(90, loop_iteration)  # 0.09s = 90ms
+    def main_loop(self, joystick):
+        _run_game_loop_sync(90, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(90, self._build_step(joystick))
 
 # ---------- FLAPPY ----------
 class FlappyGame:
@@ -3588,132 +3318,54 @@ class FlappyGame:
         y = int(self.by)
         draw_rectangle(self.bx, y, self.bx + 1, y + 1, 255, 255, 0)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0, force=True)
-
-        last_frame = ticks_ms()
-        frame_ms = 35
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                sleep_ms(5)
-                continue
-            last_frame = now
-
-            # physics: flap impulse + gravity
-            d = joystick.read_direction([JOYSTICK_UP])
-            if z_button or d == JOYSTICK_UP:
-                self.flap()
-
-            # gravity
-            self.vy += 1
-            if self.vy > 5:
-                self.vy = 5
-            self.by += self.vy
-
-            # clamp vertical
-            if self.by < 0:
-                self.by = 0
-                self.vy = 0
-            if self.by > PLAY_HEIGHT - 2:
-                self.by = PLAY_HEIGHT - 2
-                self.vy = 0
-
-            # move pipes
-            for p in self.pipes:
-                p["x"] -= self.speed
-
-                # scoring
-                if (not p["passed"]) and (p["x"] + self.pipe_w) < self.bx:
-                    p["passed"] = True
-                    self.score += 1
-
-            # recycle pipes
-            if self.pipes and self.pipes[0]["x"] + self.pipe_w < 0:
-                self.pipes.pop(0)
-                self.add_pipe(WIDTH + 10)
-
-            if self.collide():
-                global_score = self.score
-                game_over = True
-                return
-
-            self.draw()
-            display_score_and_time(self.score)
-
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display_score_and_time(0, force=True)
-
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-
-            # physics: flap impulse + gravity
             d = joystick.read_direction([JOYSTICK_UP])
             if z_button or d == JOYSTICK_UP:
                 self.flap()
-
-            # gravity
             self.vy += 1
             if self.vy > 5:
                 self.vy = 5
             self.by += self.vy
-
-            # clamp vertical
             if self.by < 0:
                 self.by = 0
                 self.vy = 0
             if self.by > PLAY_HEIGHT - 2:
                 self.by = PLAY_HEIGHT - 2
                 self.vy = 0
-
-            # move pipes
             for p in self.pipes:
                 p["x"] -= self.speed
-
-                # scoring
                 if (not p["passed"]) and (p["x"] + self.pipe_w) < self.bx:
                     p["passed"] = True
                     self.score += 1
-
-            # recycle pipes
             if self.pipes and self.pipes[0]["x"] + self.pipe_w < 0:
                 self.pipes.pop(0)
                 self.add_pipe(WIDTH + 10)
-
             if self.collide():
                 global_score = self.score
                 game_over = True
                 return False
-
             self.draw()
             display_score_and_time(self.score)
             return True
+        return step
 
-        await _run_game_loop_async(35, loop_iteration)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(35, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(35, self._build_step(joystick))
 
 
 class DodgeGame:
@@ -3819,84 +3471,41 @@ class DodgeGame:
         draw_rectangle(px, py, px + 2, py + 2, 0, 220, 255)
         display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0, force=True)
-
-        last_frame = ticks_ms()
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < self.frame_ms:
-                sleep_ms(4)
-                continue
-            last_frame = now
-
-            # Spawnrate an Score koppeln, aber Grenzen halten
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
-                self._spawn_obstacle()
-                self.last_spawn = now
-                if self.spawn_ms > self.MIN_SPAWN_MS and (self.score % self.DIFFICULTY_SCORE_INTERVAL) == 0:
-                    self.spawn_ms -= self.SPAWN_MS_DECREMENT
-
-            self._move_player(joystick, z_button)
-            self._advance_obstacles()
-
-            if self._collides():
-                global_score = self.score
-                game_over = True
-                return
-
-            global_score = self.score
-            self._draw()
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display_score_and_time(0, force=True)
-
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-
-            # Spawn logic coupled to score but keep limits
             now = ticks_ms()
             if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
                 self._spawn_obstacle()
                 self.last_spawn = now
                 if self.spawn_ms > self.MIN_SPAWN_MS and (self.score % self.DIFFICULTY_SCORE_INTERVAL) == 0:
                     self.spawn_ms -= self.SPAWN_MS_DECREMENT
-
             self._move_player(joystick, z_button)
             self._advance_obstacles()
-
             if self._collides():
                 global_score = self.score
                 game_over = True
                 return False
-
             global_score = self.score
             self._draw()
             return True
+        return step
 
-        await _run_game_loop_async(35, loop_iteration)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class InvaderGame:
@@ -4224,32 +3833,23 @@ class InvaderGame:
         maybe_collect(100)
         return True
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         self.reset()
         begin_game(0)
-
-        def loop_iteration():
+        def step():
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
             return self._step(joystick, z_button)
+        return step
 
-        _run_game_loop_sync(self.FRAME_MS, loop_iteration)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
     async def main_loop_async(self, joystick):
         if asyncio is None:
             return self.main_loop(joystick)
-
-        self.reset()
-        begin_game(0)
-
-        def loop_iteration():
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return False
-            return self._step(joystick, z_button)
-
-        await _run_game_loop_async(self.FRAME_MS, loop_iteration)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class TronGame:
@@ -4462,79 +4062,37 @@ class TronGame:
         if force:
             display_flush()
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
-        last_frame = ticks_ms()
-        frame_ms = self.FRAME_MS
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                sleep_ms(2)
-                continue
-            last_frame = now
-
-            turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            if turn:
-                self._turn(turn)
-
-            alive = self._step(turbo=z_button)
-            global_score = self.score
-            display_score_and_time(self.score)
-
-            # If player dies, they lose
-            if not alive:
-                game_over = True
-                return
-                
-            if not self.enemy_alive and random.randint(0, 15) == 0:
-                self._try_respawn_enemy()
-
-            maybe_collect(self.COLLECT_INTERVAL)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-
             turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
             if turn:
                 self._turn(turn)
-
             alive = self._step(turbo=z_button)
             global_score = self.score
             display_score_and_time(self.score)
-
-            # If player dies, they lose
             if not alive:
                 game_over = True
                 return False
-                
             if not self.enemy_alive and random.randint(0, 15) == 0:
                 self._try_respawn_enemy()
-
             return True
+        return step
 
-        await _run_game_loop_async(62, loop_iteration)
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class RTypeGame:
@@ -5566,103 +5124,47 @@ class CaveFlyGame:
 
         display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0, force=True)
-        
-        # 2 second preview of cave
-        self._draw()
-        sleep_ms(2000)
-
-        frame_ms = 33
-        last = ticks_ms()
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last) < frame_ms:
-                sleep_ms(2)
-                continue
-            last = now
-            self.frame += 1
-
-            # Direct control (no gravity): steer left/right
-            d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            step = 2
-            if d == JOYSTICK_LEFT:
-                self.bx = max(self.bx - step, 0)
-            elif d == JOYSTICK_RIGHT:
-                self.bx = min(self.bx + step, WIDTH - 2)
-
-            # scroll cave
-            self._step_scroll()
-
-            # scoring
-            self.score += 1
-            global_score = self.score
-
-            if self._collide():
-                game_over = True
-                return
-
-            self._draw()
-
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display_score_and_time(0, force=True)
-        
-        # 2 second preview of cave
-        self._draw()
-        await asyncio.sleep(2.0)
-
-        def loop_iteration():
+        def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-
             self.frame += 1
-
-            # Direct control (no gravity): steer left/right
             d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            step = 2
+            mv = 2
             if d == JOYSTICK_LEFT:
-                self.bx = max(self.bx - step, 0)
+                self.bx = max(self.bx - mv, 0)
             elif d == JOYSTICK_RIGHT:
-                self.bx = min(self.bx + step, WIDTH - 2)
-
-            # scroll cave
+                self.bx = min(self.bx + mv, WIDTH - 2)
             self._step_scroll()
-
-            # scoring
             self.score += 1
             global_score = self.score
-
             if self._collide():
                 game_over = True
                 return False
-
             self._draw()
             return True
+        return step
 
-        await _run_game_loop_async(33, loop_iteration)
+    def main_loop(self, joystick):
+        step = self._build_step(joystick)
+        self._draw()
+        sleep_ms(2000)
+        _run_game_loop_sync(33, step)
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        step = self._build_step(joystick)
+        self._draw()
+        await asyncio.sleep(2.0)
+        await _run_game_loop_async(33, step)
 
 
 class PitfallGame:
@@ -6067,642 +5569,6 @@ class PitfallGame:
             await _run_game_loop_async(33, loop_iteration)
         except RestartProgram:
             return
-
-
-class MonkeyBallLiteGame:
-    """
-    MONKEY BALL LITE
-    Controls:
-      - Stick: tilt (acceleration)
-      - Z: boost (stronger tilt)
-      - C: return to menu
-    Goal: collect coins (*) and reach the goal (G); avoid holes (o).
-    """
-
-    # Fixed-point Q8.8
-    FP = const(8)
-    ONE = const(1 << FP)
-
-    # MonkeyBall constants (moved from module-level)
-    MB_TILE = const(4)
-    MB_W = const(14)
-    MB_H = const(14)
-
-    # Tile codes (bytes)
-    T_WALL = ord("#")
-    T_FLOOR = ord(".")
-    T_START = ord("S")
-    T_GOAL = ord("G")
-    T_HOLE = ord("o")
-    T_COIN = ord("*")
-
-    # Colors (tweak if you like)
-    COL_WALL = (0, 0, 120)
-    COL_FLOOR = (0, 0, 0)
-    COL_GOAL = (0, 255, 0)
-    COL_HOLE = (200, 0, 200)
-    COL_COIN = (255, 220, 0)
-
-    COL_BALL = (255, 255, 255)
-    COL_SHAD = (40, 40, 40)
-
-    # Levels: 14x14, keep borders walled.
-    MB_LEVELS = [
-        (
-            b"##############",
-            b"#S....#.......#",
-            b"#.##..#..###..#",
-            b"#..#.....#....#",
-            b"#..#####.#.##.#",
-            b"#......#.#....#",
-            b"####...#.#.####",
-            b"#..#...#.#....#",
-            b"#..#.###.####.#",
-            b"#..#.....#..*.#",
-            b"#..#####.#.##.#",
-            b"#......#.#..o.#",
-            b"#..*....#....G#",
-            b"##############",
-        ),
-        (
-            b"##############",
-            b"#S..*.....#...#",
-            b"#.####.##.#.###",
-            b"#......#..#...#",
-            b"#.####.#.###..#",
-            b"#.#..#.#...#..#",
-            b"#.#..#.###.#.##",
-            b"#.#......#....#",
-            b"#.######.#.##.#",
-            b"#......#.#..#.#",
-            b"##.###.#.##.#.#",
-            b"#..#...#....#.#",
-            b"#..#.o...*..#G#",
-            b"##############",
-        ),
-        (
-            b"##############",
-            b"#S.....#..*...#",
-            b"#.###.##.###..#",
-            b"#...#....#....#",
-            b"###.#.####.####",
-            b"#...#......#..#",
-            b"#.######.#.#.##",
-            b"#......#.#.#..#",
-            b"####.#.#.#.##.#",
-            b"#..#.#.#.#....#",
-            b"#..#.#.#.######",
-            b"#..#...#....oG#",
-            b"#..*...#......#",
-            b"##############",
-        ),
-    ]
-
-    # Physics tuning (Q8.8-ish numbers)
-    # acceleration = tilt * ACC
-    ACC = const(10)  # base accel per tick (in FP units)
-    ACC_BOOST = const(18)  # accel when Z held
-
-    # friction v = v * FRICTION_NUM / FRICTION_DEN
-    FRICTION_NUM = const(235)  # ~0.918
-    FRICTION_DEN = const(256)
-
-    # speed clamp
-    VMAX = const(2 * ONE) + const(100)  # ~2.39 px/tick
-
-    # ball size
-    R = const(1)  # radius in pixels (visual is 2x2)
-
-    def __init__(self, ctx=None):
-        """Initialize the game context wrapper and bind runtime symbols.
-
-        `ctx` may supply platform-specific functions (display, timing,
-        helpers). Missing symbols are looked up in globals().
-        """
-        # context can provide runtime symbols (display, helpers, timing)
-        if ctx is None:
-            ctx = {}
-
-        def _g(n):
-            """Return symbol `n` from `ctx` or fallback to globals()."""
-            return getattr(ctx, n, globals().get(n))
-
-        self.display = _g("display")
-        self.draw_text = _g("draw_text")
-        self.draw_rectangle = _g("draw_rectangle")
-        self.display_score_and_time = _g("display_score_and_time")
-        self.ticks_ms = _g("ticks_ms")
-        self.ticks_diff = _g("ticks_diff")
-        self.sleep_ms = _g("sleep_ms")
-        self.WIDTH = _g("WIDTH")
-        self.PLAY_HEIGHT = _g("PLAY_HEIGHT")
-        self.JOYSTICK_UP = _g("JOYSTICK_UP")
-        self.JOYSTICK_DOWN = _g("JOYSTICK_DOWN")
-        self.JOYSTICK_LEFT = _g("JOYSTICK_LEFT")
-        self.JOYSTICK_RIGHT = _g("JOYSTICK_RIGHT")
-        self.JOYSTICK_UP_LEFT = _g("JOYSTICK_UP_LEFT")
-        self.JOYSTICK_UP_RIGHT = _g("JOYSTICK_UP_RIGHT")
-        self.JOYSTICK_DOWN_LEFT = _g("JOYSTICK_DOWN_LEFT")
-        self.JOYSTICK_DOWN_RIGHT = _g("JOYSTICK_DOWN_RIGHT")
-        self.gc = _g("gc")
-
-        # compute MonkeyBall offsets now that WIDTH / PLAY_HEIGHT exist
-        try:
-            self.MB_OFF_X = (64 - (self.MB_W * self.MB_TILE)) // 2
-            self.MB_OFF_Y = (58 - (self.MB_H * self.MB_TILE)) // 2
-        except Exception:
-            self.MB_OFF_X = 0
-            self.MB_OFF_Y = 0
-
-        self.level_idx = 0
-        self.score = 0
-        self.frame = 0
-        self.reset_level(reset_score=True)
-
-    async def main_loop_async(self, joystick):
-        """Cooperative async MonkeyBall main loop for browsers."""
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        # reset level synchronously
-        self.reset_level(reset_score=True)
-
-        frame_ms = 35
-        last_frame = ticks_ms()
-        self.frame = 0
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                await asyncio.sleep(0.002)
-                continue
-            last_frame = now
-            self.frame += 1
-
-            # input / tilt
-            d = joystick.read_direction(
-                [
-                    JOYSTICK_UP,
-                    JOYSTICK_DOWN,
-                    JOYSTICK_LEFT,
-                    JOYSTICK_RIGHT,
-                    JOYSTICK_UP_LEFT,
-                    JOYSTICK_UP_RIGHT,
-                    JOYSTICK_DOWN_LEFT,
-                    JOYSTICK_DOWN_RIGHT,
-                ]
-            )
-
-            tx, ty = direction_to_delta_8way(d)
-
-            acc = self.ACC_BOOST if z_button else self.ACC
-
-            # physics
-            self.vx += tx * acc
-            self.vy += ty * acc
-            self.vx = (self.vx * self.FRICTION_NUM) // self.FRICTION_DEN
-            self.vy = (self.vy * self.FRICTION_NUM) // self.FRICTION_DEN
-            if self.vx > self.VMAX:
-                self.vx = self.VMAX
-            if self.vx < -self.VMAX:
-                self.vx = -self.VMAX
-            if self.vy > self.VMAX:
-                self.vy = self.VMAX
-            if self.vy < -self.VMAX:
-                self.vy = -self.VMAX
-
-            # move + collisions
-            nx = self.x + self.vx
-            ny = self.y
-            if self._collides_ball_at(nx, ny):
-                self.vx = -self.vx // 2
-            else:
-                self.x = nx
-
-            nx = self.x
-            ny = self.y + self.vy
-            if self._collides_ball_at(nx, ny):
-                self.vy = -self.vy // 2
-            else:
-                self.y = ny
-
-            # interactions
-            px = self.x >> self.FP
-            py = self.y >> self.FP
-            txc, tyc, tile = self._touch_hole_or_goal_or_coin(px, py)
-
-            if tile == self.T_HOLE:
-                global_score = self.score
-                game_over = True
-                display.clear()
-                draw_text(6, 18, "FALL", 255, 0, 0)
-                display_score_and_time(global_score, force=True)
-                try:
-                    await asyncio.sleep(0.9)
-                except Exception:
-                    pass
-                return
-
-            if tile == self.T_COIN:
-                self._set_tile(txc, tyc, self.T_FLOOR)
-                self.coins_left -= 1
-                self.score += 25
-                self._draw_tile(txc, tyc)
-
-            if tile == self.T_GOAL:
-                self.score += 200 + (self.level_idx * 30)
-                global_score = self.score
-                display.clear()
-                draw_text(6, 16, "GOAL", 0, 255, 0)
-                draw_text(
-                    6,
-                    30,
-                    "LVL " + str((self.level_idx % len(self.MB_LEVELS)) + 1),
-                    255,
-                    255,
-                    0,
-                )
-                display_score_and_time(global_score, force=True)
-                try:
-                    await asyncio.sleep(1.2)
-                except Exception:
-                    pass
-                self.level_idx = (self.level_idx + 1) % len(self.MB_LEVELS)
-                self.reset_level(reset_score=False)
-                continue
-
-            # render (dirty)
-            if self.last_px is not None:
-                self._repair_under_ball(self.last_px, self.last_py)
-            self._draw_ball(px, py)
-            self.last_px, self.last_py = px, py
-
-            display_score_and_time(self.score)
-            global_score = self.score
-
-            if (self.frame % 90) == 0:
-                try:
-                    self.gc.collect()
-                except Exception:
-                    pass
-
-    # -----------------
-    # Level / Map
-    # -----------------
-    def reset_level(self, reset_score=False):
-        """Reset the current level map and optionally the score."""
-        if reset_score:
-            self.score = 0
-            self.level_idx = 0
-
-        # Copy current level into mutable rows
-        raw = self.MB_LEVELS[self.level_idx % len(self.MB_LEVELS)]
-        self.map = [bytearray(row) for row in raw]
-
-        self.coins_left = 0
-        sx = sy = 1
-        gx = gy = 1
-
-        for y in range(self.MB_H):
-            row = self.map[y]
-            for x in range(self.MB_W):
-                t = row[x]
-                if t == self.T_START:
-                    sx, sy = x, y
-                    row[x] = self.T_FLOOR
-                elif t == self.T_GOAL:
-                    gx, gy = x, y
-                elif t == self.T_COIN:
-                    self.coins_left += 1
-
-        self.start_tx, self.start_ty = sx, sy
-        self.goal_tx, self.goal_ty = gx, gy
-
-        # Ball state in pixel space inside map area
-        self.x = (self.MB_OFF_X + sx * self.MB_TILE + (self.MB_TILE // 2)) << self.FP
-        self.y = (self.MB_OFF_Y + sy * self.MB_TILE + (self.MB_TILE // 2)) << self.FP
-        self.vx = 0
-        self.vy = 0
-
-        # last drawn position (for dirty repair)
-        self.last_px = None
-        self.last_py = None
-
-        # Render static map once
-        self.display.clear()
-        self._draw_static_map()
-        self.display_score_and_time(self.score, force=True)
-
-        # tiny level label (optional)
-        try:
-            self.draw_text(
-                2,
-                2,
-                "MB" + str((self.level_idx % len(self.MB_LEVELS)) + 1),
-                255,
-                255,
-                255,
-            )
-        except Exception:
-            pass
-
-    def _tile_at(self, tx, ty):
-        """Return the tile value at tile coordinates (tx, ty).
-
-        Out-of-bounds coordinates are treated as walls.
-        """
-        if tx < 0 or tx >= self.MB_W or ty < 0 or ty >= self.MB_H:
-            return self.T_WALL
-        return self.map[ty][tx]
-
-    def _set_tile(self, tx, ty, val):
-        """Set the tile at (tx, ty) to `val` if within bounds."""
-        if 0 <= tx < self.MB_W and 0 <= ty < self.MB_H:
-            self.map[ty][tx] = val
-
-    def _pixel_to_tile(self, px, py):
-        """Convert pixel coordinates to tile coordinates within the map."""
-        tx = (px - self.MB_OFF_X) // self.MB_TILE
-        ty = (py - self.MB_OFF_Y) // self.MB_TILE
-        return tx, ty
-
-    def _draw_tile(self, tx, ty):
-        """Draw a single map tile at tile coordinates (tx, ty)."""
-        t = self._tile_at(tx, ty)
-        x1 = self.MB_OFF_X + tx * self.MB_TILE
-        y1 = self.MB_OFF_Y + ty * self.MB_TILE
-        x2 = x1 + self.MB_TILE - 1
-        y2 = y1 + self.MB_TILE - 1
-
-        if t == self.T_WALL:
-            self.draw_rectangle(x1, y1, x2, y2, *self.COL_WALL)
-        else:
-            # floor base
-            self.draw_rectangle(x1, y1, x2, y2, *self.COL_FLOOR)
-            if t == self.T_GOAL:
-                # goal highlight (center)
-                cx = x1 + 1
-                cy = y1 + 1
-                self.draw_rectangle(cx, cy, x2 - 1, y2 - 1, *self.COL_GOAL)
-            elif t == self.T_HOLE:
-                # hole dot
-                cx = x1 + 1
-                cy = y1 + 1
-                self.draw_rectangle(cx, cy, x2 - 1, y2 - 1, *self.COL_HOLE)
-            elif t == self.T_COIN:
-                # coin pixel cluster
-                cx = x1 + 1
-                cy = y1 + 1
-                self.draw_rectangle(cx, cy, cx + 1, cy + 1, *self.COL_COIN)
-
-    def _draw_static_map(self):
-        """Draw the static, tile-based portion of the current map."""
-        for ty in range(self.MB_H):
-            for tx in range(self.MB_W):
-                self._draw_tile(tx, ty)
-
-    # -----------------
-    # Dirty repair under ball
-    # -----------------
-    def _repair_under_ball(self, px, py):
-        """Restore map tiles potentially covered by the moving ball.
-
-        Calculates the tile region possibly affected by the ball and
-        redraws those tiles only.
-        """
-        # redraw only the tiles the ball could have overwritten (<= 4 tiles)
-        # ball footprint ~ 2x2 plus shadow 1px
-        minx = px - 1
-        maxx = px + 2
-        miny = py - 1
-        maxy = py + 2
-
-        tx0, ty0 = self._pixel_to_tile(minx, miny)
-        tx1, ty1 = self._pixel_to_tile(maxx, maxy)
-
-        for ty in range(ty0, ty1 + 1):
-            for tx in range(tx0, tx1 + 1):
-                self._draw_tile(tx, ty)
-
-    def _draw_ball(self, px, py):
-        """Draw the ball and its shadow at pixel position (px, py)."""
-        sp = self.display.set_pixel
-
-        # shadow (below-right)
-        sx = px + 1
-        sy = py + 2
-        if 0 <= sx < self.WIDTH and 0 <= sy < self.PLAY_HEIGHT:
-            sp(sx, sy, *self.COL_SHAD)
-
-        # 2x2 ball
-        for dy in (0, 1):
-            yy = py + dy
-            if 0 <= yy < self.PLAY_HEIGHT:
-                for dx in (0, 1):
-                    xx = px + dx
-                    if 0 <= xx < self.WIDTH:
-                        sp(xx, yy, *self.COL_BALL)
-
-    # -----------------
-    # Collision helpers
-    # -----------------
-    def _is_wall_pixel(self, px, py):
-        """Return True when the given pixel lies on a wall tile."""
-        tx, ty = self._pixel_to_tile(px, py)
-        return self._tile_at(tx, ty) == self.T_WALL
-
-    def _touch_hole_or_goal_or_coin(self, cx, cy):
-        """Handle collision of the ball with holes, goal or coins.
-
-        Returns a tuple (hole_hit, goal_reached, coin_collected).
-        """
-        tx, ty = self._pixel_to_tile(cx, cy)
-        t = self._tile_at(tx, ty)
-        return tx, ty, t
-
-    def _collides_ball_at(self, x_fp, y_fp):
-        """Return True if the ball at fixed-point coords collides with walls."""
-        # check 4 corners of ball bbox in pixel coords
-        px = x_fp >> self.FP
-        py = y_fp >> self.FP
-        r = self.R
-
-        # corners of 2x2-ish footprint
-        corners = (
-            (px - r, py - r),
-            (px + r + 1, py - r),
-            (px - r, py + r + 1),
-            (px + r + 1, py + r + 1),
-        )
-        for cx, cy in corners:
-            if self._is_wall_pixel(cx, cy):
-                return True
-        return False
-
-    # -----------------
-    # Main loop
-    # -----------------
-    def main_loop(self, joystick):
-        """Main loop for the marble/mini-bomber physics-driven level.
-
-        Handles input tilt, ball physics, collision detection and
-        level progression until the player quits or reaches the goal.
-        """
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        # reset from scratch each run
-        self.reset_level(reset_score=True)
-
-        frame_ms = 35
-        last_frame = ticks_ms()
-        self.frame = 0
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = self.ticks_ms()
-            if self.ticks_diff(now, last_frame) < frame_ms:
-                self.sleep_ms(2)
-                continue
-            last_frame = now
-            self.frame += 1
-
-            # -------- input -> tilt --------
-            d = joystick.read_direction(
-                [
-                    JOYSTICK_UP,
-                    JOYSTICK_DOWN,
-                    JOYSTICK_LEFT,
-                    JOYSTICK_RIGHT,
-                    JOYSTICK_UP_LEFT,
-                    JOYSTICK_UP_RIGHT,
-                    JOYSTICK_DOWN_LEFT,
-                    JOYSTICK_DOWN_RIGHT,
-                ]
-            )
-
-            tx, ty = direction_to_delta_8way(d)
-
-            acc = self.ACC_BOOST if z_button else self.ACC
-
-            # -------- physics (fixed-point) --------
-            # vx += tilt_x * acc; vy += tilt_y * acc
-            self.vx += tx * acc
-            self.vy += ty * acc
-
-            # friction
-            self.vx = (self.vx * self.FRICTION_NUM) // self.FRICTION_DEN
-            self.vy = (self.vy * self.FRICTION_NUM) // self.FRICTION_DEN
-
-            # clamp speed
-            if self.vx > self.VMAX:
-                self.vx = self.VMAX
-            if self.vx < -self.VMAX:
-                self.vx = -self.VMAX
-            if self.vy > self.VMAX:
-                self.vy = self.VMAX
-            if self.vy < -self.VMAX:
-                self.vy = -self.VMAX
-
-            # -------- move + axis-separated collision --------
-            nx = self.x + self.vx
-            ny = self.y
-
-            if self._collides_ball_at(nx, ny):
-                # bounce x
-                self.vx = -self.vx // 2
-            else:
-                self.x = nx
-
-            nx = self.x
-            ny = self.y + self.vy
-
-            if self._collides_ball_at(nx, ny):
-                # bounce y
-                self.vy = -self.vy // 2
-            else:
-                self.y = ny
-
-            # keep inside playfield bounds (map area)
-            px = self.x >> self.FP
-            py = self.y >> self.FP
-
-            # -------- interactions --------
-            # center point for tile checks
-            txc, tyc, tile = self._touch_hole_or_goal_or_coin(px, py)
-
-            if tile == self.T_HOLE:
-                global_score = self.score
-                game_over = True
-                # optional: show text
-                display.clear()
-                draw_text(6, 18, "FALL", 255, 0, 0)
-                display_score_and_time(global_score, force=True)
-                sleep_ms(900)
-                return
-
-            if tile == self.T_COIN:
-                self._set_tile(txc, tyc, self.T_FLOOR)
-                self.coins_left -= 1
-                self.score += 25
-                # redraw that tile (since it changed)
-                self._draw_tile(txc, tyc)
-
-            if tile == self.T_GOAL:
-                # optional rule: require all coins
-                # if self.coins_left > 0: pass
-                self.score += 200 + (self.level_idx * 30)
-                global_score = self.score
-
-                display.clear()
-                draw_text(6, 16, "GOAL", 0, 255, 0)
-                draw_text(
-                    6,
-                    30,
-                    "LVL " + str((self.level_idx % len(self.MB_LEVELS)) + 1),
-                    255,
-                    255,
-                    0,
-                )
-                display_score_and_time(global_score, force=True)
-                sleep_ms(1200)
-
-                self.level_idx = (self.level_idx + 1) % len(self.MB_LEVELS)
-                self.reset_level(reset_score=False)
-                continue
-
-            # -------- render (dirty) --------
-            # repair old ball area
-            if self.last_px is not None:
-                self._repair_under_ball(self.last_px, self.last_py)
-
-            # draw new ball
-            self._draw_ball(px, py)
-            self.last_px, self.last_py = px, py
-
-            display_score_and_time(self.score)
-            global_score = self.score
-
-            if (self.frame % 90) == 0:
-                try:
-                    self.gc.collect()
-                except Exception:
-                    pass
-
-
 
 class Game2048:
     """
