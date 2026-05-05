@@ -1763,6 +1763,7 @@ class SimonGame:
             maybe_collect(120)
 
 
+class SnakeGame:
     """
     SNAKE
     Controls:
@@ -5137,11 +5138,11 @@ class CaveFlyGame:
                 return False
             self.frame += 1
             d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            mv = 2
+            move_amount = 2
             if d == JOYSTICK_LEFT:
-                self.bx = max(self.bx - mv, 0)
+                self.bx = max(self.bx - move_amount, 0)
             elif d == JOYSTICK_RIGHT:
-                self.bx = min(self.bx + mv, WIDTH - 2)
+                self.bx = min(self.bx + move_amount, WIDTH - 2)
             self._step_scroll()
             self.score += 1
             global_score = self.score
