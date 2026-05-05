@@ -1592,7 +1592,12 @@ class InitialsEntryMenu:
 # ======================================================================
 
 class SimonGame:
-    """Simon: memory game — repeat the color sequence shown."""
+    """
+    SIMON
+    Controls:
+      - Up-Left / Up-Right / Down-Left / Down-Right: select quadrant
+      - C: return to menu
+    """
     def __init__(self):
         self.sequence = []
         self.user_input = []
@@ -1677,8 +1682,92 @@ class SimonGame:
             sleep_ms(300)
             maybe_collect(120)
 
-class SnakeGame:
-    """Snake: classic snake game, collect targets and grow."""
+    async def main_loop_async(self, joystick):
+        """Async version for pygbag: yields with asyncio.sleep()."""
+        if asyncio is None:
+            return self.main_loop(joystick)
+
+        global game_over, global_score
+        game_over = False
+        self.sequence = []
+        self.user_input = []
+        display.clear()
+        self.draw_quad_screen()
+        display_score_and_time(0, force=True)
+
+        while True:
+            c_button, _ = joystick.read_buttons()
+            if c_button:
+                return
+
+            self.sequence.append(random.randint(0, 3))
+            display_score_and_time(len(self.sequence) - 1)
+
+            # play sequence (async flashes)
+            for c in self.sequence:
+                x = c % 2
+                y = c // 2
+                hw = WIDTH // 2
+                hh = PLAY_HEIGHT // 2
+                x1 = x * hw
+                y1 = y * hh
+                x2 = (x + 1) * hw - 1
+                y2 = (y + 1) * hh - 1
+                if y2 >= PLAY_HEIGHT:
+                    y2 = PLAY_HEIGHT - 1
+                draw_rectangle(x1, y1, x2, y2, *colors[c])
+                await asyncio.sleep(0.3)
+                draw_rectangle(x1, y1, x2, y2, *inactive_colors[c])
+                await asyncio.sleep(0.2)
+
+            self.user_input = []
+
+            for _ in range(len(self.sequence)):
+                # wait for user input (async poll)
+                sel = None
+                while sel is None:
+                    c_button, _ = joystick.read_buttons()
+                    if c_button:
+                        return
+                    d = joystick.read_direction([
+                        JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT,
+                        JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT,
+                    ])
+                    if d:
+                        sel = self.translate(d)
+                    await asyncio.sleep(0.030)
+
+                # flash selected quadrant
+                x = sel % 2
+                y = sel // 2
+                hw = WIDTH // 2
+                hh = PLAY_HEIGHT // 2
+                x1 = x * hw
+                y1 = y * hh
+                x2 = (x + 1) * hw - 1
+                y2 = (y + 1) * hh - 1
+                if y2 >= PLAY_HEIGHT:
+                    y2 = PLAY_HEIGHT - 1
+                draw_rectangle(x1, y1, x2, y2, *colors[sel])
+                await asyncio.sleep(0.12)
+                draw_rectangle(x1, y1, x2, y2, *inactive_colors[sel])
+
+                self.user_input.append(sel)
+                if self.user_input != self.sequence[:len(self.user_input)]:
+                    global_score = len(self.sequence) - 1
+                    game_over = True
+                    return
+
+            await asyncio.sleep(0.3)
+            maybe_collect(120)
+
+
+    """
+    SNAKE
+    Controls:
+      - Left / Right / Up / Down: steer snake
+      - C: return to menu
+    """
     def __init__(self):
         self.restart_game()
 
@@ -1841,7 +1930,7 @@ class SnakeGame:
         display_score_and_time(self.score)
         return True
 
-    def main_loop(self, joystick, mode="single"):
+    def main_loop(self, joystick):
         global game_over
         game_over = False
         self.restart_game()
@@ -1856,10 +1945,10 @@ class SnakeGame:
             sleep_ms(delay)
             maybe_collect(120)
 
-    async def main_loop_async(self, joystick, mode="single"):
+    async def main_loop_async(self, joystick):
         """Async version for pygbag: yields with asyncio.sleep()."""
         if asyncio is None:
-            return self.main_loop(joystick, mode)
+            return self.main_loop(joystick)
         
         global game_over
         game_over = False
@@ -1871,7 +1960,12 @@ class SnakeGame:
         await _run_game_loop_async(56, loop_iteration)
 
 class PongGame:
-    """Pong: two-player paddle game (AI-controlled opponent)."""
+    """
+    PONG
+    Controls:
+      - Up / Down: move paddle
+      - C: return to menu
+    """
     def __init__(self):
         self.paddle_height = 10
         self.paddle_speed = 3
@@ -2054,7 +2148,12 @@ BRICK_ROWS = const(5)
 BRICK_COLS = const(8)
 
 class BreakoutGame:
-    """Breakout: destroy bricks with a bouncing ball and paddle."""
+    """
+    BREAKOUT
+    Controls:
+      - Left / Right: move paddle
+      - C: return to menu
+    """
     def __init__(self):
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = PLAY_HEIGHT - PADDLE_HEIGHT
@@ -2246,7 +2345,14 @@ PIXEL_WIDTH = WIDTH
 PIXEL_HEIGHT = PLAY_HEIGHT
 
 class AsteroidGame:
-    """Asteroids: pilot a ship, shoot asteroids and survive."""
+    """
+    ASTEROIDS
+    Controls:
+      - Left / Right: rotate ship
+      - Up: thrust
+      - Z: shoot
+      - C: return to menu
+    """
     class Projectile:
         def __init__(self, x, y, angle, speed):
             self.x = x
@@ -2557,7 +2663,12 @@ class AsteroidGame:
 
 # ---------- Qix ----------
 class QixGame:
-    """Qix-like: draw lines to claim area while avoiding opponents."""
+    """
+    QIX
+    Controls:
+      - Left / Right / Up / Down: move and draw boundary
+      - C: return to menu
+    """
     def __init__(self):
         self.height = PLAY_HEIGHT
         self.width = WIDTH
@@ -2799,7 +2910,14 @@ class QixGame:
 
 # ---------- Tetris ----------
 class TetrisGame:
-    """Tetris: falling blocks puzzle with line clears and scoring."""
+    """
+    TETRIS
+    Controls:
+      - Left / Right: move piece
+      - Down: soft drop
+      - Up / Z: rotate piece
+      - C: return to menu
+    """
     GRID_WIDTH = const(16)
     GRID_HEIGHT = const(13)
     BLOCK_SIZE = const(4)
@@ -3057,7 +3175,13 @@ class TetrisGame:
 
 # ---------- Maze ----------
 class MazeGame:
-    """Maze explorer: find gems, avoid enemies, with fog-of-war."""
+    """
+    MAZE
+    Controls:
+      - Left / Right / Up / Down: move player
+      - Z: shoot
+      - C: return to menu
+    """
     WALL = 0
     PATH = 1
     PLAYER = 2
@@ -3394,7 +3518,12 @@ class MazeGame:
 
 # ---------- FLAPPY ----------
 class FlappyGame:
-    """Flappy: navigate between pipes; flap to gain altitude."""
+    """
+    FLAPPY
+    Controls:
+      - Z / Up: flap
+      - C: return to menu
+    """
     def __init__(self):
         self.reset()
 
@@ -5942,20 +6071,12 @@ class PitfallGame:
 
 class MonkeyBallLiteGame:
     """
-    Lightweight Monkey Ball inspired tilt-and-roll maze game.
-
-    Uses simple physics to move a ball through obstacles to the goal.
-    """
-
-    """
-    Monkey Ball Lite – Top-Down Marble Maze
-    Steuerung:
-      - Stick: kippen (Tilt -> Beschleunigung)
-      - Z: Boost (stärkerer Tilt)
-      - C: zurück ins Menü
-    Ziel:
-      - Sammle optional Coins (*) und erreiche das Ziel (G)
-      - Falle nicht in Löcher (o)
+    MONKEY BALL LITE
+    Controls:
+      - Stick: tilt (acceleration)
+      - Z: boost (stronger tilt)
+      - C: return to menu
+    Goal: collect coins (*) and reach the goal (G); avoid holes (o).
     """
 
     # Fixed-point Q8.8
@@ -6585,9 +6706,11 @@ class MonkeyBallLiteGame:
 
 class Game2048:
     """
-    2048 puzzle game implementation adapted for the LED matrix.
-
-    Handles merging tiles, spawning, and win/lose detection.
+    2048
+    Controls:
+      - Left / Right / Up / Down: slide tiles
+      - Z (hold): reset board
+      - C: return to menu
     """
 
     # 2048 visual and timing constants (class-scoped)
@@ -7029,9 +7152,12 @@ except ImportError:
 
 class LocoMotionGame:
     """
-    Loco-Motion style puzzle/slide game adapted for the LED matrix.
-
-    Handles tile sliding, movement rules, and goal detection.
+    LOCO-MOTION
+    Controls:
+      - Left / Right / Up / Down: move cursor
+      - Z (tap): rotate tile under cursor
+      - Z (hold): start / abort train run
+      - C: return to menu
     """
 
     # LocoMotion constants
@@ -7838,9 +7964,11 @@ class LocoMotionGame:
 
 class OthelloGame:
     """
-    Othello/Reversi board game implementation with simple AI.
-
-    Manages moves, flipping logic, and score calculation.
+    REVERSI / OTHELLO
+    Controls:
+      - Left / Right / Up / Down: move cursor
+      - Z: place disc
+      - C: return to menu
     """
 
     BOARD_SIZE = const(8)
@@ -8262,9 +8390,11 @@ class OthelloGame:
 
 class SokobanGame:
     """
-    Classic Sokoban crate-pushing puzzles on a small grid.
-
-    Tracks player position, box movement, and level completion.
+    SOKOBAN
+    Controls:
+      - Left / Right / Up / Down: move player / push crate
+      - Z: undo last move
+      - C: return to menu
     """
 
     # --- Sokoban constants & levels (kept as class attributes) ---
@@ -9191,7 +9321,12 @@ class BejeweledGame:
 
 
 class DemosGame:
-    """Zero-player demos: simple animations and cellular automata."""
+    """
+    DEMOS
+    Controls:
+      - Left / Right: switch demo
+      - C: return to menu
+    """
     def __init__(self):
         # Additional hardware-demo effects implemented: MATRIX, STARS, MYSTIFY, PLASMA, CUBE, ORBIT, TUNNEL, WARP, BOUNCE.
         self.demos = ("SNAKE", "LIFE", "PLASMA", "CUBE") if CONFIG_LOW_RAM_MODE else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE", "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE", "MATRIX", "STARS")
@@ -12022,9 +12157,109 @@ class DoomLiteGame:
             except RestartProgram:
                 return
 
-# ======================================================================
-#                              MENUS / FLOW
-# ======================================================================
+    async def main_loop_async(self, joystick):
+        """Async version for pygbag: yields with asyncio.sleep()."""
+        if asyncio is None:
+            return self.main_loop(joystick)
+
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+
+        self.reset()
+        display_score_and_time(0)
+
+        while not game_over:
+            try:
+                c_button, z_button = joystick.read_buttons()
+                if c_button:
+                    return
+
+                now = ticks_ms()
+                if ticks_diff(now, self.last_frame) < self.frame_ms:
+                    await asyncio.sleep(0.002)
+                    continue
+                self.last_frame = now
+                self.frame += 1
+                if self.wave_announce > 0:
+                    self.wave_announce -= 1
+                if self.hit_flash > 0:
+                    self.hit_flash -= 1
+                if self.dmg_flash > 0:
+                    self.dmg_flash -= 1
+
+                # input
+                d = joystick.read_direction([
+                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
+                ], debounce=False)
+
+                # rotate
+                tx, ty = direction_to_delta_8way(d)
+                rot = 0
+                if tx < 0:
+                    rot = 5
+                elif tx > 0:
+                    rot = -5
+                if rot:
+                    self.ang = (self.ang + rot) & 255
+
+                # move
+                move = 0.0
+                if ty < 0:
+                    move = 0.12
+                elif ty > 0:
+                    move = -0.10
+
+                if move != 0.0:
+                    c, s = self._cos_sin(self.ang)
+                    dx = c * move
+                    dy = -s * move
+
+                    nx = self.px + dx
+                    ny = self.py + dy
+
+                    # axis-separate collision
+                    if not self._is_wall_pos(nx, self.py):
+                        self.px = nx
+                    if not self._is_wall_pos(self.px, ny):
+                        self.py = ny
+
+                # shoot
+                if self.shot_cd > 0:
+                    self.shot_cd -= 1
+                if z_button and self.shot_cd == 0:
+                    self._shoot()
+                    self.shot_cd = 10
+
+                # enemy update / collision
+                self._update_enemies()
+                if game_over:
+                    global_score = self.score
+                    return
+
+                # next wave?
+                alive = 0
+                for e in self.enemies:
+                    if e[2] > 0:
+                        alive += 1
+                if alive == 0:
+                    self.score += 100
+                    self.wave += 1
+                    self._spawn_wave(self.wave)
+                    self.px, self.py = self._player_start_for_level()
+                    self.ang = 0
+
+                global_score = self.score
+                self._render()
+
+                if (self.frame % 80) == 0:
+                    gc.collect()
+
+            except RestartProgram:
+                return
+
+
 
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
