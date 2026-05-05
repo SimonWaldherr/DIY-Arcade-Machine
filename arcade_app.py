@@ -173,6 +173,38 @@ def draw_centered_text_lines(lines, start_y=18, line_height=12, r=255, g=255, b=
         y = start_y + idx * line_height
         draw_text(x, y, line, r, g, b)
 
+def show_center_message(lines, start_y=18, line_height=12, r=255, g=255, b=255, clear=True, score=None, delay_ms=0):
+    """Draw centered text lines with optional clear, score update and delay."""
+    if clear:
+        display.clear()
+    draw_centered_text_lines(lines, start_y=start_y, line_height=line_height, r=r, g=g, b=b)
+    if score is not None:
+        display_score_and_time(score)
+    if delay_ms > 0:
+        sleep_ms(delay_ms)
+
+def clamp(value, lo, hi):
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
+
+def in_bounds(x, y, w=WIDTH, h=PLAY_HEIGHT):
+    return (0 <= x < w) and (0 <= y < h)
+
+def point_in_rect(px, py, rx, ry, rw, rh):
+    return (rx <= px < (rx + rw)) and (ry <= py < (ry + rh))
+
+def rects_overlap(ax, ay, aw, ah, bx, by, bw, bh):
+    return (ax < (bx + bw)) and (bx < (ax + aw)) and (ay < (by + bh)) and (by < (ay + ah))
+
+def draw_rect_outline(x1, y1, x2, y2, r, g, b):
+    draw_rectangle(x1, y1, x2, y1, r, g, b)
+    draw_rectangle(x1, y2, x2, y2, r, g, b)
+    draw_rectangle(x1, y1, x1, y2, r, g, b)
+    draw_rectangle(x2, y1, x2, y2, r, g, b)
+
 def begin_game(score=0):
     """Reset shared game-over state at the start of a playable game."""
     global game_over, global_score
@@ -652,6 +684,36 @@ JOYSTICK_UP_LEFT = "UP-LEFT"
 JOYSTICK_UP_RIGHT = "UP-RIGHT"
 JOYSTICK_DOWN_LEFT = "DOWN-LEFT"
 JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
+
+def direction_to_delta(direction, default_dx=0, default_dy=0):
+    if direction == JOYSTICK_UP:
+        return 0, -1
+    if direction == JOYSTICK_DOWN:
+        return 0, 1
+    if direction == JOYSTICK_LEFT:
+        return -1, 0
+    if direction == JOYSTICK_RIGHT:
+        return 1, 0
+    return default_dx, default_dy
+
+def direction_to_delta_8way(direction, default_dx=0, default_dy=0):
+    if direction == JOYSTICK_UP:
+        return 0, -1
+    if direction == JOYSTICK_DOWN:
+        return 0, 1
+    if direction == JOYSTICK_LEFT:
+        return -1, 0
+    if direction == JOYSTICK_RIGHT:
+        return 1, 0
+    if direction == JOYSTICK_UP_LEFT:
+        return -1, -1
+    if direction == JOYSTICK_UP_RIGHT:
+        return 1, -1
+    if direction == JOYSTICK_DOWN_LEFT:
+        return -1, 1
+    if direction == JOYSTICK_DOWN_RIGHT:
+        return 1, 1
+    return default_dx, default_dy
 
 # ---------- Fonts ----------
 # NOTE: On MicroPython, even defining large dicts at module level can trigger
@@ -1679,13 +1741,10 @@ class SnakeGame:
             body_positions = set(body)
         else:
             body_positions = body
-            
-        moves = {
-            JOYSTICK_UP: (hx, hy - 1),
-            JOYSTICK_DOWN: (hx, hy + 1),
-            JOYSTICK_LEFT: (hx - 1, hy),
-            JOYSTICK_RIGHT: (hx + 1, hy),
-        }
+        moves = {}
+        for d in (JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT):
+            dx, dy = direction_to_delta(d)
+            moves[d] = (hx + dx, hy + dy)
         
         safe_dirs = [d for d, p in moves.items() if p not in body_positions]
         if moves[self.snake_direction] in body_positions:
@@ -1697,14 +1756,9 @@ class SnakeGame:
 
     def update_snake_position(self):
         hx, hy = self.snake[0]
-        if self.snake_direction == JOYSTICK_UP:
-            hy -= 1
-        elif self.snake_direction == JOYSTICK_DOWN:
-            hy += 1
-        elif self.snake_direction == JOYSTICK_LEFT:
-            hx -= 1
-        elif self.snake_direction == JOYSTICK_RIGHT:
-            hx += 1
+        dx, dy = direction_to_delta(self.snake_direction)
+        hx += dx
+        hy += dy
 
         hx %= WIDTH
         hy %= PLAY_HEIGHT
@@ -1751,39 +1805,41 @@ class SnakeGame:
             r, g, b = hsb_to_rgb(hue, 1, 1)
             display.set_pixel(x, y, r, g, b)
 
+    def _step(self, joystick):
+        global game_over
+        c_button, _ = joystick.read_buttons()
+        if c_button or game_over:
+            return False
+
+        self.step_counter += 1
+        if self.step_counter % 1024 == 0:
+            self.place_green_target()
+        self.update_green_targets()
+
+        direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if direction:
+            self.snake_direction = direction
+
+        self.check_self_collision()
+        if game_over:
+            return False
+
+        self.update_snake_position()
+        self.check_target_collision()
+        self.check_green_target_collision()
+        self.draw_snake()
+
+        display_score_and_time(self.score)
+        return True
+
     def main_loop(self, joystick, mode="single"):
         global game_over
         game_over = False
         self.restart_game()
 
         while True:
-            c_button, _ = joystick.read_buttons()
-            if c_button:
+            if not self._step(joystick):
                 return
-            if game_over:
-                return
-
-            self.step_counter += 1
-
-            # Spawn green targets
-            if self.step_counter % 1024 == 0:
-                self.place_green_target()
-            self.update_green_targets()
-
-            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            if direction:
-                self.snake_direction = direction
-
-            self.check_self_collision()
-            if game_over:
-                return
-
-            self.update_snake_position()
-            self.check_target_collision()
-            self.check_green_target_collision()
-            self.draw_snake()
-
-            display_score_and_time(self.score)
 
             delay = 112 - max(10, self.snake_length // 3)
             if delay < 30:
@@ -1801,33 +1857,7 @@ class SnakeGame:
         self.restart_game()
 
         def loop_iteration():
-            global game_over
-            c_button, _ = joystick.read_buttons()
-            if c_button or game_over:
-                return False
-
-            self.step_counter += 1
-
-            # Spawn green targets
-            if self.step_counter % 1024 == 0:
-                self.place_green_target()
-            self.update_green_targets()
-
-            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
-            if direction:
-                self.snake_direction = direction
-
-            self.check_self_collision()
-            if game_over:
-                return False
-
-            self.update_snake_position()
-            self.check_target_collision()
-            self.check_green_target_collision()
-            self.draw_snake()
-
-            display_score_and_time(self.score)
-            return True
+            return self._step(joystick)
 
         await _run_game_loop_async(56, loop_iteration)
 
@@ -2102,7 +2132,7 @@ class BreakoutGame:
         by = int(self.ball_y)
         for brick in self.bricks:
             x, y = brick
-            if x <= bx < x + BRICK_WIDTH and y <= by < y + BRICK_HEIGHT:
+            if point_in_rect(bx, by, x, y, BRICK_WIDTH, BRICK_HEIGHT):
                 self.bricks.remove(brick)
                 self.ball_dy = -self.ball_dy
                 self.score += 10
@@ -2148,9 +2178,7 @@ class BreakoutGame:
             # win
             if not self.bricks:
                 global_score = self.score
-                display.clear()
-                draw_centered_text_lines(("YOU", "WON"), start_y=10, line_height=15)
-                sleep_ms(1500)
+                show_center_message(("YOU", "WON"), start_y=10, line_height=15, delay_ms=1500)
                 return
 
             sleep_ms(35)
@@ -2186,8 +2214,7 @@ class BreakoutGame:
             # win
             if not self.bricks:
                 global_score = self.score
-                display.clear()
-                draw_centered_text_lines(("YOU", "WON"), start_y=10, line_height=15)
+                show_center_message(("YOU", "WON"), start_y=10, line_height=15)
                 display_flush()
                 loop_iteration.won = True
                 return False
@@ -3179,13 +3206,11 @@ class MazeGame:
         if not d:
             return
 
-        nx, ny = self.player_x, self.player_y
-        if d == JOYSTICK_UP: ny -= 1
-        elif d == JOYSTICK_DOWN: ny += 1
-        elif d == JOYSTICK_LEFT: nx -= 1
-        elif d == JOYSTICK_RIGHT: nx += 1
+        dx, dy = direction_to_delta(d)
+        nx = self.player_x + dx
+        ny = self.player_y + dy
 
-        if not (0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT):
+        if not in_bounds(nx, ny):
             return
 
         v = get_grid_value(nx, ny)
@@ -3206,7 +3231,7 @@ class MazeGame:
             moves = []
             for dx, dy in [(0,-1),(0,1),(-1,0),(1,0)]:
                 nx, ny = ex + dx, ey + dy
-                if 0 <= nx < WIDTH and 0 <= ny < PLAY_HEIGHT and get_grid_value(nx, ny) == self.PATH:
+                if in_bounds(nx, ny) and get_grid_value(nx, ny) == self.PATH:
                     moves.append((nx, ny))
             set_grid_value(ex, ey, self.PATH)
             if moves:
@@ -3221,18 +3246,11 @@ class MazeGame:
             return
 
         # Compute delta from last movement direction (UP fallback).
-        dx = 0
-        dy = -1
-        if self.player_direction == JOYSTICK_DOWN:
-            dy = 1
-        elif self.player_direction == JOYSTICK_LEFT:
-            dx, dy = -1, 0
-        elif self.player_direction == JOYSTICK_RIGHT:
-            dx, dy = 1, 0
+        dx, dy = direction_to_delta(self.player_direction, 0, -1)
 
         sx = self.player_x + dx
         sy = self.player_y + dy
-        if not (0 <= sx < WIDTH and 0 <= sy < PLAY_HEIGHT):
+        if not in_bounds(sx, sy):
             return
 
         v = get_grid_value(sx, sy)
@@ -3253,7 +3271,7 @@ class MazeGame:
             p[1] += p[3]
             p[4] -= 1
 
-            if p[4] <= 0 or not (0 <= p[0] < WIDTH and 0 <= p[1] < PLAY_HEIGHT):
+            if p[4] <= 0 or not in_bounds(p[0], p[1]):
                 continue
 
             v = get_grid_value(p[0], p[1])
@@ -3310,9 +3328,7 @@ class MazeGame:
 
             if not self.enemies and not self.gems:
                 global_score = self.score
-                display.clear()
-                draw_centered_text_lines(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0)
-                sleep_ms(1500)
+                show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, delay_ms=1500)
                 return
 
             sleep_ms(90)
@@ -3360,9 +3376,7 @@ class MazeGame:
 
             if not self.enemies and not self.gems:
                 global_score = self.score
-                display.clear()
-                draw_centered_text_lines(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0)
-                sleep_ms(1500)  # Display win message
+                show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, delay_ms=1500)
                 return False
 
             return True
@@ -5178,10 +5192,7 @@ class PacmanGame:
                 # win?
                 if self.pellet_count <= 0:
                     global_score = self.score
-                    display.clear()
-                    draw_centered_text_lines(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0)
-                    display_score_and_time(global_score)
-                    sleep_ms(1300)
+                    show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score, delay_ms=1300)
                     return
 
                 global_score = self.score
@@ -5272,9 +5283,7 @@ class PacmanGame:
                 # win?
                 if self.pellet_count <= 0:
                     global_score = self.score
-                    display.clear()
-                    draw_centered_text_lines(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0)
-                    display_score_and_time(global_score)
+                    show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score)
                     await asyncio.sleep(1.3)
                     return
 
@@ -5351,9 +5360,7 @@ class CaveFlyGame:
         self.bx = self._clamp(mid, 1, WIDTH - 3)
 
     def _clamp(self, v, lo, hi):
-        if v < lo: return lo
-        if v > hi: return hi
-        return v
+        return clamp(v, lo, hi)
 
     def _idx_row(self, y):
         return (self.head + y) % PLAY_HEIGHT
@@ -6123,17 +6130,7 @@ class MonkeyBallLiteGame:
                 ]
             )
 
-            tx = 0
-            ty = 0
-            if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
-                tx = -1
-            elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
-                tx = 1
-
-            if d in (JOYSTICK_UP, JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT):
-                ty = -1
-            elif d in (JOYSTICK_DOWN, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT):
-                ty = 1
+            tx, ty = direction_to_delta_8way(d)
 
             acc = self.ACC_BOOST if z_button else self.ACC
 
@@ -6467,17 +6464,7 @@ class MonkeyBallLiteGame:
                 ]
             )
 
-            tx = 0
-            ty = 0
-            if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
-                tx = -1
-            elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
-                tx = 1
-
-            if d in (JOYSTICK_UP, JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT):
-                ty = -1
-            elif d in (JOYSTICK_DOWN, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT):
-                ty = 1
+            tx, ty = direction_to_delta_8way(d)
 
             acc = self.ACC_BOOST if z_button else self.ACC
 
@@ -6809,10 +6796,7 @@ class Game2048:
         col = self.COL_EMPTY if val == 0 else self.COL_VAL.get(val, (255, 255, 255))
         if self.draw_rectangle:
             self.draw_rectangle(x1, y1, x2, y2, *col)
-            self.draw_rectangle(x1, y1, x2, y1, *self.COL_FRAME)
-            self.draw_rectangle(x1, y2, x2, y2, *self.COL_FRAME)
-            self.draw_rectangle(x1, y1, x1, y2, *self.COL_FRAME)
-            self.draw_rectangle(x2, y1, x2, y2, *self.COL_FRAME)
+            draw_rect_outline(x1, y1, x2, y2, *self.COL_FRAME)
         if val:
             try:
                 # Represent tile values as single-character levels:
@@ -11083,13 +11067,14 @@ class UFODefenseGame:
                 ])
                 step = 1
                 if d and ticks_diff(now, self._last_cross_move) >= self.cross_move_ms:
-                    if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
+                    dx, dy = direction_to_delta_8way(d)
+                    if dx < 0:
                         self.cx = max(0, self.cx - step)
-                    elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
+                    elif dx > 0:
                         self.cx = min(WIDTH - 1, self.cx + step)
-                    if d in (JOYSTICK_UP, JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT):
+                    if dy < 0:
                         self.cy = max(0, self.cy - step)
-                    elif d in (JOYSTICK_DOWN, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT):
+                    elif dy > 0:
                         self.cy = min(PLAY_HEIGHT - 8, self.cy + step)
                     self._last_cross_move = now
 
@@ -11964,19 +11949,20 @@ class DoomLiteGame:
                 ], debounce=False)
 
                 # rotate
+                tx, ty = direction_to_delta_8way(d)
                 rot = 0
-                if d in (JOYSTICK_LEFT, JOYSTICK_UP_LEFT, JOYSTICK_DOWN_LEFT):
+                if tx < 0:
                     rot = 5
-                elif d in (JOYSTICK_RIGHT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_RIGHT):
+                elif tx > 0:
                     rot = -5
                 if rot:
                     self.ang = (self.ang + rot) & 255
 
                 # move
                 move = 0.0
-                if d in (JOYSTICK_UP, JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT):
+                if ty < 0:
                     move = 0.12
-                elif d in (JOYSTICK_DOWN, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT):
+                elif ty > 0:
                     move = -0.10
 
                 if move != 0.0:
