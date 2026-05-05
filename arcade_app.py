@@ -691,7 +691,7 @@ JOYSTICK_DOWN_LEFT = "DOWN-LEFT"
 JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 
 def direction_to_delta(direction, default_dx=0, default_dy=0):
-    """Map 4-way joystick direction constants to (dx, dy)."""
+    """Map 4-way joystick direction constants to (dx, dy), else return provided defaults."""
     if direction == JOYSTICK_UP:
         return 0, -1
     if direction == JOYSTICK_DOWN:
@@ -703,7 +703,7 @@ def direction_to_delta(direction, default_dx=0, default_dy=0):
     return default_dx, default_dy
 
 def direction_to_delta_8way(direction, default_dx=0, default_dy=0):
-    """Map 8-way joystick direction constants to (dx, dy)."""
+    """Map 8-way joystick direction constants to (dx, dy), else return provided defaults."""
     if direction == JOYSTICK_UP:
         return 0, -1
     if direction == JOYSTICK_DOWN:
@@ -1748,10 +1748,12 @@ class SnakeGame:
             body_positions = set(body)
         else:
             body_positions = body
-        moves = {}
-        for d in (JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT):
-            dx, dy = direction_to_delta(d)
-            moves[d] = (hx + dx, hy + dy)
+        moves = {
+            JOYSTICK_UP: (hx, hy - 1),
+            JOYSTICK_DOWN: (hx, hy + 1),
+            JOYSTICK_LEFT: (hx - 1, hy),
+            JOYSTICK_RIGHT: (hx + 1, hy),
+        }
         
         safe_dirs = [d for d, p in moves.items() if p not in body_positions]
         if moves[self.snake_direction] in body_positions:
