@@ -12,7 +12,10 @@ Browser (pygbag / WebAssembly)
     the xterm console pane inside the browser tab.
 """
 
+import os
 import sys
+
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 
 def _print_exception(exc):
@@ -47,13 +50,17 @@ async def main():
         import asyncio as _aio
         import pygame
         pygame.init()
-        _surf = pygame.display.set_mode((640, 640))
+        flags = 0
+        size = (640, 640)
+        if getattr(sys, "platform", "") == "emscripten":
+            flags = getattr(pygame, "SCALED", 0)
+            size = (64, 64)
+        _surf = pygame.display.set_mode(size, flags)
         pygame.display.set_caption("DIY Arcade Machine")
         _surf.fill((10, 0, 30))                        # dark purple
 
         pygame.display.flip()
         await _aio.sleep(0)          # yield so the browser renders this frame
-        print("pygame canvas OK")
     except Exception as e:
         print("pygame init warning:", e)
 

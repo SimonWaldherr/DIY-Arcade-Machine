@@ -14,6 +14,10 @@ try:
     import uos as _os
 except ImportError:
     import os as _os
+try:
+    _os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+except Exception:
+    pass
 
 # Low-resource defaults. Keep debug logging off unless explicitly changed here.
 DEBUG_BOOT_LOG = False
@@ -397,6 +401,7 @@ else:
             self._screen = None
             self._surface = None
             self._scaled_surface = None
+            self._web_scaled = bool(IS_WEB)
             self._inited = False
 
         def start(self):
@@ -410,7 +415,11 @@ else:
             if not pygame.get_init():
                 pygame.init()
             pygame.display.set_caption("DIY Arcade Machine")
+            flags = 0
             target = (self.w * self.scale, self.h * self.scale)
+            if self._web_scaled:
+                flags = getattr(pygame, "SCALED", 0)
+                target = (self.w, self.h)
             # Reuse an existing display surface of the same size so that a
             # loading screen set up by the bootstrap (main.py) is not destroyed
             # by a second pygame.display.set_mode() call (breaks pygbag canvas).
@@ -418,9 +427,13 @@ else:
             if existing is not None and existing.get_size() == target:
                 self._screen = existing
             else:
-                self._screen = pygame.display.set_mode(target)
-            self._surface = pygame.Surface((self.w, self.h))
-            self._scaled_surface = pygame.Surface(target)
+                self._screen = pygame.display.set_mode(target, flags)
+            if self._web_scaled:
+                self._surface = self._screen
+                self._scaled_surface = None
+            else:
+                self._surface = pygame.Surface((self.w, self.h))
+                self._scaled_surface = pygame.Surface(target)
             self.clear()
             self.show()
             self._inited = True
@@ -435,11 +448,29 @@ else:
             if self._surface:
                 self._surface.fill((0, 0, 0))
 
+        def fill_rect(self, x1, y1, x2, y2, r, g, b):
+            if not self._surface or not self._pg:
+                return
+            self._surface.fill(
+                (int(r) & 255, int(g) & 255, int(b) & 255),
+                self._pg.Rect(int(x1), int(y1), int(x2 - x1 + 1), int(y2 - y1 + 1)),
+            )
+
+        def blit_image(self, image):
+            if not self._surface or not self._pg:
+                return False
+            scaled = self._pg.transform.scale(image, (self.w, self.h))
+            self._surface.blit(scaled, (0, 0))
+            return True
+
         def show(self):
             if not self._pg or not self._screen or not self._surface:
                 return
             # keep window responsive
             self._pg.event.pump()
+            if self._web_scaled:
+                self._pg.display.flip()
+                return
             if self._scaled_surface is not None:
                 self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale), self._scaled_surface)
                 self._screen.blit(self._scaled_surface, (0, 0))
@@ -923,6 +954,13 @@ def draw_rectangle(x1, y1, x2, y2, r, g, b):
     if y1 < 0: y1 = 0
     if x2 >= WIDTH: x2 = WIDTH - 1
     if y2 >= HEIGHT: y2 = HEIGHT - 1
+    fill_rect = getattr(display, "fill_rect", None)
+    if fill_rect is not None and not USE_BUFFERED_DISPLAY:
+        try:
+            fill_rect(x1, y1, x2, y2, r, g, b)
+            return
+        except Exception:
+            pass
     sp = display.set_pixel
     for y in range(y1, y2 + 1):
         for x in range(x1, x2 + 1):
@@ -2838,9 +2876,9 @@ class TetrisGame:
       - Up / Z: rotate piece
       - C: return to menu
     """
-    GRID_WIDTH = const(16)
-    GRID_HEIGHT = const(13)
-    BLOCK_SIZE = const(4)
+    GRID_WIDTH = 16
+    GRID_HEIGHT = 13
+    BLOCK_SIZE = 4
 
     COLORS = (
         (0, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255),
@@ -3452,12 +3490,12 @@ class DodgeGame:
       - Z: kurzer Dash in die letzte Richtung
       - C: zurück ins Menü
     """
-    MAX_OBSTACLES = const(12)
-    START_SPAWN_MS = const(520)
+    MAX_OBSTACLES = 12
+    START_SPAWN_MS = 520
     FRAME_MS = 38
-    MIN_SPAWN_MS = const(160)
-    DIFFICULTY_SCORE_INTERVAL = const(6)
-    SPAWN_MS_DECREMENT = const(12)
+    MIN_SPAWN_MS = 160
+    DIFFICULTY_SCORE_INTERVAL = 6
+    SPAWN_MS_DECREMENT = 12
 
     def __init__(self):
         self.reset()
@@ -3592,11 +3630,11 @@ class InvaderGame:
       - Z: fire
       - C: return to menu
     """
-    FRAME_MS = const(38)
-    ALIEN_COLS = const(8)
-    ALIEN_ROWS = const(5)
-    SHIELD_W = const(9)
-    SHIELD_H = const(5)
+    FRAME_MS = 38
+    ALIEN_COLS = 8
+    ALIEN_ROWS = 5
+    SHIELD_W = 9
+    SHIELD_H = 5
 
     def __init__(self):
         self.reset()
@@ -3937,12 +3975,12 @@ class TronGame:
       - C: Back to menu
     """
     FRAME_MS = 62
-    TURBO_STEP = const(2)
-    HUE_STEP = const(7)
-    PALETTE_SIZE = const(128)
-    COLLECT_INTERVAL = const(120)
-    RESPAWN_MIN_CLEAR = const(5)
-    RESPAWN_TRIES = const(48)
+    TURBO_STEP = 2
+    HUE_STEP = 7
+    PALETTE_SIZE = 128
+    COLLECT_INTERVAL = 120
+    RESPAWN_MIN_CLEAR = 5
+    RESPAWN_TRIES = 48
 
     _PALETTE = None
 
@@ -5698,7 +5736,7 @@ class Game2048:
     """
 
     # 2048 visual and timing constants (class-scoped)
-    TILE_PX = const(12)
+    TILE_PX = 12
     COL_BG = (0, 0, 0)
     COL_EMPTY = (10, 10, 30)
     COL_FRAME = (0, 50, 120)
@@ -5719,9 +5757,9 @@ class Game2048:
         2048: (237, 194, 46),
     }
 
-    INPUT_MS = const(120)
-    MOVE_LOCK_MS = const(200)
-    A_LONG_MS = const(420)
+    INPUT_MS = 120
+    MOVE_LOCK_MS = 200
+    A_LONG_MS = 420
 
     def __init__(self, ctx=None):
         """Initialize the 2048 game wrapper and bind runtime helpers.
@@ -6148,21 +6186,21 @@ class LocoMotionGame:
     """
 
     # LocoMotion constants
-    RL_TILE = const(8)
-    RL_W = const(8)
-    RL_H = const(7)
+    RL_TILE = 8
+    RL_W = 8
+    RL_H = 7
     RL_PX_W = RL_W * RL_TILE
     RL_PX_H = RL_H * RL_TILE
 
-    N = const(1)
-    E = const(2)
-    S = const(4)
-    W = const(8)
+    N = 1
+    E = 2
+    S = 4
+    W = 8
 
-    TFLAG_NONE = const(0x00)
-    TFLAG_START = const(0x10)
-    TFLAG_END = const(0x20)
-    TFLAG_EMPTY = const(0x30)
+    TFLAG_NONE = 0x00
+    TFLAG_START = 0x10
+    TFLAG_END = 0x20
+    TFLAG_EMPTY = 0x30
 
     COL_BG = (0, 0, 0)
     COL_TILE_BG = (0, 0, 0)
@@ -6174,9 +6212,9 @@ class LocoMotionGame:
     COL_TRAIN = (255, 60, 60)
     COL_SHADOW = (40, 40, 40)
 
-    EDIT_INPUT_MS = const(120)
-    FRAME_MS_RUN = const(35)
-    Z_LONG_MS = const(420)
+    EDIT_INPUT_MS = 120
+    FRAME_MS_RUN = 35
+    Z_LONG_MS = 420
 
     SYM_BITS = {
         ord("."): 0,
@@ -7009,13 +7047,13 @@ class OthelloGame:
       - C: return to menu
     """
 
-    BOARD_SIZE = const(8)
-    CELL_SIZE = const(6)
+    BOARD_SIZE = 8
+    CELL_SIZE = 6
     BOARD_W = BOARD_SIZE * CELL_SIZE
     BOARD_H = BOARD_SIZE * CELL_SIZE
-    EMPTY = const(0)
-    P1 = const(1)
-    P2 = const(2)
+    EMPTY = 0
+    P1 = 1
+    P2 = 2
 
     def __init__(self, ctx=None):
         """Initialize Othello game and bind optional runtime helpers."""
@@ -7437,9 +7475,9 @@ class SokobanGame:
     """
 
     # --- Sokoban constants & levels (kept as class attributes) ---
-    SOK_TILE = const(4)
-    SOK_W = const(16)
-    SOK_H = const(14)
+    SOK_TILE = 4
+    SOK_W = 16
+    SOK_H = 14
 
     # Map encoding (bytes): '#' wall, '.' floor, 'G' goal, 'B' box,
     # '*' box on goal, 'P' player, '+' player on goal
@@ -8369,11 +8407,11 @@ class DemosGame:
     def __init__(self):
         # Additional hardware-demo effects implemented: MATRIX, STARS, MYSTIFY, PLASMA, CUBE, ORBIT, TUNNEL, WARP, BOUNCE.
         self.demos = (
-            ("SNAKE", "LIFE", "CUBE", "SPARK")
+            ("SNAKE", "LIFE", "CUBE", "SPARK", "RINGS")
             if CONFIG_LOW_RAM_MODE
             else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE",
                   "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE",
-                  "MATRIX", "STARS", "SPARK")
+                  "MATRIX", "STARS", "SPARK", "RINGS")
         )
         self.idx = 0
         self._init = False
@@ -8466,6 +8504,9 @@ class DemosGame:
 
         # SPARK
         self._spark_particles = []
+
+        # RINGS
+        self._rings_phase = 0
 
     def _life_step(self, w, h, cur, nxt):
         for y in range(h):
@@ -9485,6 +9526,33 @@ class DemosGame:
             if 0 <= tx < WIDTH and 0 <= ty < HEIGHT:
                 display.set_pixel(tx, ty, r // 3, g // 3, b // 3)
 
+    # --- RINGS ---
+    def _rings_init(self):
+        self._rings_phase = random.randint(0, 255)
+        display.clear()
+
+    def _rings_step(self):
+        display.clear()
+        self._rings_phase = (self._rings_phase + 3) & 255
+        phase = self._rings_phase
+        cx = WIDTH // 2 + int(math.sin(phase * 0.031) * 5)
+        cy = HEIGHT // 2 + int(math.cos(phase * 0.027) * 5)
+
+        for ring in range(7):
+            radius = 4 + ((phase // 3 + ring * 7) % 34)
+            hue = (phase * 3 + ring * 43) % 360
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            points = 18 + ring * 2
+            for i in range(points):
+                a = (i * 6.28318) / points
+                wobble = math.sin((phase + i * 17 + ring * 11) * 0.055) * 2.0
+                x = int(cx + math.cos(a) * (radius + wobble))
+                y = int(cy + math.sin(a) * (radius - wobble))
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    display.set_pixel(x, y, r, g, b)
+                    if ring < 4 and x + 1 < WIDTH:
+                        display.set_pixel(x + 1, y, r // 2, g // 2, b // 2)
+
     def _select_prev_next_demo(self, joystick):
         now = ticks_ms()
         if ticks_diff(now, self._last_move) <= self._move_delay:
@@ -9544,6 +9612,8 @@ class DemosGame:
             self._plasma_init()
         elif demo == "SPARK":
             self._spark_init()
+        elif demo == "RINGS":
+            self._rings_init()
         else:
             self._snake_init()
         self._init = True
@@ -9588,6 +9658,8 @@ class DemosGame:
             self._plasma_step()
         elif demo == "SPARK":
             self._spark_step()
+        elif demo == "RINGS":
+            self._rings_step()
         else:
             self._snake_step()
 
@@ -11439,8 +11511,9 @@ class StackerGame:
       - C: return to menu
     Stack each moving layer on top of the previous one. Missing overlap ends the run.
     """
-    FRAME_MS = const(35)
-    LAYER_H = const(3)
+    FRAME_MS = 45
+    LAYER_H = 3
+    OVERLAP_GRACE = 2
 
     def __init__(self):
         self.reset()
@@ -11448,7 +11521,7 @@ class StackerGame:
     def reset(self):
         self.locked = []  # (x, y, w, hue_index)
         self.score = 0
-        self.bar_w = 24
+        self.bar_w = 34
         self.bar_x = 0
         self.bar_y = PLAY_HEIGHT - self.LAYER_H
         self.dir = 1
@@ -11478,9 +11551,19 @@ class StackerGame:
     def _drop(self):
         ox = max(self.bar_x, self.prev_x)
         right = min(self.bar_x + self.bar_w, self.prev_x + self.prev_w)
+        if right <= ox and abs(right - ox) <= self.OVERLAP_GRACE:
+            if self.bar_x < self.prev_x:
+                ox = self.prev_x
+                right = min(self.prev_x + 2, self.prev_x + self.prev_w)
+            else:
+                right = self.prev_x + self.prev_w
+                ox = max(self.prev_x, right - 2)
         if right <= ox:
             set_game_over_score(self.score, won=False)
             return False
+        if right - ox < self.bar_w and (self.bar_w - (right - ox)) <= self.OVERLAP_GRACE:
+            ox = max(0, ox - 1)
+            right = min(WIDTH, right + 1)
         self.bar_x = ox
         self.bar_w = right - ox
         self.locked.append((self.bar_x, self.bar_y, self.bar_w, self.score))
@@ -11492,7 +11575,7 @@ class StackerGame:
             set_game_over_score(self.score + 50, won=True)
             return False
         self.bar_y -= self.LAYER_H
-        self.speed = 1 + min(4, self.score // 4)
+        self.speed = 1 + min(3, self.score // 6)
         if random.randint(0, 1):
             self.bar_x = 0
             self.dir = 1
@@ -11553,9 +11636,9 @@ class FroggerGame:
       - C: return to menu
     Cross traffic lanes. Each successful crossing makes the next level harder.
     """
-    FRAME_MS = const(48)
-    PLAYER_W = const(3)
-    PLAYER_H = const(3)
+    FRAME_MS = 48
+    PLAYER_W = 3
+    PLAYER_H = 3
 
     def __init__(self):
         self.reset()
@@ -11693,8 +11776,8 @@ class CatchGame:
       - C: return to menu
     Catch stars, avoid bombs, and do not miss too many stars.
     """
-    FRAME_MS = const(36)
-    MAX_DROPS = const(9)
+    FRAME_MS = 36
+    MAX_DROPS = 9
 
     def __init__(self):
         self.reset()
@@ -12063,8 +12146,48 @@ async def _show_intro():
     async def _yield():
         await yield_runtime(0)
 
+    def _intro_key_pressed():
+        if IS_MICROPYTHON:
+            return False
+        try:
+            import pygame  # type: ignore
+            pygame.event.pump()
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    return True
+                if event.type == pygame.QUIT:
+                    raise RestartProgram()
+            keys = pygame.key.get_pressed()
+            for key in (
+                pygame.K_SPACE, pygame.K_RETURN, pygame.K_ESCAPE,
+                pygame.K_z, pygame.K_x,
+                pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT,
+            ):
+                if keys[key]:
+                    return True
+        except RestartProgram:
+            raise
+        except Exception:
+            pass
+        return False
+
+    def _intro_skip_requested(joystick=None):
+        if _intro_key_pressed():
+            return True
+        if joystick is not None:
+            try:
+                c_btn, z_btn = joystick.read_buttons()
+                if c_btn or z_btn:
+                    return True
+            except RestartProgram:
+                raise
+            except Exception:
+                pass
+        return False
+
     display.clear()
     shown = False
+    joystick = None if IS_MICROPYTHON else Joystick()
     if not IS_MICROPYTHON:
         try:
             import pygame  # type: ignore
@@ -12083,13 +12206,20 @@ async def _show_intro():
                 except Exception:
                     pass
             if img is not None:
-                img = pygame.transform.scale(img, (WIDTH, HEIGHT))
-                for y in range(HEIGHT):
-                    for x in range(WIDTH):
-                        c = img.get_at((x, y))
-                        display.set_pixel(x, y, c[0], c[1], c[2])
+                blit_image = getattr(display, "blit_image", None)
+                if blit_image is None or not blit_image(img):
+                    img = pygame.transform.scale(img, (WIDTH, HEIGHT))
+                    for y in range(HEIGHT):
+                        for x in range(WIDTH):
+                            c = img.get_at((x, y))
+                            display.set_pixel(x, y, c[0], c[1], c[2])
                 display_flush()
                 await _yield()
+                if _intro_skip_requested(joystick):
+                    display.clear()
+                    display_flush()
+                    await _yield()
+                    return
                 shown = True
         except Exception:
             pass
@@ -12120,6 +12250,11 @@ async def _show_intro():
                 display_flush()
                 await _yield()
                 await sleep_ms_async(30)
+                if _intro_skip_requested(joystick):
+                    display.clear()
+                    display_flush()
+                    await _yield()
+                    return
                 try:
                     maybe_collect(120)
                 except Exception:
@@ -12143,15 +12278,10 @@ async def _show_intro():
         return
 
     # Keep desktop/web startup interruptible.
-    joystick = Joystick()
     deadline = ticks_ms() + (250 if IS_MICROPYTHON else 3000)
     while ticks_diff(deadline, ticks_ms()) > 0:
-        try:
-            c_btn, z_btn = joystick.read_buttons()
-        except RestartProgram:
-            break
-        if c_btn or z_btn:
-            if not IS_MICROPYTHON:
+        if _intro_skip_requested(joystick):
+            if joystick is not None:
                 _wait_for_primary_release(joystick, timeout_ms=500)
             break
         await _yield()

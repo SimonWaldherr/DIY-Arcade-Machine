@@ -74,6 +74,8 @@ web: web-build
 
 # Safari-compatible server: serves build/web/ with Cross-Origin-Isolation
 # headers so SharedArrayBuffer (needed by pygbag's WASM timing) works in Safari.
+# Uses COEP credentialless because pygbag may load runtime files from the
+# pygame-web CDN, which does not consistently provide CORP headers.
 # Run `make web` first to build, then `make web-safari` to serve.
 web-safari: web-install
 	@if [ ! -f build/web/index.html ]; then \
