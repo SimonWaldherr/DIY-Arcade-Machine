@@ -174,13 +174,13 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes **25 games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
+The arcade includes **26 games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
 | Game ID | Name | Description |
 |---------|------|-------------|
-| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Plasma, Cube, Orbit, Warp, Bounce, Tunnel, Matrix, Fire |
+| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Cube, Spark, Plasma, Orbit, Warp, Bounce, Tunnel, Matrix, Fire |
 | `2048` | 2048 | Sliding tile puzzle with merge scoring |
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
@@ -201,6 +201,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
+| `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `SOKO` | Sokoban | Crate-pushing puzzle levels |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |

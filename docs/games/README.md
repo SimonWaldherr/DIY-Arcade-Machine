@@ -33,6 +33,7 @@ Each file combines gameplay notes with technical descriptions in two views:
 | `RTYPE` | R-Type Shooter | [RTYPE.md](./RTYPE.md) |
 | `SIMON` | Simon Says | [SIMON.md](./SIMON.md) |
 | `SNAKE` | Snake | [SNAKE.md](./SNAKE.md) |
+| `STACK` | Stacker | [STACK.md](./STACK.md) |
 | `SOKO` | Sokoban | [SOKO.md](./SOKO.md) |
 | `TETRIS` | Tetris | [TETRIS.md](./TETRIS.md) |
 | `TRON` | Tron Lightcycle | [TRON.md](./TRON.md) |
