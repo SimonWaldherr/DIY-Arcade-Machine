@@ -4,6 +4,10 @@ PORT ?= 8000
 WEB_TEMPLATE ?= web/default.tmpl
 WEB_TITLE ?= DIY Arcade Machine
 WEB_SRC ?= build/DIY-Arcade-Machine
+WEB_CDN ?= ./archives/0.9/
+WEB_ARCHIVES_URL ?= https://github.com/pygame-web/archives/archive/refs/heads/main.zip
+WEB_ARCHIVES_ZIP ?= build/pygame-web-archives.zip
+WEB_ARCHIVES_SRC ?= build/pygame-web-archives-main/archives-main/0.9
 
 # Default behavior is to show help
 .PHONY: all help run upload build clean clean-all install web-install web-build web web-safari
@@ -55,15 +59,28 @@ web-install: install
 #                      Use `make web-safari` which starts a wrapper server
 #                      that injects the required headers.
 # Build the WebAssembly version into build/web/.
-# Keep a local template so pygbag does not retry forever when the CDN template
-# cannot be reached during a local build.
-web-build: web-install
+# Keep a local template and download the pygbag runtime during builds so the
+# deployed app does not depend on cross-origin assets at runtime.
+web-runtime:
+	@mkdir -p build/pygame-web-archives-main
+	@if [ ! -f "$(WEB_ARCHIVES_ZIP)" ]; then \
+		echo "Downloading pygbag runtime archive..."; \
+		curl -L "$(WEB_ARCHIVES_URL)" -o "$(WEB_ARCHIVES_ZIP)"; \
+	fi
+	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ]; then \
+		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/0.9/*' -d build/pygame-web-archives-main; \
+	fi
+
+web-build: web-install web-runtime
 	@echo "Building WebAssembly version..."
 	rm -rf $(WEB_SRC)
 	mkdir -p $(WEB_SRC)
 	cp main.py arcade_app.py logo.png $(WEB_SRC)/
 	@if [ -f highscores.json ]; then cp highscores.json $(WEB_SRC)/; fi
-	PYTHONUNBUFFERED=1 .venv/bin/python -m pygbag --ume_block 0 --width 640 --height 640 --title "$(WEB_TITLE)" --icon logo.png --template $(abspath $(WEB_TEMPLATE)) --build $(WEB_SRC)
+	PYTHONUNBUFFERED=1 .venv/bin/python -m pygbag --ume_block 0 --width 640 --height 640 --title "$(WEB_TITLE)" --icon logo.png --cdn "$(WEB_CDN)" --template $(abspath $(WEB_TEMPLATE)) --build $(WEB_SRC)
+	cp web/coi-serviceworker.js $(WEB_SRC)/build/web/
+	mkdir -p $(WEB_SRC)/build/web/archives
+	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
 	rm -rf build/web
 	cp -R $(WEB_SRC)/build/web build/web
 
@@ -74,8 +91,8 @@ web: web-build
 
 # Safari-compatible server: serves build/web/ with Cross-Origin-Isolation
 # headers so SharedArrayBuffer (needed by pygbag's WASM timing) works in Safari.
-# Uses COEP credentialless because pygbag may load runtime files from the
-# pygame-web CDN, which does not consistently provide CORP headers.
+# Uses COEP credentialless to match the static GitHub Pages service-worker
+# behavior; pygbag runtime files are served from build/web/archives.
 # Run `make web` first to build, then `make web-safari` to serve.
 web-safari: web-install
 	@if [ ! -f build/web/index.html ]; then \
