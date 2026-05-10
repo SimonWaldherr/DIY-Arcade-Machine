@@ -1351,7 +1351,7 @@ if IS_MICROPYTHON:
             _, z = self.read_buttons()
             return z
 else:
-    _KEY_LATCH_MS = 180
+    _KEY_LATCH_MS = 90
 
     class Nunchuck:
         # Desktop keyboard input emulating the nunchuck API.
@@ -8452,6 +8452,348 @@ class BejeweledGame:
             await asyncio.sleep(0.008)
 
 
+class CpuPlayerJoystick:
+    """State-aware CPU controls for game attract demos."""
+    def __init__(self, real_joystick, game_name, game, duration_ms=9000):
+        self.real = real_joystick
+        self.name = game_name
+        self.game = game
+        self.end_ms = ticks_ms() + duration_ms
+        self._dir = None
+        self._z = False
+        self._last = 0
+        self._pulse_until = 0
+        self._script_i = 0
+
+    def _exit_requested(self):
+        c, z = self.real.read_buttons()
+        if c or z or ticks_diff(ticks_ms(), self.end_ms) >= 0:
+            return True
+        d = self.real.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN])
+        return d is not None
+
+    def _toward_x(self, x, target, dead=1):
+        if x < target - dead:
+            return JOYSTICK_RIGHT
+        if x > target + dead:
+            return JOYSTICK_LEFT
+        return None
+
+    def _toward_y(self, y, target, dead=1):
+        if y < target - dead:
+            return JOYSTICK_DOWN
+        if y > target + dead:
+            return JOYSTICK_UP
+        return None
+
+    def _pulse_z(self, ms=90):
+        self._pulse_until = ticks_ms() + ms
+
+    def _choose_2048_dir(self, g):
+        dir_tokens = (JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT)
+        best_dir = JOYSTICK_DOWN
+        best_score = -999999
+        old_grid = list(g.grid)
+        old_score = g.score
+        old_moves = g.moves
+        old_max = g.max_val
+        old_victory = g.victory
+        for idx, token in enumerate(dir_tokens):
+            g.grid = list(old_grid)
+            g.score = old_score
+            g.moves = old_moves
+            g.max_val = old_max
+            g.victory = old_victory
+            if not g._move(idx):
+                continue
+            empty = 0
+            merge = 0
+            smooth = 0
+            for y in range(g.GRID_H):
+                for x in range(g.GRID_W):
+                    v = g.grid[g._idx(x, y)]
+                    if not v:
+                        empty += 1
+                        continue
+                    if x + 1 < g.GRID_W:
+                        nv = g.grid[g._idx(x + 1, y)]
+                        if nv == v:
+                            merge += v
+                        elif nv:
+                            smooth -= abs(v - nv) // 2
+                    if y + 1 < g.GRID_H:
+                        nv = g.grid[g._idx(x, y + 1)]
+                        if nv == v:
+                            merge += v
+                        elif nv:
+                            smooth -= abs(v - nv) // 2
+            corner = max(g.grid[g._idx(0, g.GRID_H - 1)], g.grid[g._idx(g.GRID_W - 1, g.GRID_H - 1)])
+            score = empty * 900 + merge * 6 + corner * 3 + smooth + (60 if token in (JOYSTICK_DOWN, JOYSTICK_LEFT) else 0)
+            if score > best_score:
+                best_score = score
+                best_dir = token
+        g.grid = old_grid
+        g.score = old_score
+        g.moves = old_moves
+        g.max_val = old_max
+        g.victory = old_victory
+        return best_dir
+
+    def _choose_tetris_dir(self, g):
+        piece = g.current
+        best_x = piece.x
+        best_rot = piece.shape
+        best_score = -999999
+        rotations = []
+        shape = piece.shape
+        for _ in range(4):
+            if shape not in rotations:
+                rotations.append(shape)
+            shape = tuple(tuple(row) for row in zip(*shape[::-1]))
+        old_shape = piece.shape
+        for shape in rotations:
+            width = len(shape[0])
+            for x in range(0, g.GRID_WIDTH - width + 1):
+                y = piece.y
+                while g.valid(piece, dx=x - piece.x, dy=(y + 1) - piece.y, rotated_shape=shape):
+                    y += 1
+                landing = y
+                holes = 0
+                heights = [0] * g.GRID_WIDTH
+                tmp = bytearray(g.locked)
+                for yy, row in enumerate(shape):
+                    for xx, cell in enumerate(row):
+                        if cell and 0 <= landing + yy < g.GRID_HEIGHT:
+                            tmp[(landing + yy) * g.GRID_WIDTH + x + xx] = 1
+                for cx in range(g.GRID_WIDTH):
+                    seen = False
+                    for cy in range(g.GRID_HEIGHT):
+                        if tmp[cy * g.GRID_WIDTH + cx]:
+                            if not seen:
+                                heights[cx] = g.GRID_HEIGHT - cy
+                            seen = True
+                        elif seen:
+                            holes += 1
+                bump = 0
+                for i in range(g.GRID_WIDTH - 1):
+                    bump += abs(heights[i] - heights[i + 1])
+                score = landing * 12 - holes * 80 - bump * 5 - max(heights) * 2
+                if score > best_score:
+                    best_score = score
+                    best_x = x
+                    best_rot = shape
+        if old_shape != best_rot:
+            self._pulse_z(80)
+            return None
+        if piece.x < best_x:
+            return JOYSTICK_RIGHT
+        if piece.x > best_x:
+            return JOYSTICK_LEFT
+        return JOYSTICK_DOWN
+
+    def _safe_frogger_dir(self, g):
+        moves = (JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT, None)
+        best = None
+        best_score = -99999
+        for d in moves:
+            dx, dy = direction_to_delta(d) if d else (0, 0)
+            px = clamp(g.player_x + dx * 4, 0, WIDTH - g.PLAYER_W)
+            py = clamp(g.player_y + dy * 4, 0, PLAY_HEIGHT - g.PLAYER_H)
+            risk = 0
+            for lane in g.lanes:
+                y = lane[0]
+                for car in lane[2]:
+                    cx = int(car[0] + lane[1] * 4)
+                    if rects_overlap(px, py, g.PLAYER_W, g.PLAYER_H, cx - 1, y, int(car[1]) + 2, 3):
+                        risk += 1000
+            score = (PLAY_HEIGHT - py) * 10 - risk - abs(px - WIDTH // 2)
+            if score > best_score:
+                best_score = score
+                best = d
+        return best
+
+    def _compute(self):
+        now = ticks_ms()
+        if ticks_diff(now, self._last) < 55:
+            self._z = ticks_diff(self._pulse_until, now) > 0
+            return
+        self._last = now
+        g = self.game
+        n = self.name
+        d = None
+
+        if hasattr(g, "ball_x") and hasattr(g, "paddle_x"):
+            target = float(g.ball_x)
+            if getattr(g, "ball_dy", 0) > 0:
+                target = float(g.ball_x)
+                vx = float(getattr(g, "ball_dx", 0))
+                vy = float(getattr(g, "ball_dy", 1))
+                y = float(g.ball_y)
+                while y < g.paddle_y and 0 <= target <= WIDTH - 2:
+                    target += vx
+                    y += vy
+                    if target <= 0 or target >= WIDTH - 2:
+                        vx = -vx
+            else:
+                bricks = getattr(g, "bricks", None)
+                if bricks:
+                    target = min(bricks, key=lambda b: abs((b[0] + BRICK_WIDTH // 2) - g.ball_x))[0] + BRICK_WIDTH // 2
+            d = self._toward_x(g.paddle_x + PADDLE_WIDTH // 2, int(target), 1)
+        elif hasattr(g, "ball_position") and hasattr(g, "left_paddle_y"):
+            target = int(g.ball_position[1])
+            if g.ball_speed[0] < 0:
+                y = float(g.ball_position[1])
+                vy = float(g.ball_speed[1])
+                x = float(g.ball_position[0])
+                while x > g.left_paddle_x + 1:
+                    x += g.ball_speed[0]
+                    y += vy
+                    if y <= 0 or y >= PLAY_HEIGHT - 1:
+                        vy = -vy
+                        y = clamp(y, 0, PLAY_HEIGHT - 1)
+                target = int(y)
+            d = self._toward_y(g.left_paddle_y + g.paddle_height // 2, target, 1)
+        elif n == "STACK" and hasattr(g, "bar_x"):
+            target = getattr(g, "prev_x", 0)
+            if abs(g.bar_x - target) <= max(1, getattr(g, "speed", 1)):
+                self._pulse_z(80)
+        elif n == "CATCH" and hasattr(g, "drops"):
+            target = WIDTH // 2
+            best_score = -99999
+            for drop in g.drops:
+                x, y, _speed, is_bomb = drop[:4]
+                center = g.basket_x + g.basket_w // 2
+                eta = max(1, (PLAY_HEIGHT - y) // max(1, _speed))
+                score = y * 4 - abs(center - x) * 3 - eta
+                if is_bomb and y > PLAY_HEIGHT - 18 and abs(center - x) < 10:
+                    target = 0 if x > WIDTH // 2 else WIDTH - 1
+                    best_score = 99999
+                    break
+                if (not is_bomb) and score > best_score:
+                    target = x
+                    best_score = score
+            d = self._toward_x(g.basket_x + g.basket_w // 2, target, 2)
+            self._z = abs((g.basket_x + g.basket_w // 2) - target) > 12
+            return
+        elif n == "DODGE" and hasattr(g, "obstacles"):
+            px = int(g.player_x) + 1
+            best_x = px
+            best_score = -99999
+            for cand in range(2, WIDTH - 2, 3):
+                score = -abs(cand - WIDTH // 2)
+                for o in g.obstacles:
+                    ox, oy, ow, oh = int(o[0] + o[4] * 5), int(o[1] + o[5] * 5), int(o[2]), int(o[3])
+                    if oy > PLAY_HEIGHT - 26 and ox - 4 <= cand <= ox + ow + 4:
+                        score -= 1000 + oy
+                if score > best_score:
+                    best_score = score
+                    best_x = cand
+            d = self._toward_x(px, best_x, 1)
+            self._z = abs(px - best_x) > 10
+            return
+        elif n == "FLAPPY" and hasattr(g, "pipes"):
+            target = PLAY_HEIGHT // 2
+            for p in g.pipes:
+                if p["x"] + g.pipe_w >= g.bx - 1:
+                    target = p["gy"] - 2
+                    break
+            if g.by + max(0, g.vy) > target:
+                self._pulse_z(80)
+            d = JOYSTICK_UP if ticks_diff(self._pulse_until, now) > 0 else None
+        elif n == "FROGGR" and hasattr(g, "lanes"):
+            d = self._safe_frogger_dir(g)
+        elif n == "INVADR" and hasattr(g, "aliens"):
+            live = [a for a in g.aliens if a[2]]
+            bottom = []
+            for a in live:
+                col = (a[0] - 1) // 7
+                if not any(o[2] and ((o[0] - 1) // 7) == col and o[1] > a[1] for o in live):
+                    bottom.append(a)
+            target = min(bottom or live, key=lambda a: abs((a[0] + 2) - g.player_x))[0] + 2 if live else WIDTH // 2
+            for bomb in getattr(g, "bombs", []):
+                if bomb[1] > PLAY_HEIGHT - 18 and abs(bomb[0] - g.player_x) < 5:
+                    target = 2 if g.player_x > WIDTH // 2 else WIDTH - 3
+            d = self._toward_x(g.player_x, target, 1)
+            if abs(g.player_x - target) <= 2 and g.bullet is None:
+                self._pulse_z(80)
+        elif n == "ASTRD" and hasattr(g, "asteroids"):
+            if g.asteroids:
+                ship = g.ship
+                a = min(g.asteroids, key=lambda aa: (aa.x - ship.x) ** 2 + (aa.y - ship.y) ** 2)
+                target = (math.degrees(math.atan2(-(a.y - ship.y), a.x - ship.x)) + 360) % 360
+                delta = ((target - ship.angle + 180) % 360) - 180
+                if abs(delta) < 18:
+                    self._pulse_z(90)
+                    d = JOYSTICK_UP
+                elif delta > 0:
+                    d = JOYSTICK_LEFT
+                else:
+                    d = JOYSTICK_RIGHT
+        elif n == "TRON" and hasattr(g, "_clear_distance_from"):
+            cur = g.direction
+            left = g._LEFT_TURN[cur]
+            right = g._RIGHT_TURN[cur]
+            options = ((g._clear_distance_from(g.head_x, g.head_y, cur), None),
+                       (g._clear_distance_from(g.head_x, g.head_y, left), JOYSTICK_LEFT),
+                       (g._clear_distance_from(g.head_x, g.head_y, right), JOYSTICK_RIGHT))
+            d = max(options, key=lambda item: item[0])[1]
+        elif n == "DOOMLT" and hasattr(g, "enemies"):
+            alive = [e for e in g.enemies if e[2] > 0]
+            if alive:
+                e = min(alive, key=lambda ee: (ee[0] - g.px) ** 2 + (ee[1] - g.py) ** 2)
+                target = g._angle_to_units(e[0] - g.px, e[1] - g.py)
+                delta = g._angle_delta(target, g.ang)
+                if abs(delta) <= 5:
+                    self._pulse_z(90)
+                    d = JOYSTICK_UP
+                else:
+                    d = JOYSTICK_LEFT if delta > 0 else JOYSTICK_RIGHT
+            else:
+                d = JOYSTICK_UP
+        elif n == "2048" and hasattr(g, "grid"):
+            # Keep the board biased toward one corner, the standard simple 2048 CPU.
+            d = self._choose_2048_dir(g)
+        elif n == "TETRIS" and hasattr(g, "current"):
+            d = self._choose_tetris_dir(g)
+        elif hasattr(g, "cur_x") and hasattr(g, "cur_y"):
+            script = (JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_UP)
+            self._script_i = (self._script_i + 1) & 31
+            d = script[(self._script_i >> 3) & 3]
+            if (self._script_i & 15) == 0:
+                self._pulse_z(70)
+        elif hasattr(g, "px") and hasattr(g, "py") and hasattr(g, "_try_move"):
+            # Sokoban-like previews: walk the level and occasionally push/undo.
+            script = (JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_UP)
+            self._script_i = (self._script_i + 1) & 31
+            d = script[(self._script_i >> 3) & 3]
+        else:
+            script = (JOYSTICK_LEFT, JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_DOWN)
+            self._script_i = (self._script_i + 1) & 31
+            d = script[(self._script_i >> 3) & 3]
+            if (self._script_i & 7) == 0:
+                self._pulse_z(70)
+
+        self._dir = d
+        self._z = ticks_diff(self._pulse_until, now) > 0
+
+    def read_buttons(self):
+        if self._exit_requested():
+            return True, False
+        self._compute()
+        return False, self._z
+
+    def read_direction(self, possible_directions, debounce=True):
+        if self._exit_requested():
+            return None
+        self._compute()
+        if self._dir in possible_directions:
+            return self._dir
+        return None
+
+    def is_pressed(self):
+        return self.read_buttons()[1]
+
+
 class DemosGame:
     """
     DEMOS
@@ -8459,9 +8801,45 @@ class DemosGame:
       - Left / Right: switch demo
       - C: return to menu
     """
+    GAME_DEMOS = (
+        "2048", "ASTRD", "BEJWL", "BRKOUT", "CAVEFL", "CATCH", "DODGE",
+        "DOOMLT", "FLAPPY", "FROGGR", "INVADR", "LANDER", "LOCO", "MAZE",
+        "PACMAN", "PITFAL", "PONG", "QIX", "REVRS", "RTYPE", "SIMON",
+        "SNAKE", "STACK", "SOKO", "TETRIS", "TRON", "UFODEF",
+    )
+    GAME_CLASS_NAMES = {
+        "2048": "Game2048",
+        "ASTRD": "AsteroidGame",
+        "BEJWL": "BejeweledGame",
+        "BRKOUT": "BreakoutGame",
+        "CAVEFL": "CaveFlyGame",
+        "CATCH": "CatchGame",
+        "DODGE": "DodgeGame",
+        "DOOMLT": "DoomLiteGame",
+        "FLAPPY": "FlappyGame",
+        "FROGGR": "FroggerGame",
+        "INVADR": "InvaderGame",
+        "LANDER": "LunarLanderGame",
+        "LOCO": "LocoMotionGame",
+        "MAZE": "MazeGame",
+        "PACMAN": "PacmanGame",
+        "PITFAL": "PitfallGame",
+        "PONG": "PongGame",
+        "QIX": "QixGame",
+        "REVRS": "OthelloGame",
+        "RTYPE": "RTypeGame",
+        "SIMON": "SimonGame",
+        "SNAKE": "SnakeGame",
+        "STACK": "StackerGame",
+        "SOKO": "SokobanGame",
+        "TETRIS": "TetrisGame",
+        "TRON": "TronGame",
+        "UFODEF": "UFODefenseGame",
+    }
+
     def __init__(self):
         # Additional hardware-demo effects implemented: MATRIX, STARS, MYSTIFY, PLASMA, CUBE, ORBIT, TUNNEL, WARP, BOUNCE.
-        self.demos = (
+        effects = (
             ("SNAKE", "LIFE", "CUBE", "SPARK", "RINGS")
             if CONFIG_LOW_RAM_MODE
             else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE",
@@ -8469,10 +8847,12 @@ class DemosGame:
                   "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
                   "BOIDS", "NBODY", "CRT", "WINMAZE")
         )
+        self.demos = tuple("G:" + name for name in self.GAME_DEMOS) + effects
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
         self._move_delay = 180
+        self._game_demo_wait_ms = 850
         self._reset_demo_state()
 
     def _reset_demo_state(self):
@@ -8587,6 +8967,9 @@ class DemosGame:
         self._winmaze_dir = 0
         self._winmaze_target_ang = 0
         self._winmaze_path_phase = 0
+
+        self._game_demo_name = None
+        self._game_demo_selected_ms = 0
 
     def _life_step(self, w, h, cur, nxt):
         for y in range(h):
@@ -10048,6 +10431,90 @@ class DemosGame:
             pass
         self._last_move = now
 
+    def _game_demo_class(self, name):
+        cls_name = self.GAME_CLASS_NAMES.get(name)
+        if not cls_name:
+            return None
+        return globals().get(cls_name)
+
+    def _draw_game_demo_card(self, name):
+        display.clear()
+        draw_text(2, 10, name, 255, 255, 255)
+        draw_text_small(2, 26, "CPU PLAYER", 120, 220, 255)
+        draw_text_small(2, 36, "LR SELECT", 140, 140, 140)
+        draw_text_small(2, 46, "C BACK", 140, 140, 140)
+        display_score_and_time(0)
+
+    def _handle_game_demo_entry(self, name, joystick):
+        now = ticks_ms()
+        if self._game_demo_name != name:
+            self._game_demo_name = name
+            self._game_demo_selected_ms = now
+            self._draw_game_demo_card(name)
+            return False
+        if ticks_diff(now, self._game_demo_selected_ms) < self._game_demo_wait_ms:
+            return False
+        self._run_game_demo_sync(name, joystick)
+        self.idx = (self.idx + 1) % len(self.demos)
+        self._reset_demo_state()
+        return True
+
+    async def _handle_game_demo_entry_async(self, name, joystick):
+        now = ticks_ms()
+        if self._game_demo_name != name:
+            self._game_demo_name = name
+            self._game_demo_selected_ms = now
+            self._draw_game_demo_card(name)
+            try:
+                display_flush()
+            except Exception:
+                pass
+            return False
+        if ticks_diff(now, self._game_demo_selected_ms) < self._game_demo_wait_ms:
+            return False
+        await self._run_game_demo_async(name, joystick)
+        self.idx = (self.idx + 1) % len(self.demos)
+        self._reset_demo_state()
+        return True
+
+    def _run_game_demo_sync(self, name, joystick):
+        cls = self._game_demo_class(name)
+        if cls is None:
+            return
+        game = cls()
+        cpu = CpuPlayerJoystick(joystick, name, game)
+        try:
+            game.main_loop(cpu)
+        except RestartProgram:
+            raise
+        except Exception:
+            reset_menu_display(0)
+        finally:
+            self._reset_demo_state()
+            display.clear()
+            _wait_for_primary_release(joystick, timeout_ms=500)
+
+    async def _run_game_demo_async(self, name, joystick):
+        cls = self._game_demo_class(name)
+        if cls is None:
+            return
+        game = cls()
+        cpu = CpuPlayerJoystick(joystick, name, game)
+        try:
+            if hasattr(game, "main_loop_async"):
+                await game.main_loop_async(cpu)
+            else:
+                game.main_loop(cpu)
+        except RestartProgram:
+            raise
+        except Exception:
+            reset_menu_display(0)
+        finally:
+            self._reset_demo_state()
+            display.clear()
+            await _wait_for_primary_release_async(joystick, timeout_ms=500)
+            await yield_runtime(0)
+
     def _ensure_demo_initialized(self, demo):
         if self._init:
             return
@@ -10178,6 +10645,12 @@ class DemosGame:
                 return
 
             self._select_prev_next_demo(joystick)
+            demo = self.demos[self.idx]
+            if demo.startswith("G:"):
+                self._handle_game_demo_entry(demo[2:], joystick)
+                last_frame = ticks_ms()
+                sleep_ms(10)
+                continue
 
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
@@ -10203,6 +10676,12 @@ class DemosGame:
                 return
 
             self._select_prev_next_demo(joystick)
+            demo = self.demos[self.idx]
+            if demo.startswith("G:"):
+                await self._handle_game_demo_entry_async(demo[2:], joystick)
+                last_frame = ticks_ms()
+                await asyncio.sleep(0.010)
+                continue
 
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
