@@ -145,7 +145,15 @@ asyncio.run(custom_site())
 // END BLOCK
 
 config = {
-    xtermjs: "{{cookiecutter.xtermjs}}",
+    xtermjs: (() => {
+        const defaultXtermPath = "vt/xterm.js";
+        const xtermPath = "{{cookiecutter.xtermjs}}".replace(/^\.\//, "");
+        const archivesAndVersionSegmentCount = 2;
+        if (!xtermPath) return defaultXtermPath;
+        const segments = xtermPath.split("/");
+        if (segments.length > archivesAndVersionSegmentCount && segments[0] === "archives") return segments.slice(archivesAndVersionSegmentCount).join("/");
+        return xtermPath;
+    })(),
     _sdl2: "canvas",
     user_canvas: 0,
     user_canvas_managed: 0,
