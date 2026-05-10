@@ -70,6 +70,7 @@ web-runtime:
 	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ]; then \
 		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/0.9/*' -d build/pygame-web-archives-main; \
 	fi
+	find "$(WEB_ARCHIVES_SRC)" -type f -name '*.js' -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$$}' {} +
 
 web-build: web-install web-runtime
 	@echo "Building WebAssembly version..."

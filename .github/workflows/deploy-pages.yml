@@ -33,6 +33,7 @@ jobs:
         run: |
           curl -L https://github.com/pygame-web/archives/archive/refs/heads/main.zip -o pygame-web-archives.zip
           unzip -q pygame-web-archives.zip 'archives-main/0.9/*'
+          find archives-main/0.9 -type f -name '*.js' -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
 
       - name: Build with pygbag
         run: |
@@ -53,6 +54,11 @@ jobs:
           cp web/coi-serviceworker.js dist/
           mkdir -p dist/archives
           cp -R archives-main/0.9 dist/archives/
+          test -f dist/archives/0.9/pythons.js
+          test -f dist/archives/0.9/browserfs.min.js
+          test -f dist/archives/0.9/vt/xterm.js
+          test -f dist/archives/0.9/vt/xterm-addon-image.js
+          test -f dist/archives/0.9/vt/xterm.css
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
