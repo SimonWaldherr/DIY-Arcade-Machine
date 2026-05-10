@@ -1193,7 +1193,7 @@ async def _wait_for_primary_release_async(joystick, timeout_ms=1200):
 
 if IS_MICROPYTHON:
     class Nunchuck:
-        def __init__(self, i2c, poll=True, poll_interval=50):
+        def __init__(self, i2c, poll=True, poll_interval=25):
             self.i2c = i2c
             self.address = 0x52
             self.is_new_controller = False
@@ -1302,7 +1302,7 @@ if IS_MICROPYTHON:
         def _reinit_nunchuck(self):
             self._last_reinit = ticks_ms()
             try:
-                self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=50)
+                self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=25)
             except Exception:
                 self.nunchuck = None
 
@@ -1351,30 +1351,65 @@ if IS_MICROPYTHON:
             _, z = self.read_buttons()
             return z
 else:
+    _KEY_LATCH_MS = 180
+
     class Nunchuck:
         # Desktop keyboard input emulating the nunchuck API.
         def __init__(self):
             self._z = False
             self._c = False
+            self._held_z = False
+            self._held_c = False
             self._x = 128
             self._y = 128
+            self._z_until = 0
+            self._c_until = 0
+            self._left_until = 0
+            self._right_until = 0
+            self._up_until = 0
+            self._down_until = 0
 
         def _poll(self):
             try:
                 import pygame  # type: ignore
             except Exception:
                 return
-            pygame.event.pump()
+            now = ticks_ms()
+            try:
+                events = pygame.event.get([pygame.KEYDOWN])
+            except Exception:
+                events = ()
+                try:
+                    pygame.event.pump()
+                except Exception:
+                    pass
+            for event in events:
+                key = getattr(event, "key", None)
+                if key in (pygame.K_z, pygame.K_SPACE, pygame.K_RETURN):
+                    self._z_until = now + _KEY_LATCH_MS
+                elif key in (pygame.K_x, pygame.K_ESCAPE):
+                    self._c_until = now + _KEY_LATCH_MS
+                elif key == pygame.K_LEFT:
+                    self._left_until = now + _KEY_LATCH_MS
+                elif key == pygame.K_RIGHT:
+                    self._right_until = now + _KEY_LATCH_MS
+                elif key == pygame.K_UP:
+                    self._up_until = now + _KEY_LATCH_MS
+                elif key == pygame.K_DOWN:
+                    self._down_until = now + _KEY_LATCH_MS
+
             keys = pygame.key.get_pressed()
-            left = keys[pygame.K_LEFT]
-            right = keys[pygame.K_RIGHT]
-            up = keys[pygame.K_UP]
-            down = keys[pygame.K_DOWN]
+            left = bool(keys[pygame.K_LEFT] or ticks_diff(self._left_until, now) > 0)
+            right = bool(keys[pygame.K_RIGHT] or ticks_diff(self._right_until, now) > 0)
+            up = bool(keys[pygame.K_UP] or ticks_diff(self._up_until, now) > 0)
+            down = bool(keys[pygame.K_DOWN] or ticks_diff(self._down_until, now) > 0)
 
             # Z button: z/space/enter
-            self._z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN])
+            self._held_z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN])
+            self._z = bool(self._held_z or ticks_diff(self._z_until, now) > 0)
             # C button: x/escape
-            self._c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE])
+            self._held_c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE])
+            self._c = bool(self._held_c or ticks_diff(self._c_until, now) > 0)
 
             x = 128
             y = 128
@@ -1391,7 +1426,7 @@ else:
 
         def buttons(self):
             self._poll()
-            if self._c and self._z:
+            if self._held_c and self._held_z:
                 raise RestartProgram()
             return self._c, self._z
 
@@ -2434,17 +2469,36 @@ class AsteroidGame:
       - Z: shoot
       - C: return to menu
     """
+    _SHAPE_CACHE = None
+
+    @classmethod
+    def _shape_offsets(cls, size):
+        if cls._SHAPE_CACHE is None:
+            cls._SHAPE_CACHE = {}
+        if size not in cls._SHAPE_CACHE:
+            pts = []
+            for deg in range(0, 360, 12):
+                rad = math.radians(deg)
+                pts.append((int(math.cos(rad) * size), int(math.sin(rad) * size)))
+            cls._SHAPE_CACHE[size] = pts
+        return cls._SHAPE_CACHE[size]
+
     class Projectile:
         def __init__(self, x, y, angle, speed):
             self.x = x
             self.y = y
             self.angle = angle
             self.speed = speed
+            rad = math.radians(angle)
+            self.vx = math.cos(rad) * speed
+            self.vy = -math.sin(rad) * speed
+            self.tip_dx = math.cos(rad)
+            self.tip_dy = -math.sin(rad)
             self.lifetime = 12
 
         def update(self):
-            self.x += math.cos(math.radians(self.angle)) * self.speed
-            self.y -= math.sin(math.radians(self.angle)) * self.speed
+            self.x += self.vx
+            self.y += self.vy
             self.x %= PIXEL_WIDTH
             self.y %= PIXEL_HEIGHT
             self.lifetime -= 1
@@ -2457,8 +2511,8 @@ class AsteroidGame:
             _draw_line_wrapped(start, end, color)
 
         def draw(self):
-            ex = self.x + math.cos(math.radians(self.angle))
-            ey = self.y - math.sin(math.radians(self.angle))
+            ex = self.x + self.tip_dx
+            ey = self.y + self.tip_dy
             self.draw_line((self.x, self.y), (ex, ey), (255, 0, 0))
 
     class Asteroid:
@@ -2471,20 +2525,25 @@ class AsteroidGame:
                     self.y = random.uniform(0, PIXEL_HEIGHT)
             self.angle = random.uniform(0, 360)
             self.speed = random.uniform(0.3 + speed_boost, 0.8 + speed_boost)
+            rad = math.radians(self.angle)
+            self.vx = math.cos(rad) * self.speed
+            self.vy = -math.sin(rad) * self.speed
             self.size = size if size is not None else random.randint(4, 8)
+            self.shape = AsteroidGame._shape_offsets(self.size)
 
         def update(self):
-            self.x += math.cos(math.radians(self.angle)) * self.speed
-            self.y -= math.sin(math.radians(self.angle)) * self.speed
+            self.x += self.vx
+            self.y += self.vy
             self.x %= PIXEL_WIDTH
             self.y %= PIXEL_HEIGHT
 
         def draw(self):
             sp = display.set_pixel
-            for deg in range(0, 360, 12):
-                rad = math.radians(deg)
-                px = int((self.x + math.cos(rad) * self.size) % PIXEL_WIDTH)
-                py = int((self.y + math.sin(rad) * self.size) % PIXEL_HEIGHT)
+            sx = int(self.x)
+            sy = int(self.y)
+            for ox, oy in self.shape:
+                px = (sx + ox) % PIXEL_WIDTH
+                py = (sy + oy) % PIXEL_HEIGHT
                 sp(px, py, *WHITE)
 
     class Ship:
@@ -2513,8 +2572,11 @@ class AsteroidGame:
             else:
                 self.speed = max(self.speed - 0.08, 0)
 
-            self.x += math.cos(math.radians(self.angle)) * self.speed
-            self.y -= math.sin(math.radians(self.angle)) * self.speed
+            rad = math.radians(self.angle)
+            ca = math.cos(rad)
+            sa = math.sin(rad)
+            self.x += ca * self.speed
+            self.y -= sa * self.speed
             self.x %= PIXEL_WIDTH
             self.y %= PIXEL_HEIGHT
 
@@ -2524,12 +2586,15 @@ class AsteroidGame:
         def draw(self):
             a = self.angle
             s = self.size
-            p0 = (self.x + math.cos(math.radians(a)) * s,
-                  self.y - math.sin(math.radians(a)) * s)
-            p1 = (self.x + math.cos(math.radians(a + 120)) * s,
-                  self.y - math.sin(math.radians(a + 120)) * s)
-            p2 = (self.x + math.cos(math.radians(a - 120)) * s,
-                  self.y - math.sin(math.radians(a - 120)) * s)
+            rad0 = math.radians(a)
+            rad1 = math.radians(a + 120)
+            rad2 = math.radians(a - 120)
+            p0 = (self.x + math.cos(rad0) * s,
+                  self.y - math.sin(rad0) * s)
+            p1 = (self.x + math.cos(rad1) * s,
+                  self.y - math.sin(rad1) * s)
+            p2 = (self.x + math.cos(rad2) * s,
+                  self.y - math.sin(rad2) * s)
 
             if self.speed > 0:
                 self.draw_line(p1, p2, RED)
@@ -2540,8 +2605,9 @@ class AsteroidGame:
             if self.cooldown == 0:
                 self.cooldown = SHIP_COOLDOWN
                 bullet_speed = 4
-                bx = self.x + math.cos(math.radians(self.angle)) * self.size
-                by = self.y - math.sin(math.radians(self.angle)) * self.size
+                rad = math.radians(self.angle)
+                bx = self.x + math.cos(rad) * self.size
+                by = self.y - math.sin(rad) * self.size
                 return AsteroidGame.Projectile(bx, by, self.angle, bullet_speed)
             return None
 
@@ -3993,24 +4059,14 @@ class TronGame:
             )
         return cls._PALETTE
 
-    _LEFT_TURN = {
-        JOYSTICK_UP: JOYSTICK_LEFT,
-        JOYSTICK_LEFT: JOYSTICK_DOWN,
-        JOYSTICK_DOWN: JOYSTICK_RIGHT,
-        JOYSTICK_RIGHT: JOYSTICK_UP,
-    }
-    _RIGHT_TURN = {
-        JOYSTICK_UP: JOYSTICK_RIGHT,
-        JOYSTICK_RIGHT: JOYSTICK_DOWN,
-        JOYSTICK_DOWN: JOYSTICK_LEFT,
-        JOYSTICK_LEFT: JOYSTICK_UP,
-    }
-    _DIR_VECS = {
-        JOYSTICK_UP: (0, -1),
-        JOYSTICK_DOWN: (0, 1),
-        JOYSTICK_LEFT: (-1, 0),
-        JOYSTICK_RIGHT: (1, 0),
-    }
+    # Direction ids: 0=up, 1=down, 2=left, 3=right.
+    _LEFT_TURN = (2, 3, 1, 0)
+    _RIGHT_TURN = (3, 2, 0, 1)
+    _DIR_VECS = ((0, -1), (0, 1), (-1, 0), (1, 0))
+    DIR_UP = 0
+    DIR_DOWN = 1
+    DIR_LEFT = 2
+    DIR_RIGHT = 3
 
     def __init__(self):
         self.reset()
@@ -4019,11 +4075,11 @@ class TronGame:
         self.trail = bytearray(WIDTH * PLAY_HEIGHT)
         self.head_x = WIDTH // 4
         self.head_y = PLAY_HEIGHT // 2
-        self.direction = JOYSTICK_RIGHT
+        self.direction = self.DIR_RIGHT
         
         self.enemy_x = WIDTH - (WIDTH // 4)
         self.enemy_y = PLAY_HEIGHT // 2
-        self.enemy_dir = JOYSTICK_LEFT
+        self.enemy_dir = self.DIR_LEFT
         self.enemy_alive = True
         self.enemy_score = 0
         
@@ -4081,10 +4137,9 @@ class TronGame:
         return dist
 
     def _best_enemy_dir_from(self, x, y):
-        best_dir = JOYSTICK_LEFT
+        best_dir = self.DIR_LEFT
         best_dist = -1
-        dirs = (JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT)
-        for e_dir in dirs:
+        for e_dir in range(4):
             dist = self._clear_distance_from(x, y, e_dir)
             if dist > best_dist:
                 best_dist = dist
@@ -8411,7 +8466,8 @@ class DemosGame:
             if CONFIG_LOW_RAM_MODE
             else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE",
                   "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE",
-                  "MATRIX", "STARS", "SPARK", "RINGS")
+                  "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
+                  "BOIDS", "NBODY", "CRT", "WINMAZE")
         )
         self.idx = 0
         self._init = False
@@ -8507,6 +8563,30 @@ class DemosGame:
 
         # RINGS
         self._rings_phase = 0
+
+        # RADAR
+        self._radar_phase = 0
+        self._radar_blips = []
+
+        # MANDEL
+        self._mandel_y = 0
+        self._mandel_pass = 0
+        self._mandel_palette = []
+
+        # BOIDS
+        self._boids = []
+
+        # NBODY
+        self._nbody = []
+
+        # CRT
+        self._crt_phase = 0
+
+        # WINMAZE
+        self._winmaze = None
+        self._winmaze_dir = 0
+        self._winmaze_target_ang = 0
+        self._winmaze_path_phase = 0
 
     def _life_step(self, w, h, cur, nxt):
         for y in range(h):
@@ -9553,6 +9633,401 @@ class DemosGame:
                     if ring < 4 and x + 1 < WIDTH:
                         display.set_pixel(x + 1, y, r // 2, g // 2, b // 2)
 
+    # --- RADAR ---
+    def _radar_init(self):
+        self._radar_phase = random.randint(0, 255)
+        self._radar_blips = []
+        display.clear()
+
+    def _radar_step(self):
+        display.clear()
+        cx = WIDTH // 2
+        cy = HEIGHT // 2
+        self._radar_phase = (self._radar_phase + 3) & 255
+        phase = self._radar_phase
+
+        for radius in (10, 18, 27):
+            for i in range(0, 64, 2):
+                a = i * 6.28318 / 64.0
+                x = int(cx + math.cos(a) * radius)
+                y = int(cy + math.sin(a) * radius)
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    display.set_pixel(x, y, 0, 45, 0)
+        draw_line(cx, 4, cx, HEIGHT - 5, 0, 28, 0)
+        draw_line(4, cy, WIDTH - 5, cy, 0, 28, 0)
+
+        sweep = phase * 6.28318 / 256.0
+        sx = int(cx + math.cos(sweep) * 30)
+        sy = int(cy + math.sin(sweep) * 30)
+        draw_line(cx, cy, sx, sy, 0, 255, 80)
+        for i in range(1, 5):
+            a = sweep - i * 0.10
+            tx = int(cx + math.cos(a) * 29)
+            ty = int(cy + math.sin(a) * 29)
+            draw_line(cx, cy, tx, ty, 0, 90 // i, 25 // i)
+
+        if (self._frame & 3) == 0 and random.randint(0, 99) < 70:
+            r = random.randint(7, 29)
+            x = int(cx + math.cos(sweep) * r)
+            y = int(cy + math.sin(sweep) * r)
+            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                self._radar_blips.append([x, y, 255])
+
+        active = []
+        for blip in self._radar_blips:
+            x, y, bright = blip
+            display.set_pixel(x, y, bright // 5, bright, bright // 8)
+            if bright > 170 and x + 1 < WIDTH:
+                display.set_pixel(x + 1, y, bright // 8, bright // 2, 0)
+            bright -= 7
+            if bright > 18:
+                blip[2] = bright
+                active.append(blip)
+        if len(active) > 18:
+            active = active[-18:]
+        self._radar_blips = active
+
+    # --- MANDELBROT ---
+    def _mandel_init(self):
+        self._mandel_y = 0
+        self._mandel_pass = 0
+        if not self._mandel_palette:
+            self._mandel_palette = [hsb_to_rgb((i * 17) % 360, 1, 1) for i in range(16)]
+        display.clear()
+
+    def _mandel_step(self):
+        rows_per_frame = 2
+        max_iter = 14 + (self._mandel_pass & 3) * 2
+        zoom = 1.0 + (self._mandel_pass & 7) * 0.10
+        cxoff = -0.55 + math.sin(self._mandel_pass * 0.27) * 0.10
+        cyoff = math.cos(self._mandel_pass * 0.19) * 0.07
+        pal = self._mandel_palette
+
+        for _ in range(rows_per_frame):
+            y = self._mandel_y
+            if y >= HEIGHT:
+                self._mandel_y = 0
+                self._mandel_pass = (self._mandel_pass + 1) & 255
+                return
+            cy = ((y - 32) / 26.0) / zoom + cyoff
+            for x in range(WIDTH):
+                cx = ((x - 32) / 22.0) / zoom + cxoff
+                zx = 0.0
+                zy = 0.0
+                it = 0
+                while zx * zx + zy * zy <= 4.0 and it < max_iter:
+                    zx, zy = zx * zx - zy * zy + cx, 2.0 * zx * zy + cy
+                    it += 1
+                if it >= max_iter:
+                    display.set_pixel(x, y, 0, 0, 0)
+                else:
+                    r, g, b = pal[(it + self._mandel_pass) & 15]
+                    shade = 80 + it * 10
+                    if shade > 255:
+                        shade = 255
+                    display.set_pixel(x, y, (r * shade) // 255, (g * shade) // 255, (b * shade) // 255)
+            self._mandel_y += 1
+
+    # --- BOIDS ---
+    def _boids_init(self):
+        self._boids = []
+        n = 18
+        for i in range(n):
+            a = random.randint(0, 359) * 3.14159 / 180.0
+            self._boids.append([
+                random.uniform(4, WIDTH - 5),
+                random.uniform(4, HEIGHT - 5),
+                math.cos(a) * 0.7,
+                math.sin(a) * 0.7,
+                (i * 360) // n,
+            ])
+        display.clear()
+
+    def _boids_step(self):
+        display.clear()
+        boids = self._boids
+        n = len(boids)
+        for i in range(n):
+            b = boids[i]
+            ax = ay = cx = cy = sx = sy = 0.0
+            count = 0
+            close = 0
+            for j in range(n):
+                if i == j:
+                    continue
+                o = boids[j]
+                dx = o[0] - b[0]
+                dy = o[1] - b[1]
+                d2 = dx * dx + dy * dy
+                if d2 < 170.0:
+                    ax += o[2]
+                    ay += o[3]
+                    cx += o[0]
+                    cy += o[1]
+                    count += 1
+                if d2 < 20.0 and d2 > 0.01:
+                    sx -= dx
+                    sy -= dy
+                    close += 1
+            if count:
+                inv = 1.0 / count
+                b[2] += (ax * inv - b[2]) * 0.045
+                b[3] += (ay * inv - b[3]) * 0.045
+                b[2] += (cx * inv - b[0]) * 0.0022
+                b[3] += (cy * inv - b[1]) * 0.0022
+            if close:
+                b[2] += sx * 0.018
+                b[3] += sy * 0.018
+
+            if b[0] < 5:
+                b[2] += 0.08
+            elif b[0] > WIDTH - 6:
+                b[2] -= 0.08
+            if b[1] < 5:
+                b[3] += 0.08
+            elif b[1] > HEIGHT - 6:
+                b[3] -= 0.08
+
+            speed = math.sqrt(b[2] * b[2] + b[3] * b[3])
+            if speed > 1.45:
+                scale = 1.45 / speed
+                b[2] *= scale
+                b[3] *= scale
+            elif speed < 0.35:
+                b[2] *= 1.10
+                b[3] *= 1.10
+
+        for b in boids:
+            b[0] = (b[0] + b[2]) % WIDTH
+            b[1] = (b[1] + b[3]) % HEIGHT
+            x = int(b[0])
+            y = int(b[1])
+            r, g, bb = hsb_to_rgb((b[4] + self._frame * 2) % 360, 0.85, 1)
+            display.set_pixel(x, y, r, g, bb)
+            tx = int(b[0] - b[2] * 2.0)
+            ty = int(b[1] - b[3] * 2.0)
+            if 0 <= tx < WIDTH and 0 <= ty < HEIGHT:
+                display.set_pixel(tx, ty, r // 4, g // 4, bb // 4)
+
+    # --- NBODY ---
+    def _nbody_init(self):
+        self._nbody = []
+        cx = WIDTH / 2.0
+        cy = HEIGHT / 2.0
+        for i in range(10):
+            a = i * 6.28318 / 10.0
+            radius = 6.0 + (i % 4) * 3.5
+            mass = 0.45 + (i % 3) * 0.22
+            self._nbody.append([
+                cx + math.cos(a) * radius,
+                cy + math.sin(a) * radius,
+                -math.sin(a) * (0.35 + i * 0.015),
+                math.cos(a) * (0.35 + i * 0.015),
+                mass,
+                (i * 36) % 360,
+            ])
+        display.clear()
+
+    def _nbody_step(self):
+        display.clear()
+        bodies = self._nbody
+        n = len(bodies)
+        for i in range(n):
+            bi = bodies[i]
+            ax = 0.0
+            ay = 0.0
+            for j in range(n):
+                if i == j:
+                    continue
+                bj = bodies[j]
+                dx = bj[0] - bi[0]
+                dy = bj[1] - bi[1]
+                d2 = dx * dx + dy * dy + 12.0
+                inv = 0.020 * bj[4] / d2
+                ax += dx * inv
+                ay += dy * inv
+            bi[2] = (bi[2] + ax) * 0.997
+            bi[3] = (bi[3] + ay) * 0.997
+
+        for b in bodies:
+            px = int(b[0])
+            py = int(b[1])
+            b[0] += b[2]
+            b[1] += b[3]
+            if b[0] < 2 or b[0] > WIDTH - 3:
+                b[2] = -b[2] * 0.92
+                b[0] = 2 if b[0] < 2 else WIDTH - 3
+            if b[1] < 2 or b[1] > HEIGHT - 3:
+                b[3] = -b[3] * 0.92
+                b[1] = 2 if b[1] < 2 else HEIGHT - 3
+
+            x = int(b[0])
+            y = int(b[1])
+            r, g, bb = hsb_to_rgb((b[5] + self._frame * 3) % 360, 1, 1)
+            if 0 <= px < WIDTH and 0 <= py < HEIGHT:
+                display.set_pixel(px, py, r // 5, g // 5, bb // 5)
+            display.set_pixel(x, y, r, g, bb)
+            if b[4] > 0.7 and x + 1 < WIDTH:
+                display.set_pixel(x + 1, y, r // 2, g // 2, bb // 2)
+
+    # --- CRT TEST PATTERN ---
+    def _crt_init(self):
+        self._crt_phase = 0
+        display.clear()
+
+    def _crt_step(self):
+        self._crt_phase = (self._crt_phase + 1) & 255
+        phase = self._crt_phase
+        bars = (
+            (255, 255, 255), (255, 255, 0), (0, 255, 255), (0, 255, 0),
+            (255, 0, 255), (255, 0, 0), (0, 0, 255), (20, 20, 20)
+        )
+        for x in range(WIDTH):
+            r, g, b = bars[(x * len(bars)) // WIDTH]
+            for y in range(0, 34):
+                dim = 160 if ((y + phase) & 7) == 0 else 255
+                if y & 1:
+                    dim = (dim * 3) // 5
+                display.set_pixel(x, y, (r * dim) // 255, (g * dim) // 255, (b * dim) // 255)
+        for y in range(34, HEIGHT):
+            for x in range(WIDTH):
+                v = 30 + ((x * 5 + y * 3 + phase) & 31)
+                display.set_pixel(x, y, v, v, v)
+        for x in range(0, WIDTH, 8):
+            draw_line(x, 0, x, HEIGHT - 1, 0, 0, 0)
+        for y in range(0, HEIGHT, 8):
+            draw_line(0, y, WIDTH - 1, y, 0, 0, 0)
+        roll = phase & 63
+        draw_line(0, roll, WIDTH - 1, roll, 255, 255, 255)
+        draw_rectangle(23, 45, 40, 54, 0, 0, 0)
+        draw_text(25, 46, "CRT", 255, 255, 255)
+
+    # --- WIN95 MAZE / DOOM RAYCASTER REUSE ---
+    def _winmaze_init(self):
+        self._winmaze = DoomLiteGame()
+        self._winmaze.enemies = []
+        self._winmaze.level = random.randint(1, len(DoomLiteGame.MAPS))
+        self._winmaze._set_level(self._winmaze.level)
+        self._winmaze.px, self._winmaze.py = self._winmaze._player_start_for_level()
+        self._winmaze_dir = random.randint(0, 3)
+        self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
+        self._winmaze.ang = self._winmaze_target_ang
+        self._winmaze_path_phase = 0
+        display.clear()
+
+    def _winmaze_step(self):
+        if self._winmaze is None:
+            self._winmaze_init()
+        dm = self._winmaze
+        self._winmaze_path_phase = (self._winmaze_path_phase + 1) & 255
+
+        dir_dx = (1, 0, -1, 0)
+        dir_dy = (0, -1, 0, 1)
+
+        def open_dir(d):
+            mx = int(dm.px) + dir_dx[d]
+            my = int(dm.py) + dir_dy[d]
+            return not dm._is_wall_tile(mx, my)
+
+        def choose_new_dir():
+            cur = self._winmaze_dir
+            left = (cur + 1) & 3
+            right = (cur - 1) & 3
+            back = (cur + 2) & 3
+            side_choices = []
+            if open_dir(left):
+                side_choices.append(left)
+            if open_dir(right):
+                side_choices.append(right)
+            if not open_dir(cur):
+                if side_choices:
+                    return side_choices[random.randint(0, len(side_choices) - 1)]
+                if open_dir(back):
+                    return back
+                return cur
+            if side_choices and random.randint(0, 99) < 28:
+                return side_choices[random.randint(0, len(side_choices) - 1)]
+            return cur
+
+        centered = (
+            abs(dm.px - (int(dm.px) + 0.5)) < 0.045 and
+            abs(dm.py - (int(dm.py) + 0.5)) < 0.045
+        )
+        if centered:
+            dm.px = int(dm.px) + 0.5
+            dm.py = int(dm.py) + 0.5
+            self._winmaze_dir = choose_new_dir()
+            self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
+
+        delta = ((self._winmaze_target_ang - dm.ang + 128) & 255) - 128
+        if delta:
+            step_ang = 8
+            if abs(delta) <= step_ang:
+                dm.ang = self._winmaze_target_ang
+            elif delta > 0:
+                dm.ang = (dm.ang + step_ang) & 255
+            else:
+                dm.ang = (dm.ang - step_ang) & 255
+        else:
+            step = 0.080
+            nx = dm.px + dir_dx[self._winmaze_dir] * step
+            ny = dm.py + dir_dy[self._winmaze_dir] * step
+            if dm._is_wall_pos(nx, ny):
+                dm.px = int(dm.px) + 0.5
+                dm.py = int(dm.py) + 0.5
+                self._winmaze_dir = choose_new_dir()
+                self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
+            else:
+                dm.px = nx
+                dm.py = ny
+
+        if (self._frame & 511) == 0:
+            dm.level = (dm.level % len(DoomLiteGame.MAPS)) + 1
+            dm._set_level(dm.level)
+            dm.px, dm.py = dm._player_start_for_level()
+            self._winmaze_dir = random.randint(0, 3)
+            self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
+            dm.ang = self._winmaze_target_ang
+
+        sp = display.set_pixel
+        angle_step_fp = (dm.FOV << 16) // WIDTH
+        ang_fp = ((dm.ang + dm.HALF_FOV) & 255) << 16
+        theme = (dm.level - 1) & 3
+        for x in range(WIDTH):
+            ray_ang = (ang_fp >> 16) & 255
+            ang_fp -= angle_step_fp
+            dist, side = dm._cast_ray(ray_ang)
+            line_h = int(HEIGHT / (dist + 0.001))
+            if line_h < 1:
+                line_h = 1
+            elif line_h > HEIGHT:
+                line_h = HEIGHT
+            y0 = (HEIGHT - line_h) // 2
+            y1 = y0 + line_h
+            bright = 230 - int(dist * 18)
+            if bright < 28:
+                bright = 28
+            if side:
+                bright = (bright * 3) // 4
+            if theme == 0:
+                wr, wg, wb = bright, bright, bright
+            elif theme == 1:
+                wr, wg, wb = bright // 4, bright // 2, bright
+            elif theme == 2:
+                wr, wg, wb = bright // 3, bright, bright // 3
+            else:
+                wr, wg, wb = bright, bright // 3, bright
+            for y in range(HEIGHT):
+                if y < y0:
+                    sp(x, y, 0, 0, 18 + y // 4)
+                elif y <= y1:
+                    sp(x, y, wr, wg, wb)
+                else:
+                    f = 18 + (HEIGHT - y) // 3
+                    sp(x, y, f, f, f)
+
+        # No minimap here: the original Win95 Maze screensaver was pure fly-through.
+
     def _select_prev_next_demo(self, joystick):
         now = ticks_ms()
         if ticks_diff(now, self._last_move) <= self._move_delay:
@@ -9614,6 +10089,18 @@ class DemosGame:
             self._spark_init()
         elif demo == "RINGS":
             self._rings_init()
+        elif demo == "RADAR":
+            self._radar_init()
+        elif demo == "MANDEL":
+            self._mandel_init()
+        elif demo == "BOIDS":
+            self._boids_init()
+        elif demo == "NBODY":
+            self._nbody_init()
+        elif demo == "CRT":
+            self._crt_init()
+        elif demo == "WINMAZE":
+            self._winmaze_init()
         else:
             self._snake_init()
         self._init = True
@@ -9660,6 +10147,18 @@ class DemosGame:
             self._spark_step()
         elif demo == "RINGS":
             self._rings_step()
+        elif demo == "RADAR":
+            self._radar_step()
+        elif demo == "MANDEL":
+            self._mandel_step()
+        elif demo == "BOIDS":
+            self._boids_step()
+        elif demo == "NBODY":
+            self._nbody_step()
+        elif demo == "CRT":
+            self._crt_step()
+        elif demo == "WINMAZE":
+            self._winmaze_step()
         else:
             self._snake_step()
 
