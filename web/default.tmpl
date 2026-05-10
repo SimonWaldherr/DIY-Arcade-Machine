@@ -147,9 +147,10 @@ asyncio.run(custom_site())
 config = {
     xtermjs: (() => {
         const xtermPath = "{{cookiecutter.xtermjs}}".replace(/^\.\//, "");
+        const archivePrefixSegmentCount = 2;
         if (!xtermPath) return "vt/xterm.js";
         const segments = xtermPath.split("/");
-        if (segments.length > 2 && segments[0] === "archives") return segments.slice(2).join("/");
+        if (segments.length > archivePrefixSegmentCount && segments[0] === "archives") return segments.slice(archivePrefixSegmentCount).join("/");
         return xtermPath;
     })(),
     _sdl2: "canvas",
