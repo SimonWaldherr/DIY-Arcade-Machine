@@ -145,7 +145,7 @@ asyncio.run(custom_site())
 // END BLOCK
 
 config = {
-    xtermjs: "vt/xterm.js",
+    xtermjs: ("{{cookiecutter.xtermjs}}" || "vt/xterm.js").replace(/^(?:\.\/)?archives\/[^/]+\//, ""),
     _sdl2: "canvas",
     user_canvas: 0,
     user_canvas_managed: 0,
