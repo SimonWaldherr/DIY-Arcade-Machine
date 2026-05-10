@@ -67,7 +67,7 @@ web-runtime:
 		echo "Downloading pygbag runtime archive..."; \
 		curl -L "$(WEB_ARCHIVES_URL)" -o "$(WEB_ARCHIVES_ZIP)"; \
 	fi
-	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ]; then \
+	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/browserfs.min.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/vt/xterm.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/vt/xterm-addon-image.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/vt/xterm.css" ]; then \
 		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/0.9/*' -d build/pygame-web-archives-main; \
 	fi
 	find "$(WEB_ARCHIVES_SRC)" -type f -name '*.js' -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$$}' {} +
