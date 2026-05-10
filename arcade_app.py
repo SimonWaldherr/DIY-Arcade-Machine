@@ -4833,10 +4833,28 @@ class PacmanGame:
         y1 = self.OFF_Y + cy * self.CELL
         draw_rectangle(x1, y1, x1 + self.CELL - 1, y1 + self.CELL - 1, r, g, b)
 
+    def _is_wall_cell(self, x, y):
+        if x < 0 or x >= self.W or y < 0 or y >= self.H:
+            return False
+        return self.wall[self._idx(x, y)] == 1
+
+    def _draw_wall_cell(self, x, y):
+        px = self.OFF_X + x * self.CELL
+        py = self.OFF_Y + y * self.CELL
+        draw_rectangle(px, py, px + 3, py + 3, 0, 18, 95)
+        if not self._is_wall_cell(x, y - 1):
+            draw_rectangle(px, py, px + 3, py, 30, 95, 255)
+        if not self._is_wall_cell(x, y + 1):
+            draw_rectangle(px, py + 3, px + 3, py + 3, 0, 45, 180)
+        if not self._is_wall_cell(x - 1, y):
+            draw_rectangle(px, py, px, py + 3, 15, 75, 235)
+        if not self._is_wall_cell(x + 1, y):
+            draw_rectangle(px + 3, py, px + 3, py + 3, 0, 45, 170)
+
     def _draw_bg_cell(self, x, y):
         i = self._idx(x, y)
         if self.wall[i]:
-            self._draw_cell(x, y, 0, 0, 140)
+            self._draw_wall_cell(x, y)
             return
 
         # empty floor
@@ -4848,14 +4866,28 @@ class PacmanGame:
             cx = self.OFF_X + x * self.CELL + 1
             cy = self.OFF_Y + y * self.CELL + 1
             if v == 1:
-                display.set_pixel(cx, cy, 255, 255, 255)
+                display.set_pixel(cx + 1, cy + 1, 255, 220, 150)
             else:
-                draw_rectangle(cx, cy, cx + 1, cy + 1, 255, 215, 0)
+                draw_rectangle(cx, cy, cx + 2, cy + 2, 255, 230, 80)
+                display.set_pixel(cx + 1, cy + 1, 255, 255, 255)
 
     def _draw_player(self):
         px = self.OFF_X + self.px * self.CELL
         py = self.OFF_Y + self.py * self.CELL
-        draw_rectangle(px, py, px + 2, py + 2, 255, 255, 0)
+        draw_rectangle(px, py, px + 3, py + 3, 255, 220, 0)
+        if self.pdir == 0:
+            display.set_pixel(px + 1, py, 0, 0, 0)
+            display.set_pixel(px + 2, py, 0, 0, 0)
+        elif self.pdir == 1:
+            display.set_pixel(px + 1, py + 3, 0, 0, 0)
+            display.set_pixel(px + 2, py + 3, 0, 0, 0)
+        elif self.pdir == 2:
+            display.set_pixel(px, py + 1, 0, 0, 0)
+            display.set_pixel(px, py + 2, 0, 0, 0)
+        else:
+            display.set_pixel(px + 3, py + 1, 0, 0, 0)
+            display.set_pixel(px + 3, py + 2, 0, 0, 0)
+        display.set_pixel(px + 1, py + 1, 255, 255, 120)
 
     def _draw_ghosts(self):
         frightened = (self.power_timer > 0)
@@ -4863,16 +4895,25 @@ class PacmanGame:
             gx = self.OFF_X + g[0] * self.CELL
             gy = self.OFF_Y + g[1] * self.CELL
             if frightened:
-                col = (80, 80, 255)
+                col = (80, 120, 255)
             else:
-                col = (255, 60, 60) if gi == 0 else (255, 0, 255)
-            draw_rectangle(gx, gy, gx + 2, gy + 2, *col)
+                col = (255, 60, 60) if gi == 0 else (255, 80, 210)
+            draw_rectangle(gx, gy + 1, gx + 3, gy + 3, *col)
+            draw_rectangle(gx + 1, gy, gx + 2, gy, *col)
+            display.set_pixel(gx + 1, gy + 1, 255, 255, 255)
+            display.set_pixel(gx + 2, gy + 1, 255, 255, 255)
+            eye_col = (0, 0, 90) if frightened else (0, 0, 0)
+            display.set_pixel(gx + 1, gy + 2, *eye_col)
+            display.set_pixel(gx + 2, gy + 2, *eye_col)
+            if not frightened:
+                display.set_pixel(gx, gy + 3, 0, 0, 0)
+                display.set_pixel(gx + 3, gy + 3, 0, 0, 0)
 
     def _draw_background(self):
         display.clear()
         # walls
         for (x, y) in self.wall_list:
-            self._draw_cell(x, y, 0, 0, 140)
+            self._draw_wall_cell(x, y)
 
         # pellets
         for y in range(self.H):
@@ -4882,9 +4923,10 @@ class PacmanGame:
                     cx = self.OFF_X + x * self.CELL + 1
                     cy = self.OFF_Y + y * self.CELL + 1
                     if v == 1:
-                        display.set_pixel(cx, cy, 255, 255, 255)
+                        display.set_pixel(cx + 1, cy + 1, 255, 220, 150)
                     else:
-                        draw_rectangle(cx, cy, cx + 1, cy + 1, 255, 215, 0)
+                        draw_rectangle(cx, cy, cx + 2, cy + 2, 255, 230, 80)
+                        display.set_pixel(cx + 1, cy + 1, 255, 255, 255)
         self._drawn_bg = True
 
     def _draw(self):
@@ -11502,6 +11544,271 @@ class StackerGame:
                                             r=0, g=255, b=0, score=global_score,
                                             delay_ms=900)
 
+
+class FroggerGame:
+    """
+    FROGGR
+    Controls:
+      - Left / Right / Up / Down: hop
+      - C: return to menu
+    Cross traffic lanes. Each successful crossing makes the next level harder.
+    """
+    FRAME_MS = const(48)
+    PLAYER_W = const(3)
+    PLAYER_H = const(3)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+        self.level = 1
+        self.player_x = WIDTH // 2
+        self.player_y = PLAY_HEIGHT - self.PLAYER_H
+        self.last_move = ticks_ms()
+        self.lanes = []
+        self._build_lanes()
+
+    def _build_lanes(self):
+        self.lanes = []
+        lane_count = min(5, 3 + ((self.level - 1) // 3))
+        spacing = PLAY_HEIGHT // (lane_count + 1)
+        self.move_ms = max(130, 175 - self.level * 5)
+        for i in range(lane_count):
+            y = PLAY_HEIGHT - ((i + 1) * spacing) - 1
+            if y < 8:
+                y = 8
+            direction = -1 if i % 2 else 1
+            speed_mag = 1 + min(3, (self.level + i - 1) // 3)
+            speed = direction * speed_mag
+            w = min(12, 6 + (i % 2) * 2 + ((self.level - 1) // 4))
+            gap = max(20, 36 - self.level * 2 - i)
+            cars = []
+            for x in range((i * 13) % gap, WIDTH + gap, gap):
+                cars.append([float(x), w])
+            hue = (i * 70 + self.level * 11 + 8) % 360
+            self.lanes.append([y, speed, cars, hue, gap])
+
+    def _reset_player(self):
+        self.player_x = WIDTH // 2
+        self.player_y = PLAY_HEIGHT - self.PLAYER_H
+
+    def _move_player(self, joystick):
+        now = ticks_ms()
+        if ticks_diff(now, self.last_move) < self.move_ms:
+            return
+        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if not d:
+            return
+        dx, dy = direction_to_delta(d)
+        self.player_x = clamp(self.player_x + dx * 4, 0, WIDTH - self.PLAYER_W)
+        self.player_y = clamp(self.player_y + dy * 4, 0, PLAY_HEIGHT - self.PLAYER_H)
+        self.last_move = now
+
+    def _move_cars(self):
+        for lane in self.lanes:
+            speed = lane[1]
+            cars = lane[2]
+            gap = lane[4]
+            for car in cars:
+                car[0] += speed
+                if speed > 0 and car[0] > WIDTH + car[1]:
+                    car[0] = -float(car[1] + gap // 2)
+                elif speed < 0 and car[0] < -car[1] - 8:
+                    car[0] = float(WIDTH + gap // 2)
+
+    def _hit_car(self):
+        px = int(self.player_x)
+        py = int(self.player_y)
+        for lane in self.lanes:
+            y = lane[0]
+            for car in lane[2]:
+                cx = int(car[0])
+                cw = int(car[1])
+                if rects_overlap(px, py, self.PLAYER_W, self.PLAYER_H, cx, y, cw, 3):
+                    return True
+        return False
+
+    def _draw(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, 1, 0, 120, 0)
+        draw_rectangle(0, PLAY_HEIGHT - 2, WIDTH - 1, PLAY_HEIGHT - 1, 0, 60, 0)
+        for lane in self.lanes:
+            y = lane[0]
+            r, g, b = hsb_to_rgb(lane[3], 1, 1)
+            for car in lane[2]:
+                x = int(car[0])
+                w = int(car[1])
+                draw_rectangle(x, y, x + w - 1, y + 2, r, g, b)
+        draw_rectangle(self.player_x, self.player_y,
+                       self.player_x + self.PLAYER_W - 1,
+                       self.player_y + self.PLAYER_H - 1,
+                       0, 255, 80)
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        def step():
+            global game_over, global_score
+            c_button, _z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self._move_player(joystick)
+            self._move_cars()
+            if self._hit_car():
+                global_score = self.score
+                game_over = True
+                return False
+            if self.player_y <= 1:
+                self.score += 10 * self.level
+                self.level += 1
+                self._build_lanes()
+                self._reset_player()
+            global_score = self.score
+            self._draw()
+            return True
+
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
+class CatchGame:
+    """
+    CATCH
+    Controls:
+      - Left / Right: move basket
+      - Z: quick slide
+      - C: return to menu
+    Catch stars, avoid bombs, and do not miss too many stars.
+    """
+    FRAME_MS = const(36)
+    MAX_DROPS = const(9)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.basket_x = WIDTH // 2 - 4
+        self.basket_w = 9
+        self.score = 0
+        self.missed = 0
+        self.drops = []
+        self.last_spawn = ticks_ms()
+        self.spawn_ms = 520
+
+    def _spawn_drop(self):
+        if len(self.drops) >= self.MAX_DROPS:
+            return
+        is_bomb = random.randint(0, 5) == 0
+        x = random.randint(1, WIDTH - 3)
+        speed = 1 + min(3, self.score // 10)
+        hue = 0 if is_bomb else (45 + random.randint(0, 45))
+        self.drops.append([x, 0, speed, is_bomb, hue])
+
+    def _move_basket(self, joystick, z_button):
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        step = 4 if z_button else 2
+        if d == JOYSTICK_LEFT:
+            self.basket_x = max(0, self.basket_x - step)
+        elif d == JOYSTICK_RIGHT:
+            self.basket_x = min(WIDTH - self.basket_w, self.basket_x + step)
+
+    def _advance_drops(self):
+        global game_over, global_score
+        keep = []
+        by = PLAY_HEIGHT - 2
+        for drop in self.drops:
+            drop[1] += drop[2]
+            x = drop[0]
+            y = drop[1]
+            is_bomb = drop[3]
+            caught = (y >= by - 1 and self.basket_x <= x <= self.basket_x + self.basket_w - 1)
+            if caught:
+                if is_bomb:
+                    global_score = self.score
+                    game_over = True
+                    return
+                self.score += 1
+                if self.spawn_ms > 190 and self.score % 5 == 0:
+                    self.spawn_ms -= 25
+                continue
+            if y >= PLAY_HEIGHT:
+                if not is_bomb:
+                    self.missed += 1
+                    if self.missed >= 5:
+                        global_score = self.score
+                        game_over = True
+                        return
+                continue
+            keep.append(drop)
+        self.drops = keep
+
+    def _draw(self):
+        display.clear()
+        for drop in self.drops:
+            x = int(drop[0])
+            y = int(drop[1])
+            if drop[3]:
+                draw_rectangle(x - 1, y, x + 1, y + 1, 255, 0, 0)
+            else:
+                r, g, b = hsb_to_rgb(drop[4], 1, 1)
+                display.set_pixel(x, y, r, g, b)
+                if y > 0:
+                    display.set_pixel(x, y - 1, r // 3, g // 3, b // 3)
+        draw_rectangle(self.basket_x, PLAY_HEIGHT - 2,
+                       self.basket_x + self.basket_w - 1, PLAY_HEIGHT - 1,
+                       0, 180, 255)
+        for i in range(self.missed):
+            display.set_pixel(WIDTH - 1 - i, 0, 255, 40, 0)
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+        self.reset()
+        display_score_and_time(0, force=True)
+
+        def step():
+            global game_over, global_score
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            now = ticks_ms()
+            if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
+                self._spawn_drop()
+                self.last_spawn = now
+            self._move_basket(joystick, z_button)
+            self._advance_drops()
+            if game_over:
+                return False
+            global_score = self.score
+            self._draw()
+            return True
+
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
     def __init__(self, joystick, score, best, best_name="---", title="LOST"):
@@ -11600,9 +11907,11 @@ class GameSelect:
         ("BEJWL", BejeweledGame, GAME_FLAG_HEAVY),
         ("BRKOUT", BreakoutGame, 0),
         ("CAVEFL", CaveFlyGame, 0),
+        ("CATCH", CatchGame, 0),
         ("DODGE", DodgeGame, 0),
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
+        ("FROGGR", FroggerGame, 0),
         ("INVADR", InvaderGame, 0),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
         ("LOCO", LocoMotionGame, GAME_FLAG_HEAVY),
