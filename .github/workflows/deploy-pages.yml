@@ -14,6 +14,10 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  PYGBAG_VERSION: "0.9.2"
+  RUNTIME_VERSION: "0.9"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,38 +31,55 @@ jobs:
           python-version: "3.12"
 
       - name: Install pygbag
-        run: pip install pygbag==0.9.2
+        run: pip install pygbag==${{ env.PYGBAG_VERSION }}
 
-      - name: Download pygbag runtime
+      - name: Cache pygbag runtime
+        id: cache-runtime
+        uses: actions/cache@v4
+        with:
+          path: archives-main
+          key: pygbag-runtime-${{ env.PYGBAG_VERSION }}
+
+      - name: Download & prepare pygbag runtime
+        if: steps.cache-runtime.outputs.cache-hit != 'true'
         run: |
-          curl -L https://github.com/pygame-web/archives/archive/refs/heads/main.zip -o pygame-web-archives.zip
-          unzip -q pygame-web-archives.zip 'archives-main/0.9/*'
-          find archives-main/0.9 -type f -name '*.js' -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
+          curl -fsSL https://github.com/pygame-web/archives/archive/refs/heads/main.zip \
+            -o pygame-web-archives.zip
+          unzip -q pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*'
+          rm pygame-web-archives.zip
+          find archives-main/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
+            -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
 
       - name: Build with pygbag
         run: |
           mkdir -p build/src
           cp main.py arcade_app.py logo.png build/src/
-          if [ -f highscores.json ]; then cp highscores.json build/src/; fi
+          [ -f highscores.json ] && cp highscores.json build/src/ || true
           python -m pygbag \
             --ume_block 0 \
             --width 640 \
             --height 640 \
             --title "DIY Arcade Machine" \
             --icon logo.png \
-            --cdn "./archives/0.9/" \
+            --cdn "./archives/${{ env.RUNTIME_VERSION }}/" \
             --template "${{ github.workspace }}/web/default.tmpl" \
             --build build/src
           mkdir -p dist
           cp -R build/src/build/web/. dist/
           cp web/coi-serviceworker.js dist/
           mkdir -p dist/archives
-          cp -R archives-main/0.9 dist/archives/
-          test -f dist/archives/0.9/pythons.js
-          test -f dist/archives/0.9/browserfs.min.js
-          test -f dist/archives/0.9/vt/xterm.js
-          test -f dist/archives/0.9/vt/xterm-addon-image.js
-          test -f dist/archives/0.9/vt/xterm.css
+          cp -R archives-main/${{ env.RUNTIME_VERSION }} dist/archives/
+
+      - name: Verify runtime assets
+        run: |
+          for f in \
+            dist/archives/${{ env.RUNTIME_VERSION }}/pythons.js \
+            dist/archives/${{ env.RUNTIME_VERSION }}/browserfs.min.js \
+            dist/archives/${{ env.RUNTIME_VERSION }}/vt/xterm.js \
+            dist/archives/${{ env.RUNTIME_VERSION }}/vt/xterm-addon-image.js \
+            dist/archives/${{ env.RUNTIME_VERSION }}/vt/xterm.css; do
+            test -f "$f" || { echo "Missing: $f"; exit 1; }
+          done
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
