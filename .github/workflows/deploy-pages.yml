@@ -58,7 +58,7 @@ jobs:
         id: cache-runtime
         uses: actions/cache@v4
         with:
-          path: build/archives-main
+          path: build/archives-main/${{ env.RUNTIME_VERSION }}
           key: pygbag-runtime-${{ env.RUNTIME_VERSION }}
 
       - name: Download runtime
@@ -66,8 +66,8 @@ jobs:
         run: |
           mkdir -p build
           curl -fsSL https://github.com/pygame-web/archives/archive/refs/heads/main.zip -o build/pygame-web-archives.zip
-          unzip -q build/pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*' -d build/archives-main
-          find build/archives-main/archives-main/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
+          unzip -q build/pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*' -d build
+          find build/archives-main/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
             -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
 
       - name: Build app bundle
@@ -91,7 +91,7 @@ jobs:
           cp -R build/src/build/web/. dist/
           cp web/coi-serviceworker.js dist/
           mkdir -p dist/archives
-          cp -R build/archives-main/archives-main/${{ env.RUNTIME_VERSION }} dist/archives/
+          cp -R build/archives-main/${{ env.RUNTIME_VERSION }} dist/archives/
 
       - name: Verify runtime files
         run: |
