@@ -1,13 +1,15 @@
 # Makefile for DIY Arcade Machine
 
-PORT ?= 8000
-WEB_TEMPLATE ?= web/default.tmpl
-WEB_TITLE ?= DIY Arcade Machine
-WEB_SRC ?= build/DIY-Arcade-Machine
-WEB_CDN ?= ./archives/0.9/
+PORT           ?= 8000
+PYGBAG_VERSION ?= 0.9.2
+RUNTIME_VERSION ?= 0.9
+WEB_TEMPLATE   ?= web/default.tmpl
+WEB_TITLE      ?= DIY Arcade Machine
+WEB_SRC        ?= build/web-src
+WEB_CDN        ?= ./archives/$(RUNTIME_VERSION)/
 WEB_ARCHIVES_URL ?= https://github.com/pygame-web/archives/archive/refs/heads/main.zip
 WEB_ARCHIVES_ZIP ?= build/pygame-web-archives.zip
-WEB_ARCHIVES_SRC ?= build/pygame-web-archives-main/archives-main/0.9
+WEB_ARCHIVES_SRC ?= build/archives-main/$(RUNTIME_VERSION)
 
 # Default behavior is to show help
 .PHONY: all help run upload build clean clean-all install web-install web-build web web-safari
@@ -47,38 +49,36 @@ upload:
 
 # Install pygbag for browser/WebAssembly builds
 web-install: install
-	.venv/bin/pip install pygbag
+	.venv/bin/pip install pygbag==$(PYGBAG_VERSION)
 
-# Build and serve the WebAssembly version in the browser.
-# pygbag bundles main.py + arcade_app.py + logo.png into build/web/.
-# Override port with: make web PORT=8080
-#
+# Download and prepare the pygbag runtime (cached: only re-downloads if missing).
 # Browser support:
 #   Chrome / Firefox : works out of the box
-#   Safari           : requires Cross-Origin-Isolation headers (COOP+COEP).
-#                      Use `make web-safari` which starts a wrapper server
-#                      that injects the required headers.
-# Build the WebAssembly version into build/web/.
-# Keep a local template and download the pygbag runtime during builds so the
-# deployed app does not depend on cross-origin assets at runtime.
+#   Safari           : requires Cross-Origin-Isolation headers → use `make web-safari`
 web-runtime:
-	@mkdir -p build/pygame-web-archives-main
+	@mkdir -p build/archives-main
 	@if [ ! -f "$(WEB_ARCHIVES_ZIP)" ]; then \
 		echo "Downloading pygbag runtime archive..."; \
-		curl -L "$(WEB_ARCHIVES_URL)" -o "$(WEB_ARCHIVES_ZIP)"; \
+		curl -fsSL "$(WEB_ARCHIVES_URL)" -o "$(WEB_ARCHIVES_ZIP)"; \
 	fi
-	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/browserfs.min.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/vt/xterm.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/vt/xterm-addon-image.js" ] || [ ! -f "$(WEB_ARCHIVES_SRC)/vt/xterm.css" ]; then \
-		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/0.9/*' -d build/pygame-web-archives-main; \
+	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ]; then \
+		echo "Extracting pygbag runtime..."; \
+		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/$(RUNTIME_VERSION)/*' -d build/archives-main; \
+		find "$(WEB_ARCHIVES_SRC)" -type f -name '*.js' \
+			-exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$$}' {} +; \
 	fi
-	find "$(WEB_ARCHIVES_SRC)" -type f -name '*.js' -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$$}' {} +
 
 web-build: web-install web-runtime
 	@echo "Building WebAssembly version..."
 	rm -rf $(WEB_SRC)
 	mkdir -p $(WEB_SRC)
 	cp main.py arcade_app.py logo.png $(WEB_SRC)/
-	@if [ -f highscores.json ]; then cp highscores.json $(WEB_SRC)/; fi
-	PYTHONUNBUFFERED=1 .venv/bin/python -m pygbag --ume_block 0 --width 640 --height 640 --title "$(WEB_TITLE)" --icon logo.png --cdn "$(WEB_CDN)" --template $(abspath $(WEB_TEMPLATE)) --build $(WEB_SRC)
+	[ -f highscores.json ] && cp highscores.json $(WEB_SRC)/ || true
+	PYTHONUNBUFFERED=1 .venv/bin/python -m pygbag \
+		--ume_block 0 --width 640 --height 640 \
+		--title "$(WEB_TITLE)" --icon logo.png \
+		--cdn "$(WEB_CDN)" --template $(abspath $(WEB_TEMPLATE)) \
+		--build $(WEB_SRC)
 	cp web/coi-serviceworker.js $(WEB_SRC)/build/web/
 	mkdir -p $(WEB_SRC)/build/web/archives
 	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
