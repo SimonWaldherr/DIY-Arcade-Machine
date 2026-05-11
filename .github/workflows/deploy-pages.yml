@@ -13,13 +13,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   PYTHON_VERSION: "3.12"
   PYGBAG_VERSION: "0.9.2"
   RUNTIME_VERSION: "0.9"
+  RUNTIME_ARCHIVE_DIR: build/archives-main
 
 jobs:
   validate:
@@ -58,7 +59,7 @@ jobs:
         id: cache-runtime
         uses: actions/cache@v4
         with:
-          path: build/archives-main/${{ env.RUNTIME_VERSION }}
+          path: ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }}
           key: pygbag-runtime-${{ env.RUNTIME_VERSION }}
 
       - name: Download runtime
@@ -67,7 +68,7 @@ jobs:
           mkdir -p build
           curl -fsSL https://github.com/pygame-web/archives/archive/refs/heads/main.zip -o build/pygame-web-archives.zip
           unzip -q build/pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*' -d build
-          find build/archives-main/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
+          find ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
             -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
 
       - name: Build app bundle
@@ -91,7 +92,7 @@ jobs:
           cp -R build/src/build/web/. dist/
           cp web/coi-serviceworker.js dist/
           mkdir -p dist/archives
-          cp -R build/archives-main/${{ env.RUNTIME_VERSION }} dist/archives/
+          cp -R ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }} dist/archives/
 
       - name: Verify runtime files
         run: |
