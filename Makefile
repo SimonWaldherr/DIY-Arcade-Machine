@@ -63,7 +63,7 @@ web-runtime:
 	fi
 	@if [ ! -f "$(WEB_ARCHIVES_SRC)/pythons.js" ]; then \
 		echo "Extracting pygbag runtime..."; \
-		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/$(RUNTIME_VERSION)/*' -d build/archives-main; \
+		unzip -q "$(WEB_ARCHIVES_ZIP)" 'archives-main/$(RUNTIME_VERSION)/*' -d build; \
 		find "$(WEB_ARCHIVES_SRC)" -type f -name '*.js' \
 			-exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$$}' {} +; \
 	fi

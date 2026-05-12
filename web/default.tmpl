@@ -145,17 +145,8 @@ asyncio.run(custom_site())
 // END BLOCK
 
 config = {
-    xtermjs: (() => {
-        const defaultXtermPath = "vt/xterm.js";
-        const xtermPath = "{{cookiecutter.xtermjs}}".trim();
-        if (!xtermPath) return defaultXtermPath;
-        const normalizedPath = xtermPath
-            .replace(/^[a-z]+:\/\/[^/]+\//i, "")
-            .replace(/^\.\//, "")
-            .replace(/^\//, "");
-        const archivePathMatch = normalizedPath.match(/(?:^|\/)archives\/[^/]+\/(.+)$/);
-        return archivePathMatch ? archivePathMatch[1] : normalizedPath;
-    })(),
+    // pythons.js prefixes this value with config.cdn; keep it relative to the runtime root.
+    xtermjs: "vt/xterm.js",
     _sdl2: "canvas",
     user_canvas: 0,
     user_canvas_managed: 0,
