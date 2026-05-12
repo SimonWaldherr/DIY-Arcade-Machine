@@ -73,6 +73,7 @@ jobs:
       - name: Verify runtime assets
         run: |
           grep -F 'xtermjs: "vt/xterm.js"' dist/index.html
+          grep -F 'cdn: new URL("./archives/${{ env.RUNTIME_VERSION }}/", document.baseURI).href' dist/index.html
           ! grep -F "archives/${{ env.RUNTIME_VERSION }}/archives/${{ env.RUNTIME_VERSION }}" dist/index.html
           for f in \
             dist/archives/${{ env.RUNTIME_VERSION }}/pythons.js \

@@ -145,7 +145,7 @@ asyncio.run(custom_site())
 // END BLOCK
 
 config = {
-    // pythons.js prefixes this value with config.cdn; keep it relative to the runtime root.
+    // vtx.js imports xterm assets through config.cdn; keep this path relative to the runtime root.
     xtermjs: "vt/xterm.js",
     _sdl2: "canvas",
     user_canvas: 0,
@@ -154,7 +154,7 @@ config = {
     can_close: {{cookiecutter.can_close}},
     archive: "{{cookiecutter.archive}}",
     gui_debug: 3,
-    cdn: "{{cookiecutter.cdn}}",
+    cdn: new URL("{{cookiecutter.cdn}}", document.baseURI).href,
     autorun: {{cookiecutter.autorun}},
     PYBUILD: "{{cookiecutter.PYBUILD}}"
 }
