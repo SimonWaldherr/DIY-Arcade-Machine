@@ -18,7 +18,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  PYGBAG_VERSION: "0.9.2"
+  PYGBAG_VERSION: "0.9.3"
   RUNTIME_VERSION: "0.9"
   RUNTIME_ARCHIVE_DIR: build/archives-main
 
