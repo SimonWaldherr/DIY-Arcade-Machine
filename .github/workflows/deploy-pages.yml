@@ -60,7 +60,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }}
-          key: pygbag-runtime-${{ env.RUNTIME_VERSION }}
+          key: pygbag-runtime-${{ env.RUNTIME_VERSION }}-${{ env.PYGBAG_VERSION }}
 
       - name: Download runtime
         if: steps.cache-runtime.outputs.cache-hit != 'true'

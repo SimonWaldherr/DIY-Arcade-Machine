@@ -102,7 +102,7 @@ A 640×640 window will appear showing the emulated LED matrix (10× scale).
 1. **Install pygbag**:
    ```bash
    make web-install
-   # or manually: pip install pygbag
+   # or manually: pip install pygbag==0.9.3
    ```
 
 2. **Build and serve**:

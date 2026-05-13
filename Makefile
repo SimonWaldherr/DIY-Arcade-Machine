@@ -1,7 +1,7 @@
 # Makefile for DIY Arcade Machine
 
 PORT           ?= 8000
-PYGBAG_VERSION ?= 0.9.2
+PYGBAG_VERSION ?= 0.9.3
 RUNTIME_VERSION ?= 0.9
 WEB_TEMPLATE   ?= web/default.tmpl
 WEB_TITLE      ?= DIY Arcade Machine
