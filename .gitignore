@@ -4,6 +4,7 @@ __pycache__
 .mypy_cache
 .vscode
 .pytest_cache
+.venv
 highscores.json
 arcade_app.mpy
 build/
