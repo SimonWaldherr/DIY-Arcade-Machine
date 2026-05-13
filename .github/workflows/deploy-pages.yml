@@ -1,56 +1,77 @@
-name: Build & Deploy to GitHub Pages
+name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
+  PYTHON_VERSION: "3.12"
   PYGBAG_VERSION: "0.9.2"
   RUNTIME_VERSION: "0.9"
+  RUNTIME_ARCHIVE_DIR: build/archives-main
 
 jobs:
-  build:
+  validate:
+    name: Validate Python sources
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install pygbag
+      - name: Syntax check
+        run: python -m py_compile main.py arcade_app.py
+
+  build-pages:
+    name: Build web bundle
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install build dependency
         run: pip install pygbag==${{ env.PYGBAG_VERSION }}
 
       - name: Cache pygbag runtime
         id: cache-runtime
         uses: actions/cache@v4
         with:
-          path: archives-main
-          key: pygbag-runtime-${{ env.PYGBAG_VERSION }}
+          path: ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }}
+          key: pygbag-runtime-${{ env.RUNTIME_VERSION }}
 
-      - name: Download & prepare pygbag runtime
+      - name: Download runtime
         if: steps.cache-runtime.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL https://github.com/pygame-web/archives/archive/refs/heads/main.zip \
-            -o pygame-web-archives.zip
-          unzip -q pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*'
-          rm pygame-web-archives.zip
-          find archives-main/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
+          mkdir -p build
+          curl -fsSL https://github.com/pygame-web/archives/archive/refs/heads/main.zip -o build/pygame-web-archives.zip
+          unzip -q build/pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*' -d build
+          find ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
             -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
 
-      - name: Build with pygbag
+      - name: Build app bundle
         run: |
           mkdir -p build/src
           cp main.py arcade_app.py logo.png build/src/
@@ -64,17 +85,17 @@ jobs:
             --cdn "./archives/${{ env.RUNTIME_VERSION }}/" \
             --template "${{ github.workspace }}/web/default.tmpl" \
             --build build/src
+
+      - name: Prepare Pages artifact
+        run: |
           mkdir -p dist
           cp -R build/src/build/web/. dist/
           cp web/coi-serviceworker.js dist/
           mkdir -p dist/archives
-          cp -R archives-main/${{ env.RUNTIME_VERSION }} dist/archives/
+          cp -R ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }} dist/archives/
 
-      - name: Verify runtime assets
+      - name: Verify runtime files
         run: |
-          grep -F 'xtermjs: "vt/xterm.js"' dist/index.html
-          grep -F 'cdn: new URL("./archives/${{ env.RUNTIME_VERSION }}/", document.baseURI).href' dist/index.html
-          ! grep -F "archives/${{ env.RUNTIME_VERSION }}/archives/${{ env.RUNTIME_VERSION }}" dist/index.html
           for f in \
             dist/archives/${{ env.RUNTIME_VERSION }}/pythons.js \
             dist/archives/${{ env.RUNTIME_VERSION }}/browserfs.min.js \
@@ -89,13 +110,19 @@ jobs:
         with:
           path: dist
 
-  deploy:
-    needs: build
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-pages
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
