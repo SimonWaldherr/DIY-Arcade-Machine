@@ -14,7 +14,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **25 Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, Invaders, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, Bejeweled, Sokoban, and more
+- **26+ Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, Invaders, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, Ray Racer, Bejeweled, Sokoban, and more
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -174,7 +174,7 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes **26 games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
+The arcade includes **27+ games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
@@ -197,6 +197,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
 | `PONG` | Pong | Paddle vs. AI, increasing difficulty |
 | `QIX` | Qix | Territory capture, avoid the enemy |
+| `RAYRCR` | Ray Racer | Raytrace-style anti-grav racing with boost, energy gates, and rival hovercars |
 | `REVRS` | Othello/Reversi | Board game with simple CPU opponent |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |

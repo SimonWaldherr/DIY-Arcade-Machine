@@ -29,6 +29,7 @@ Each file combines gameplay notes with technical descriptions in two views:
 | `PITFAL` | Pitfall Runner | [PITFAL.md](./PITFAL.md) |
 | `PONG` | Pong | [PONG.md](./PONG.md) |
 | `QIX` | Qix | [QIX.md](./QIX.md) |
+| `RAYRCR` | Ray Racer | [RAYRCR.md](./RAYRCR.md) |
 | `REVRS` | Othello/Reversi | [REVRS.md](./REVRS.md) |
 | `RTYPE` | R-Type Shooter | [RTYPE.md](./RTYPE.md) |
 | `SIMON` | Simon Says | [SIMON.md](./SIMON.md) |

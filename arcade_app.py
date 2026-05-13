@@ -8750,6 +8750,27 @@ class CpuPlayerJoystick:
                     d = JOYSTICK_LEFT if delta > 0 else JOYSTICK_RIGHT
             else:
                 d = JOYSTICK_UP
+        elif n == "RAYRCR" and hasattr(g, "objects"):
+            target = 0.0
+            for obj in g.objects:
+                rel = obj[0] - g.pos
+                if 4.0 < rel < 32.0:
+                    lane = g._object_lane(obj)
+                    if obj[2] == 2:
+                        target = lane
+                        break
+                    if abs(g.lane - lane) < 0.48:
+                        target = -0.78 if lane > 0 else 0.78
+                        break
+            if g.lane < target - 0.10:
+                d = JOYSTICK_UP_RIGHT
+            elif g.lane > target + 0.10:
+                d = JOYSTICK_UP_LEFT
+            else:
+                d = JOYSTICK_UP
+            self._dir = d
+            self._z = bool(getattr(g, "energy", 0) > 28 and getattr(g, "speed", 0) > 0.75 and abs(g.lane) < 0.88)
+            return
         elif n == "2048" and hasattr(g, "grid"):
             # Keep the board biased toward one corner, the standard simple 2048 CPU.
             d = self._choose_2048_dir(g)
@@ -8804,7 +8825,7 @@ class DemosGame:
     GAME_DEMOS = (
         "2048", "ASTRD", "BEJWL", "BRKOUT", "CAVEFL", "CATCH", "DODGE",
         "DOOMLT", "FLAPPY", "FROGGR", "INVADR", "LANDER", "LOCO", "MAZE",
-        "PACMAN", "PITFAL", "PONG", "QIX", "REVRS", "RTYPE", "SIMON",
+        "PACMAN", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE", "SIMON",
         "SNAKE", "STACK", "SOKO", "TETRIS", "TRON", "UFODEF",
     )
     GAME_CLASS_NAMES = {
@@ -8826,6 +8847,7 @@ class DemosGame:
         "PITFAL": "PitfallGame",
         "PONG": "PongGame",
         "QIX": "QixGame",
+        "RAYRCR": "RayRacerGame",
         "REVRS": "OthelloGame",
         "RTYPE": "RTypeGame",
         "SIMON": "SimonGame",
@@ -12480,6 +12502,386 @@ class DoomLiteGame:
                 return
 
 
+class RayRacerGame:
+    """
+    RAY RACER
+    Raycaster-style anti-grav racer for the 64x64 matrix.
+
+    Controls:
+      - UP/DOWN: accelerate/brake
+      - LEFT/RIGHT: steer
+      - Z: boost
+      - C: return to menu
+    """
+
+    PLAY_H = HEIGHT - 6
+    HORIZON = 14
+    TRACK_LEN = 900.0
+    RACE_LAPS = 3
+    FRAME_MS = 34
+
+    def __init__(self):
+        self.row_depth = [0.0] * self.PLAY_H
+        self.row_center = [WIDTH // 2] * self.PLAY_H
+        self.row_half = [0] * self.PLAY_H
+        self.reset()
+
+    def reset(self):
+        self.pos = 0.0
+        self.speed = 0.0
+        self.lane = 0.0
+        self.energy = 100.0
+        self.score = 0
+        self.passed = 0
+        self.lap = 1
+        self.frame = 0
+        self.bump_flash = 0
+        self.boost_flash = 0
+        self.objects = []
+        self._spawn_until(self.pos + 145.0)
+        self._prepare_depth_table()
+
+    def _prepare_depth_table(self):
+        span = self.PLAY_H - self.HORIZON
+        for y in range(self.PLAY_H):
+            if y < self.HORIZON:
+                self.row_depth[y] = 0.0
+                continue
+            p = (y - self.HORIZON + 1) / span
+            depth = 1.8 / (p * p)
+            if depth > 72.0:
+                depth = 72.0
+            self.row_depth[y] = depth
+
+    def _track_curve(self, z):
+        # Three broad waves create readable F-Zero-like sweepers without maps.
+        return (
+            math.sin(z * 0.013) * 18.0 +
+            math.sin(z * 0.027 + 1.7) * 7.0 +
+            math.sin(z * 0.006) * 24.0
+        )
+
+    def _object_lane(self, obj):
+        lane = obj[1]
+        if obj[2] == 0:
+            lane += math.sin((self.frame + obj[3]) * 0.055) * 0.13
+        elif obj[2] == 1:
+            lane += math.sin((self.frame + obj[3]) * 0.035) * 0.08
+        if lane < -0.95:
+            lane = -0.95
+        elif lane > 0.95:
+            lane = 0.95
+        return lane
+
+    def _spawn_until(self, z_limit):
+        far = self.pos + 18.0
+        for obj in self.objects:
+            if obj[0] > far:
+                far = obj[0]
+        while far < z_limit:
+            far += random.randint(16, 38)
+            lane = random.choice((-0.72, -0.28, 0.28, 0.72))
+            roll = random.randint(0, 99)
+            if roll < 17:
+                kind = 2      # energy gate
+            elif roll < 42:
+                kind = 1      # heavy rival
+            else:
+                kind = 0      # fast rival
+            self.objects.append([far, lane, kind, random.randint(0, 127)])
+
+    def _update(self, direction, boost):
+        global game_over
+        self.frame += 1
+        if self.bump_flash > 0:
+            self.bump_flash -= 1
+        if self.boost_flash > 0:
+            self.boost_flash -= 1
+
+        sx, sy = direction_to_delta_8way(direction)
+
+        if sy < 0:
+            self.speed += 0.060
+        elif sy > 0:
+            self.speed -= 0.080
+        else:
+            self.speed -= 0.014
+
+        max_speed = 2.25
+        if boost and self.energy > 2.0 and self.speed > 0.35:
+            self.speed += 0.085
+            self.energy -= 1.15
+            self.boost_flash = 4
+            max_speed = 3.10
+        else:
+            self.energy += 0.085
+            if self.energy > 100.0:
+                self.energy = 100.0
+
+        if self.speed < 0.0:
+            self.speed = 0.0
+        elif self.speed > max_speed:
+            self.speed = max_speed
+
+        if sx:
+            steer = 0.045 + self.speed * 0.022
+            self.lane += sx * steer
+        else:
+            self.lane *= 0.992
+
+        if self.lane < -1.38:
+            self.lane = -1.38
+        elif self.lane > 1.38:
+            self.lane = 1.38
+
+        if abs(self.lane) > 1.05:
+            self.speed *= 0.935
+            self.energy -= 0.55 + self.speed * 0.18
+            self.bump_flash = 2
+
+        self.pos += self.speed
+        self.lap = int(self.pos // self.TRACK_LEN) + 1
+        self.score = int(self.pos * 2) + self.passed * 65 + int(self.energy)
+
+        kept = []
+        for obj in self.objects:
+            rel = obj[0] - self.pos
+            lane = self._object_lane(obj)
+            if rel < 1.25:
+                if obj[2] == 2:
+                    if abs(self.lane - lane) < 0.38:
+                        self.energy += 22.0
+                        if self.energy > 100.0:
+                            self.energy = 100.0
+                        self.score += 120
+                elif abs(self.lane - lane) < (0.34 if obj[2] == 0 else 0.42):
+                    self.energy -= 17.0 if obj[2] == 0 else 25.0
+                    self.speed *= 0.42
+                    self.bump_flash = 12
+                else:
+                    self.passed += 1
+                continue
+            kept.append(obj)
+        self.objects = kept
+        self._spawn_until(self.pos + 145.0)
+
+        if self.energy <= 0.0:
+            set_game_over_score(self.score, won=False)
+            return
+        if self.pos >= self.TRACK_LEN * self.RACE_LAPS:
+            self.score += int(self.energy * 20) + 1500
+            set_game_over_score(self.score, won=True)
+            return
+        game_over = False
+
+    def _project_y(self, rel):
+        if rel <= 1.8:
+            return self.PLAY_H - 1
+        if rel > 72.0:
+            return -1
+        span = self.PLAY_H - self.HORIZON
+        p = math.sqrt(1.8 / rel)
+        y = self.HORIZON + int(p * span)
+        if y < self.HORIZON:
+            y = self.HORIZON
+        elif y >= self.PLAY_H:
+            y = self.PLAY_H - 1
+        return y
+
+    def _draw_hovercar(self, sp, sx, sy, size, kind):
+        if size < 2:
+            size = 2
+        half = size // 2
+        if kind == 1:
+            body = (255, 90, 30)
+            glow = (255, 220, 40)
+        else:
+            body = (35, 210, 255)
+            glow = (255, 35, 200)
+        y0 = sy - size
+        y1 = sy
+        for y in range(y0, y1 + 1):
+            if y < 0 or y >= self.PLAY_H:
+                continue
+            rel_y = y - y0
+            row_half = max(1, half - abs(rel_y - size // 2) // 2)
+            for x in range(sx - row_half, sx + row_half + 1):
+                if 0 <= x < WIDTH:
+                    if abs(x - sx) == row_half:
+                        sp(x, y, glow[0], glow[1], glow[2])
+                    else:
+                        sp(x, y, body[0], body[1], body[2])
+        for x in (sx - half - 1, sx + half + 1):
+            if 0 <= x < WIDTH and 0 <= sy < self.PLAY_H:
+                sp(x, sy, 255, 255, 255)
+
+    def _draw_energy_gate(self, sp, sx, sy, size):
+        half = max(2, size // 2)
+        top = sy - size - 1
+        for x in range(sx - half, sx + half + 1):
+            if 0 <= x < WIDTH and 0 <= top < self.PLAY_H:
+                sp(x, top, 60, 255, 110)
+        for y in range(top, sy + 1):
+            if 0 <= y < self.PLAY_H:
+                for x in (sx - half, sx + half):
+                    if 0 <= x < WIDTH:
+                        sp(x, y, 30, 220, 120)
+        if 0 <= sx < WIDTH and 0 <= sy - half < self.PLAY_H:
+            sp(sx, sy - half, 255, 255, 160)
+
+    def _render(self):
+        sp = display.set_pixel
+        base_curve = self._track_curve(self.pos)
+        shake = self.bump_flash if self.bump_flash > 0 else 0
+        if shake:
+            shake = (shake & 1) * 2 - 1
+
+        # Sky and distant skyline.
+        for y in range(self.HORIZON):
+            r = 5 + y * 2
+            g = 5 + y
+            b = 24 + y * 3
+            if self.boost_flash:
+                b += 28
+            for x in range(WIDTH):
+                sp(x, y, r, g, b if b < 255 else 255)
+        for x in range(0, WIDTH, 7):
+            h = 2 + ((x * 5 + int(self.pos)) % 6)
+            for y in range(self.HORIZON - h, self.HORIZON):
+                if 0 <= y < self.PLAY_H:
+                    sp(x, y, 22, 22, 42)
+                    if x + 1 < WIDTH:
+                        sp(x + 1, y, 22, 22, 42)
+
+        for y in range(self.HORIZON, self.PLAY_H):
+            depth = self.row_depth[y]
+            p = (y - self.HORIZON + 1) / (self.PLAY_H - self.HORIZON)
+            curve = self._track_curve(self.pos + depth)
+            center = WIDTH // 2 + int((curve - base_curve) * 0.72) - int(self.lane * p * 28.0) + shake
+            half = 3 + int(p * p * 34.0)
+            self.row_center[y] = center
+            self.row_half[y] = half
+            left = center - half
+            right = center + half
+            stripe = int((self.pos + depth) * 0.23) & 1
+            for x in range(WIDTH):
+                if left <= x <= right:
+                    edge = (x == left or x == right or x == left + 1 or x == right - 1)
+                    lane_mark = abs(x - center) <= 1 and (int((self.pos + depth) * 0.45) & 3) < 2
+                    side_mark = (abs(x - (center - half // 2)) <= 1 or abs(x - (center + half // 2)) <= 1) and stripe
+                    if edge:
+                        if self.boost_flash:
+                            sp(x, y, 255, 80, 255)
+                        else:
+                            sp(x, y, 35, 230, 255)
+                    elif lane_mark:
+                        sp(x, y, 255, 245, 160)
+                    elif side_mark:
+                        sp(x, y, 110, 120, 150)
+                    else:
+                        shade = 26 + int(p * 58)
+                        if stripe:
+                            shade += 12
+                        if self.bump_flash:
+                            sp(x, y, 120, 22, 24)
+                        else:
+                            sp(x, y, shade, shade + 6, shade + 18)
+                else:
+                    dist_edge = left - x if x < left else x - right
+                    glow = 70 - dist_edge * 5
+                    if glow > 0:
+                        sp(x, y, glow // 3, glow, glow)
+                    else:
+                        ground = 8 + int(p * 16)
+                        sp(x, y, ground, 7, 18 + int(p * 10))
+
+        visible = []
+        for obj in self.objects:
+            rel = obj[0] - self.pos
+            if 1.2 < rel < 72.0:
+                visible.append((rel, obj))
+        visible.sort(reverse=True)
+        for rel, obj in visible:
+            y = self._project_y(rel)
+            if y < self.HORIZON:
+                continue
+            center = self.row_center[y]
+            half = self.row_half[y]
+            lane = self._object_lane(obj)
+            sx = center + int(lane * half)
+            size = int(36 / rel) + 2
+            if size > 13:
+                size = 13
+            if obj[2] == 2:
+                self._draw_energy_gate(sp, sx, y, size + 3)
+            else:
+                self._draw_hovercar(sp, sx, y, size, obj[2])
+
+        # Player hovercraft and cockpit line.
+        car_y = self.PLAY_H - 4
+        car_x = WIDTH // 2
+        if self.bump_flash:
+            car_col = (255, 50, 35)
+        elif self.boost_flash:
+            car_col = (255, 255, 255)
+        else:
+            car_col = (245, 245, 255)
+        for dy, w in ((0, 2), (1, 4), (2, 6), (3, 4)):
+            yy = car_y + dy
+            for x in range(car_x - w, car_x + w + 1):
+                if 0 <= x < WIDTH and 0 <= yy < self.PLAY_H:
+                    if abs(x - car_x) == w:
+                        sp(x, yy, 255, 45, 210)
+                    else:
+                        sp(x, yy, car_col[0], car_col[1], car_col[2])
+        if self.boost_flash:
+            for x in range(car_x - 2, car_x + 3):
+                sp(x, self.PLAY_H - 1, 80, 180, 255)
+
+        # Top playfield status: lap and energy.
+        draw_rectangle(0, 0, WIDTH - 1, 0, 0, 0, 0)
+        draw_text_small(1, 1, "L" + str(self.lap), 255, 255, 255)
+        bar = int(self.energy * 24 / 100)
+        draw_rectangle(WIDTH - 27, 1, WIDTH - 3, 3, 20, 20, 20)
+        if bar > 0:
+            br, bg, bb = (40, 230, 100) if self.energy > 30 else (255, 80, 30)
+            draw_rectangle(WIDTH - 27, 1, WIDTH - 28 + bar, 3, br, bg, bb)
+
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            d = joystick.read_direction([
+                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
+            ], debounce=False)
+            self._update(d, z_button)
+            if game_over:
+                return False
+            self._render()
+            if (self.frame % 90) == 0:
+                gc.collect()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        begin_game(0)
+        self.reset()
+        display.clear()
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        begin_game(0)
+        self.reset()
+        display.clear()
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
 
 class StackerGame:
     """
@@ -12981,6 +13383,7 @@ class GameSelect:
         ("PITFAL", PitfallGame, 0),
         ("PONG", PongGame, 0),
         ("QIX", QixGame, GAME_FLAG_HEAVY),
+        ("RAYRCR", RayRacerGame, GAME_FLAG_HEAVY),
         ("REVRS", OthelloGame, GAME_FLAG_HEAVY),
         ("RTYPE", RTypeGame, GAME_FLAG_HEAVY),
         ("SIMON", SimonGame, 0),
