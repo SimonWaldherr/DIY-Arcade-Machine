@@ -8,6 +8,13 @@
         nextUrl.hash = hash;
         window.location.replace(nextUrl);
     }
+
+    const params = new URLSearchParams(search);
+    const PYGBAG_PACKAGE_REPO_PARAM = "PYGPI";
+    if (!params.has(PYGBAG_PACKAGE_REPO_PARAM)) {
+        const separator = search ? `${search}&` : "?";
+        window.history.replaceState(null, "", `${pathname}${separator}${PYGBAG_PACKAGE_REPO_PARAM}=./archives/repo/${window.location.hash || ""}`);
+    }
 })();
 </script>
 <!-- COI Service Worker: enables SharedArrayBuffer on static hosts (GitHub Pages)
@@ -143,6 +150,19 @@ async def custom_site():
 
     screen.fill((0, 0, 0, 0))
     pygame.display.flip()
+
+    async def local_only_preload(cls, _code, _callback=None, loaderhome=".", _hint=""):
+        import os
+        import sys
+
+        if loaderhome != ".":
+            os.chdir(loaderhome)
+        if loaderhome not in sys.path:
+            sys.path.append(loaderhome)
+        PyConfig.imports_ready = True
+        return True
+
+    TopLevel_async_handler.preload_code = classmethod(local_only_preload)
 
     await shell.runpy(main, callback=ui_callback)
 
