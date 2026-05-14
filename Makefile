@@ -1,7 +1,7 @@
 # Makefile for DIY Arcade Machine
 
 PORT           ?= 8000
-PYGBAG_VERSION ?= 0.9.3
+PYGBAG_VERSION ?= 0.9.2
 RUNTIME_VERSION ?= 0.9
 RUNTIME_INDEX   ?= $(subst .,,$(RUNTIME_VERSION))0
 PYTHON_ABI      ?= cp312

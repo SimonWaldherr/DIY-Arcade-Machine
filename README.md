@@ -59,7 +59,7 @@ python main.py               # or: make run
 ### Test in browser locally
 
 ```bash
-pip install pygame-ce pygbag==0.9.3   # or: make web-install
+pip install pygame-ce pygbag==0.9.2   # or: make web-install
 python -m pygbag .                    # build + serve at http://localhost:8000
 # Safari: make web-safari (adds required COOP+COEP headers)
 ```
@@ -75,9 +75,7 @@ WebAssembly bundle with `python -m pygbag --build .` (Python 3.11) and deploys i
 
 **Local preview** (build + serve at `http://localhost:8000`):
 ```bash
-pip install pygame-ce pygbag==0.9.3
-python -m pygbag .
-```
+pip install pygame-ce pygbag==0.9.2```
 
 **CI / offline bundle** (writes to `build/web/`):
 ```bash
@@ -145,7 +143,7 @@ A 640×640 window will appear showing the emulated LED matrix (10× scale).
 
 1. **Install dependencies**:
    ```bash
-   pip install pygame-ce pygbag==0.9.3
+   pip install pygame-ce pygbag==0.9.2
    # or via make: make web-install
    ```
 
