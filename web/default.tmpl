@@ -144,6 +144,19 @@ async def custom_site():
     screen.fill((0, 0, 0, 0))
     pygame.display.flip()
 
+    async def skip_package_preload(cls, code, callback=None, loaderhome=".", hint=""):
+        import os
+        import sys
+
+        if loaderhome != ".":
+            os.chdir(loaderhome)
+        if loaderhome not in sys.path:
+            sys.path.append(loaderhome)
+        PyConfig.imports_ready = True
+        return True
+
+    TopLevel_async_handler.preload_code = classmethod(skip_package_preload)
+
     await shell.runpy(main, callback=ui_callback)
 
 import asyncio
