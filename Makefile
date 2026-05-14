@@ -82,6 +82,9 @@ web-build: web-install web-runtime
 	cp web/coi-serviceworker.js $(WEB_SRC)/build/web/
 	mkdir -p $(WEB_SRC)/build/web/archives
 	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
+	mkdir -p $(WEB_SRC)/build/web/archives/repo
+	printf '{"-CDN-":"./archives/repo/"}\n' > $(WEB_SRC)/build/web/archives/repo/index-090-cp312.json
+	printf '{"packages":{}}\n' > $(WEB_SRC)/build/web/archives/repo/repodata.json
 	rm -rf build/web
 	cp -R $(WEB_SRC)/build/web build/web
 

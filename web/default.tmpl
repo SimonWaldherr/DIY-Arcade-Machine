@@ -8,6 +8,12 @@
         nextUrl.hash = hash;
         window.location.replace(nextUrl);
     }
+
+    const params = new URLSearchParams(search);
+    if (!params.has("PYGPI")) {
+        const separator = search ? `${search}&` : "?";
+        window.history.replaceState(null, "", `${pathname}${separator}PYGPI=./archives/repo/${hash}`);
+    }
 })();
 </script>
 <!-- COI Service Worker: enables SharedArrayBuffer on static hosts (GitHub Pages)
