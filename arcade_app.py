@@ -16,6 +16,7 @@ except ImportError:
     import os as _os
 try:
     _os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    _os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 except Exception:
     pass
 
@@ -24,6 +25,13 @@ DEBUG_BOOT_LOG = False
 CONFIG_LOW_RAM_MODE = False
 CONFIG_BUFFERED_DISPLAY = False
 CONFIG_ENABLE_HEAVY_GAMES = True
+CONFIG_ENABLE_GAME_DEMOS = False
+# Empty allowlists mean "all"; blocklists remove names after that.
+# Game demo names in CONFIG_*_DEMOS use the "G:NAME" form, e.g. "G:SNAKE".
+CONFIG_ENABLED_GAMES = ()
+CONFIG_DISABLED_GAMES = ()
+CONFIG_ENABLED_DEMOS = ()
+CONFIG_DISABLED_DEMOS = ()
 CONFIG_FRAME_MS_DEFAULT = 35
 FEATURE_TIER = 2
 
@@ -38,6 +46,11 @@ def _boot_log(tag):
         pass
 
 _boot_log("imports done")
+
+def _name_enabled(name, enabled=(), disabled=()):
+    if enabled and name not in enabled:
+        return False
+    return name not in disabled
 
 def _shuffle_in_place(seq):
     # Fisher-Yates; avoids relying on random.shuffle (not present on some MicroPython builds)
@@ -414,8 +427,11 @@ else:
             except Exception as e:
                 raise RuntimeError("PyGame not installed. Install with: pip install pygame") from e
             self._pg = pygame
-            if not pygame.get_init():
-                pygame.init()
+            pygame.init()
+            try:
+                pygame.mixer.quit()
+            except Exception:
+                pass
             pygame.display.set_caption("DIY Arcade Machine")
             flags = 0
             target = (self.w * self.scale, self.h * self.scale)
@@ -8942,11 +8958,21 @@ class DemosGame:
                   "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
                   "BOIDS", "NBODY", "CRT", "WINMAZE")
         )
+        effects = tuple(
+            name for name in effects
+            if _name_enabled(name, CONFIG_ENABLED_DEMOS, CONFIG_DISABLED_DEMOS)
+        )
+        game_demos = tuple(
+            "G:" + name for name in self.GAME_DEMOS
+            if _name_enabled("G:" + name, CONFIG_ENABLED_DEMOS, CONFIG_DISABLED_DEMOS)
+            and _name_enabled(name, CONFIG_ENABLED_GAMES, CONFIG_DISABLED_GAMES)
+        )
 
-        # The actual demo list only includes the effects for now since the game demos are pretty slow to init and run on low-end hardware. 
-        # The game demos can be re-enabled by uncommenting the line below and commenting out the line after it.
-        #self.demos = tuple("G:" + name for name in self.GAME_DEMOS) + effects
-        self.demos = effects
+        self.demos = (
+            game_demos + effects
+            if CONFIG_ENABLE_GAME_DEMOS
+            else effects
+        )
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
@@ -10758,6 +10784,7 @@ class DemosGame:
             last_frame = now
             self._frame += 1
             self._step_current_demo()
+            display_flush()
             maybe_collect(120)
 
     async def main_loop_async(self, joystick):
@@ -10789,7 +10816,9 @@ class DemosGame:
             last_frame = now
             self._frame += 1
             self._step_current_demo()
+            display_flush()
             maybe_collect(120)
+            await asyncio.sleep(0)
 
 
 class LunarLanderGame:
@@ -13486,10 +13515,11 @@ class GameSelect:
         refresh_runtime_config()
         self.joystick = Joystick()
         self.highscores = HighScores()
-        if CONFIG_ENABLE_HEAVY_GAMES:
-            self.game_registry = self.GAME_REGISTRY
-        else:
-            self.game_registry = tuple(g for g in self.GAME_REGISTRY if not (g[2] & GAME_FLAG_HEAVY))
+        self.game_registry = tuple(
+            g for g in self.GAME_REGISTRY
+            if (CONFIG_ENABLE_HEAVY_GAMES or not (g[2] & GAME_FLAG_HEAVY))
+            and _name_enabled(g[0], CONFIG_ENABLED_GAMES, CONFIG_DISABLED_GAMES)
+        )
         self.sorted_games = tuple(g[0] for g in self.game_registry)
         self.selected = 0
         self.top = 0
@@ -13653,6 +13683,79 @@ async def _show_intro():
                 pass
         return False
 
+    def _draw_png_logo(path):
+        try:
+            import struct
+            import zlib
+            with open(path, "rb") as fh:
+                data = fh.read()
+            if data[:8] != b"\x89PNG\r\n\x1a\n":
+                return False
+            pos = 8
+            width = height = color_type = None
+            compressed = []
+            while pos + 8 <= len(data):
+                length = struct.unpack(">I", data[pos:pos + 4])[0]
+                kind = data[pos + 4:pos + 8]
+                chunk = data[pos + 8:pos + 8 + length]
+                pos += 12 + length
+                if kind == b"IHDR":
+                    width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(">IIBBBBB", chunk)
+                    if bit_depth != 8 or compression != 0 or filter_method != 0 or interlace != 0 or color_type not in (2, 6):
+                        return False
+                elif kind == b"IDAT":
+                    compressed.append(chunk)
+                elif kind == b"IEND":
+                    break
+            if not width or not height or not compressed:
+                return False
+            channels = 4 if color_type == 6 else 3
+            row_len = width * channels
+            raw = zlib.decompress(b"".join(compressed))
+            rows = []
+            i = 0
+            prev = [0] * row_len
+            for _ in range(height):
+                filt = raw[i]
+                i += 1
+                row = list(raw[i:i + row_len])
+                i += row_len
+                for x in range(row_len):
+                    left = row[x - channels] if x >= channels else 0
+                    up = prev[x]
+                    up_left = prev[x - channels] if x >= channels else 0
+                    if filt == 1:
+                        row[x] = (row[x] + left) & 255
+                    elif filt == 2:
+                        row[x] = (row[x] + up) & 255
+                    elif filt == 3:
+                        row[x] = (row[x] + ((left + up) >> 1)) & 255
+                    elif filt == 4:
+                        p = left + up - up_left
+                        pa = abs(p - left)
+                        pb = abs(p - up)
+                        pc = abs(p - up_left)
+                        row[x] = (row[x] + (left if pa <= pb and pa <= pc else up if pb <= pc else up_left)) & 255
+                rows.append(row)
+                prev = row
+            for y in range(HEIGHT):
+                sy = (y * height) // HEIGHT
+                row = rows[sy]
+                for x in range(WIDTH):
+                    sx = ((x * width) // WIDTH) * channels
+                    r = row[sx]
+                    g = row[sx + 1]
+                    b = row[sx + 2]
+                    if channels == 4:
+                        a = row[sx + 3]
+                        r = (r * a) // 255
+                        g = (g * a) // 255
+                        b = (b * a) // 255
+                    display.set_pixel(x, y, r, g, b)
+            return True
+        except Exception:
+            return False
+
     display.clear()
     shown = False
     joystick = None if IS_MICROPYTHON else Joystick()
@@ -13660,20 +13763,36 @@ async def _show_intro():
         try:
             import pygame  # type: ignore
             import os as _os_intro
-            _candidates = ["logo.png"]
-            try:
-                _candidates.append(_os_intro.path.join(
-                    _os_intro.path.dirname(_os_intro.path.abspath(__file__)), "logo.png"))
-            except Exception:
-                pass
-            img = None
+            _candidates = []
+            for _base in (
+                _os_intro.getcwd(),
+                _os_intro.path.dirname(_os_intro.path.abspath(__file__)),
+                _os_intro.path.dirname(_os_intro.path.abspath(sys.argv[0])) if getattr(sys, "argv", None) else "",
+            ):
+                if _base:
+                    _lp = _os_intro.path.join(_base, "logo.png")
+                    if _lp not in _candidates:
+                        _candidates.append(_lp)
             for _lp in _candidates:
-                try:
-                    img = pygame.image.load(_lp)
+                if _draw_png_logo(_lp):
+                    display_flush()
+                    await _yield()
+                    if _intro_skip_requested(joystick):
+                        display.clear()
+                        display_flush()
+                        await _yield()
+                        return
+                    shown = True
                     break
-                except Exception:
-                    pass
-            if img is not None:
+            img = None
+            if not shown:
+                for _lp in _candidates:
+                    try:
+                        img = pygame.image.load(_lp)
+                        break
+                    except Exception:
+                        pass
+            if not shown and img is not None:
                 blit_image = getattr(display, "blit_image", None)
                 if blit_image is None or not blit_image(img):
                     img = pygame.transform.scale(img, (WIDTH, HEIGHT))

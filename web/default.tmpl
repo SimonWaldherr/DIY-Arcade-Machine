@@ -57,12 +57,14 @@ def uy(*argv):
 async def custom_site():
     import asyncio
     import json
+    import os
     import platform
     from pathlib import Path
 
     import embed
     import pygame
 
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
     platform.document.body.style.background = "#050509"
 
     def compose():
@@ -70,6 +72,10 @@ async def custom_site():
         window.chromakey(None, *screen.get_colorkey(), 40)
 
     pygame.init()
+    try:
+        pygame.mixer.quit()
+    except Exception:
+        pass
     pygame.font.init()
 
     screen = pygame.display.set_mode([ux(.100), uy(.100)], pygame.SRCALPHA, 32)
@@ -77,8 +83,12 @@ async def custom_site():
     screen.fill((0, 0, 0, 0))
     compose()
 
-    platform.window.transfer.hidden = true
-    platform.window.canvas.style.visibility = "visible"
+    platform.window.eval(
+        "document.getElementById('status').innerText='Starting arcade engine...';"
+        "document.getElementById('progress').value=100;"
+        "document.getElementById('canvas').style.visibility='visible';"
+        "if(window.DIYArcadeArmLoaderFallback){window.DIYArcadeArmLoaderFallback(7000);}"
+    )
 
     apk = "{{cookiecutter.archive}}.apk"
     bundle = "{{cookiecutter.archive}}"
@@ -133,7 +143,7 @@ async def custom_site():
         screen.blit(prompt, (marginx + ux(80), marginy - uy(10)))
         compose()
 
-    if not platform.window.MM.UME:
+    if False and not platform.window.MM.UME:
         prompt = fnt.render("Ready to start !", True, "blue")
         pg_bar(track.len)
         screen.blit(prompt, (marginx + ux(80), marginy - uy(10)))
@@ -185,10 +195,12 @@ config = {
 }
 </script>
 
-<title>{{cookiecutter.title}}</title>
+<title>DIY Arcade Machine</title>
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="application-name" content="DIY Arcade Machine">
+<meta name="apple-mobile-web-app-title" content="DIY Arcade Machine">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="prefetch" href="{{cookiecutter.cdn}}cpythonrc.py">
@@ -208,7 +220,7 @@ body {
     font-family: Arial, sans-serif;
 }
 body.ios-touch-enabled {
-    --ios-control-area: clamp(148px, 28dvh, 216px);
+    --ios-control-area: clamp(188px, 34dvh, 256px);
     --ios-game-size: min(
         94vw,
         calc(100vh - var(--ios-control-area) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px)
@@ -236,18 +248,139 @@ body.ios-touch-enabled {
     );
 }
 }
-#status {
-    display: inline-block;
-    margin-top: 20px;
-    font-weight: bold;
-    color: rgb(160, 160, 170);
-}
-#progress {
-    width: min(300px, 80vw);
-    height: 20px;
-}
 div.emscripten {
     text-align: center;
+}
+#transfer {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    box-sizing: border-box;
+    color: #f5f7fb;
+    background:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        #050509;
+    background-size: 18px 18px;
+    pointer-events: none;
+}
+#transfer[hidden],
+#transfer.loader-hidden {
+    display: none !important;
+}
+.loader-panel {
+    width: min(420px, 88vw);
+    text-align: center;
+}
+.loader-badge {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 18px;
+    border: 2px solid rgba(55, 230, 255, 0.85);
+    box-shadow: 0 0 0 4px rgba(255, 45, 210, 0.18), inset 0 0 0 6px #050509;
+    background:
+        linear-gradient(90deg, transparent 47%, rgba(255, 245, 0, 0.9) 47% 53%, transparent 53%),
+        linear-gradient(transparent 47%, rgba(255, 245, 0, 0.9) 47% 53%, transparent 53%),
+        #101726;
+    image-rendering: pixelated;
+}
+.loader-title {
+    margin: 0;
+    font: 700 clamp(24px, 7vw, 40px)/1 Arial, sans-serif;
+    letter-spacing: 0;
+}
+.loader-subtitle {
+    margin: 10px 0 24px;
+    color: rgb(160, 170, 185);
+    font: 600 14px/1.35 Arial, sans-serif;
+}
+#status {
+    min-height: 20px;
+    margin-top: 12px;
+    font: 700 14px/1.35 Arial, sans-serif;
+    color: rgb(200, 225, 235);
+}
+#progress {
+    display: block;
+    width: 100%;
+    height: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.75);
+    appearance: none;
+    -webkit-appearance: none;
+}
+#progress::-webkit-progress-bar {
+    background: rgba(255, 255, 255, 0.08);
+}
+#progress::-webkit-progress-value {
+    border-radius: 7px;
+    background:
+        repeating-linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.24) 0 8px,
+            transparent 8px 14px
+        ),
+        linear-gradient(90deg, #37e6ff, #ff2dd2, #fff245);
+}
+#progress::-moz-progress-bar {
+    border-radius: 7px;
+    background:
+        repeating-linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.24) 0 8px,
+            transparent 8px 14px
+        ),
+        linear-gradient(90deg, #37e6ff, #ff2dd2, #fff245);
+}
+.loader-pixels {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 4px;
+    margin-top: 18px;
+}
+.loader-pixels span {
+    height: 5px;
+    background: rgba(255, 255, 255, 0.16);
+    animation: loader-pixel-pulse 1.25s ease-in-out infinite;
+}
+.loader-pixels span:nth-child(2n) {
+    animation-delay: 0.12s;
+}
+.loader-pixels span:nth-child(3n) {
+    animation-delay: 0.24s;
+}
+.loader-pixels span:nth-child(3n + 1) {
+    background: rgba(55, 230, 255, 0.75);
+}
+.loader-pixels span:nth-child(3n + 2) {
+    background: rgba(255, 45, 210, 0.68);
+}
+.loader-pixels span:nth-child(3n) {
+    background: rgba(255, 242, 69, 0.68);
+}
+@keyframes loader-pixel-pulse {
+    0%,
+    100% {
+        opacity: 0.35;
+        transform: scaleY(0.65);
+    }
+    50% {
+        opacity: 1;
+        transform: scaleY(1);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .loader-pixels span {
+        animation: none;
+        opacity: 0.85;
+        transform: none;
+    }
 }
 canvas.emscripten {
     position: absolute;
@@ -278,12 +411,12 @@ body.ios-touch-enabled canvas.emscripten {
 body.ios-touch-enabled #ios-touch-controls {
     display: grid;
     flex: 0 0 auto;
-    grid-template-columns: minmax(168px, 260px) minmax(168px, 260px);
+    grid-template-columns: minmax(168px, 240px) minmax(116px, 190px);
     align-items: center;
     justify-content: space-between;
-    gap: clamp(18px, 8vw, 64px);
+    gap: clamp(16px, 7vw, 56px);
     width: min(94vw, 640px);
-    min-height: 136px;
+    min-height: 148px;
     z-index: 20;
     touch-action: none;
     user-select: none;
@@ -299,14 +432,14 @@ body.ios-touch-enabled #ios-touch-controls {
 }
 .touch-dpad {
     display: grid;
-    grid-template-columns: repeat(3, minmax(48px, 1fr));
-    grid-template-rows: repeat(3, minmax(42px, 1fr));
+    grid-template-columns: repeat(3, minmax(46px, 1fr));
+    grid-template-rows: repeat(3, minmax(44px, 1fr));
     gap: 8px;
 }
 .touch-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(70px, 1fr));
-    gap: 12px;
+    grid-template-columns: minmax(96px, 1fr);
+    gap: 10px;
     align-items: center;
 }
 .touch-button {
@@ -347,10 +480,50 @@ body.ios-touch-enabled #ios-touch-controls {
 }
 .touch-x,
 .touch-space {
-    min-height: 72px;
+    min-height: 66px;
 }
 .touch-space {
     font-size: 18px;
+}
+.repo-badge {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 30;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 12px;
+    border: 1px solid rgba(55, 230, 255, 0.48);
+    border-radius: 8px;
+    color: #f5f7fb;
+    background: rgba(5, 5, 9, 0.78);
+    box-shadow: 0 0 0 2px rgba(255, 45, 210, 0.12);
+    font: 700 13px/1 Arial, sans-serif;
+    letter-spacing: 0;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+}
+.repo-badge::before {
+    content: "";
+    width: 12px;
+    height: 12px;
+    box-sizing: border-box;
+    border: 2px solid #37e6ff;
+    border-right-color: #ff2dd2;
+    border-bottom-color: #fff245;
+}
+.repo-badge:hover,
+.repo-badge:focus-visible {
+    border-color: rgba(255, 242, 69, 0.8);
+    background: rgba(16, 23, 38, 0.92);
+}
+body.ios-touch-enabled .repo-badge {
+    position: static;
+    flex: 0 0 auto;
+    min-height: 32px;
+    touch-action: manipulation;
 }
 .bottomright {
     position: absolute;
@@ -372,9 +545,17 @@ body.ios-touch-enabled #ios-touch-controls {
 </head>
 <body>
 <div id="transfer" align="center">
-    <div class="emscripten" id="status">Downloading...</div>
-    <div class="emscripten">
+    <div class="loader-panel" role="status" aria-live="polite">
+        <div class="loader-badge" aria-hidden="true"></div>
+        <h1 class="loader-title">DIY Arcade Machine</h1>
+        <div class="loader-subtitle">Loading WebAssembly arcade...</div>
         <progress value="0" max="100" id="progress"></progress>
+        <div class="emscripten" id="status">Downloading...</div>
+        <div class="loader-pixels" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span>
+        </div>
     </div>
 </div>
 
@@ -393,6 +574,8 @@ body.ios-touch-enabled #ios-touch-controls {
     </div>
 </div>
 
+<a class="repo-badge" href="https://github.com/SimonWaldherr/DIY-Arcade-Machine" target="_blank" rel="noopener noreferrer" aria-label="Open DIY Arcade Machine on GitHub">GitHub Repo</a>
+
 <div id="html"></div>
 <div id="crt" class="bottomright">
     <div id="system" hidden>
@@ -400,7 +583,6 @@ body.ios-touch-enabled #ios-touch-controls {
             <button id="aiostop" disabled>AIO stop</button>
             <button id="aiopaused_true" disabled>AIO pause</button>
             <button id="aiopaused_false" disabled>AIO play</button>
-            <button id="pygame_mixer_music_pause" disabled>Music pause</button>
         </div>
         <div class="button-container">
             <div id="load_min">min</div>
@@ -428,14 +610,67 @@ body.ios-touch-enabled #ios-touch-controls {
 </div>
 
 <script type="application/javascript">
+const DIY_ARCADE_TITLE = "DIY Arcade Machine";
+function DIYArcadeSetPageTitle() {
+    document.title = DIY_ARCADE_TITLE;
+}
+DIYArcadeSetPageTitle();
+
+window.DIYArcadeLoaderReady = false;
+window.DIYArcadeLoaderFallbackTimer = null;
+window.DIYArcadeHideLoader = function() {
+    window.DIYArcadeLoaderReady = true;
+    if (window.DIYArcadeLoaderFallbackTimer) {
+        clearTimeout(window.DIYArcadeLoaderFallbackTimer);
+        window.DIYArcadeLoaderFallbackTimer = null;
+    }
+    const transfer = document.getElementById("transfer");
+    if (transfer) {
+        transfer.classList.add("loader-hidden");
+        transfer.hidden = true;
+        transfer.style.display = "none";
+    }
+};
+window.DIYArcadeArmLoaderFallback = function(ms) {
+    if (window.DIYArcadeLoaderReady || window.DIYArcadeLoaderFallbackTimer) {
+        return;
+    }
+    window.DIYArcadeLoaderFallbackTimer = setTimeout(() => {
+        window.DIYArcadeHideLoader();
+    }, ms || 7000);
+};
+setInterval(() => {
+    if (window.DIYArcadeLoaderReady || window.DIYArcadeLoaderFallbackTimer) {
+        return;
+    }
+    const progress = document.getElementById("progress");
+    const status = document.getElementById("status");
+    if (
+        progress &&
+        status &&
+        Number(progress.value) >= Number(progress.max || 100) &&
+        status.innerText.indexOf("Starting arcade engine") !== -1
+    ) {
+        window.DIYArcadeArmLoaderFallback(7000);
+    }
+    if (progress && Number(progress.value) >= Number(progress.max || 100)) {
+        window.DIYArcadeArmLoaderFallback(2500);
+    }
+}, 500);
+setTimeout(() => {
+    window.DIYArcadeHideLoader();
+}, 20000);
+
 (function setupIOSTouchControls() {
     const keys = ["up", "down", "left", "right", "x", "space"];
     const state = {};
     const presses = {};
+    const activeSources = {};
 
     keys.forEach((key) => {
         state[key] = false;
         presses[key] = 0;
+        activeSources[key] = new Set();
     });
     state.presses = presses;
 
@@ -453,15 +688,26 @@ body.ios-touch-enabled #ios-touch-controls {
         return navigator.maxTouchPoints > 0 && (iOS || android || mobileUA);
     }
 
-    function setKey(key, active, button) {
-        if (state[key] === active) {
+    function setKey(key, active, button, source) {
+        if (!key || !activeSources[key]) {
+            return;
+        }
+        const inputSource = source || "button:" + key;
+        if (active) {
+            activeSources[key].add(inputSource);
+        } else {
+            activeSources[key].delete(inputSource);
+        }
+
+        const nextActive = activeSources[key].size > 0;
+        if (state[key] === nextActive) {
             if (button) {
                 button.classList.toggle("is-active", active);
             }
             return;
         }
-        state[key] = active;
-        if (active) {
+        state[key] = nextActive;
+        if (nextActive) {
             presses[key] += 1;
         }
         if (button) {
@@ -470,11 +716,12 @@ body.ios-touch-enabled #ios-touch-controls {
     }
 
     function resetAll() {
+        keys.forEach((key) => {
+            activeSources[key].clear();
+            state[key] = false;
+        });
         document.querySelectorAll("[data-touch-key]").forEach((button) => {
-            const key = button.dataset.touchKey;
-            if (key) {
-                setKey(key, false, button);
-            }
+            button.classList.remove("is-active");
             if (button._touchIds) {
                 button._touchIds.clear();
             }
@@ -508,6 +755,7 @@ body.ios-touch-enabled #ios-touch-controls {
 
     document.querySelectorAll("[data-touch-key]").forEach((button) => {
         const key = button.dataset.touchKey;
+        const source = "button:" + key;
         button._touchIds = new Set();
 
         button.addEventListener("touchstart", (event) => {
@@ -515,7 +763,7 @@ body.ios-touch-enabled #ios-touch-controls {
             for (const touch of event.changedTouches) {
                 button._touchIds.add(touch.identifier);
             }
-            setKey(key, true, button);
+            setKey(key, true, button, source);
         }, listenerOptions);
 
         const endTouch = (event) => {
@@ -524,13 +772,108 @@ body.ios-touch-enabled #ios-touch-controls {
                 button._touchIds.delete(touch.identifier);
             }
             if (button._touchIds.size === 0) {
-                setKey(key, false, button);
+                setKey(key, false, button, source);
             }
         };
 
         button.addEventListener("touchend", endTouch, listenerOptions);
         button.addEventListener("touchcancel", endTouch, listenerOptions);
     });
+
+    const canvas = document.getElementById("canvas");
+    const swipeTouches = new Map();
+    const swipeTimers = {};
+    const swipeThreshold = 18;
+    const swipePulseMs = 130;
+    const tapMaxDistance = 12;
+    const tapMaxMs = 260;
+
+    function pulseKey(key, sourcePrefix, pulseMs) {
+        if (!key) {
+            return;
+        }
+        const source = sourcePrefix + ":" + key;
+        setKey(key, true, null, source);
+        if (swipeTimers[key]) {
+            clearTimeout(swipeTimers[key]);
+        }
+        swipeTimers[key] = setTimeout(() => {
+            setKey(key, false, null, source);
+            swipeTimers[key] = null;
+        }, pulseMs);
+    }
+
+    function pulseSwipeKey(key) {
+        pulseKey(key, "swipe", swipePulseMs);
+    }
+
+    function pulseCanvasTap() {
+        pulseKey("space", "canvas-tap", swipePulseMs);
+    }
+
+    function endCanvasTouches(event) {
+        event.preventDefault();
+        for (const touch of event.changedTouches) {
+            const start = swipeTouches.get(touch.identifier);
+            if (start) {
+                const dx = touch.clientX - start.startX;
+                const dy = touch.clientY - start.startY;
+                if (
+                    !start.swiped &&
+                    Date.now() - start.startedAt <= tapMaxMs &&
+                    Math.max(Math.abs(dx), Math.abs(dy)) <= tapMaxDistance
+                ) {
+                    pulseCanvasTap();
+                }
+            }
+            swipeTouches.delete(touch.identifier);
+        }
+    }
+
+    if (canvas) {
+        canvas.addEventListener("touchstart", (event) => {
+            event.preventDefault();
+            for (const touch of event.changedTouches) {
+                swipeTouches.set(touch.identifier, {
+                    startX: touch.clientX,
+                    startY: touch.clientY,
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    startedAt: Date.now(),
+                    swiped: false,
+                });
+            }
+        }, listenerOptions);
+
+        canvas.addEventListener("touchmove", (event) => {
+            event.preventDefault();
+            for (const touch of event.changedTouches) {
+                const start = swipeTouches.get(touch.identifier);
+                if (!start) {
+                    continue;
+                }
+                const dx = touch.clientX - start.x;
+                const dy = touch.clientY - start.y;
+                if (Math.max(Math.abs(dx), Math.abs(dy)) < swipeThreshold) {
+                    continue;
+                }
+                pulseSwipeKey(Math.abs(dx) > Math.abs(dy)
+                    ? (dx < 0 ? "left" : "right")
+                    : (dy < 0 ? "up" : "down"));
+                swipeTouches.set(touch.identifier, {
+                    startX: start.startX,
+                    startY: start.startY,
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    startedAt: start.startedAt,
+                    swiped: true,
+                });
+            }
+        }, listenerOptions);
+
+        canvas.addEventListener("touchend", endCanvasTouches, listenerOptions);
+        canvas.addEventListener("touchcancel", endCanvasTouches, listenerOptions);
+    }
 
     window.addEventListener("blur", resetAll);
     window.addEventListener("pagehide", resetAll);
@@ -543,9 +886,12 @@ body.ios-touch-enabled #ios-touch-controls {
 
 async function custom_onload(debug_hidden) {
     console.log(__FILE__, "custom_onload");
+    DIYArcadeSetPageTitle();
     pyconsole.hidden = debug_hidden;
     system.hidden = debug_hidden;
-    transfer.hidden = debug_hidden;
+    if (!window.DIYArcadeLoaderReady) {
+        transfer.hidden = false;
+    }
     info.hidden = debug_hidden;
     box.hidden = debug_hidden;
 }
@@ -556,6 +902,7 @@ function custom_prerun() {
 
 function custom_postrun() {
     console.log(__FILE__, "custom_postrun");
+    DIYArcadeSetPageTitle();
     window.addEventListener("keydown", function(e) {
         if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].indexOf(e.code) > -1) {
             if (!python.config.debug) {
