@@ -1,4 +1,15 @@
 <html lang="en-us">
+<script>
+(() => {
+    const { pathname, search, hash } = window.location;
+    if (!pathname.endsWith("/") && !pathname.endsWith("/index.html")) {
+        const nextUrl = new URL(`${pathname}/`, window.location.origin);
+        nextUrl.search = search;
+        nextUrl.hash = hash;
+        window.location.replace(nextUrl);
+    }
+})();
+</script>
 <!-- COI Service Worker: enables SharedArrayBuffer on static hosts (GitHub Pages)
      by injecting Cross-Origin-Isolation headers via a service worker. -->
 <script src="coi-serviceworker.js"></script>
