@@ -31,6 +31,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Web build (Pygbag)](#web-build-pygbag)
 - [Hardware Requirements](#hardware-requirements)
 - [Software Requirements](#software-requirements)
 - [Installation](#installation)
@@ -67,6 +68,23 @@ python -m pygbag .                    # build + serve at http://localhost:8000
 
 Push to `main` — the [GitHub Actions workflow](.github/workflows/deploy-pages.yml) builds the
 WebAssembly bundle with `python -m pygbag --build .` (Python 3.11) and deploys it to GitHub Pages automatically.
+
+---
+
+## Web build (Pygbag)
+
+**Local preview** (build + serve at `http://localhost:8000`):
+```bash
+pip install pygame-ce pygbag==0.9.3
+python -m pygbag .
+```
+
+**CI / offline bundle** (writes to `build/web/`):
+```bash
+python -m pygbag --build .
+```
+
+**GitHub Pages**: in your repo go to *Settings → Pages → Source* and select **GitHub Actions**. Every push to `main` triggers the workflow which builds and deploys automatically.
 
 ---
 

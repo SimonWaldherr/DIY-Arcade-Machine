@@ -82,11 +82,12 @@ async def main():
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
-# asyncio.run() MUST be at module level for pygbag to schedule the coroutine.
-# This also works on desktop Python 3.7+ and MicroPython (uasyncio).
+# pygbag sets __name__ = "__main__" for the entrypoint, so this guard works
+# on desktop, MicroPython, and in the browser equally.
 try:
     import asyncio
 except ImportError:
     import uasyncio as asyncio  # type: ignore
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
