@@ -1,122 +1,66 @@
-name: CI
+name: Deploy to GitHub Pages
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
+# Top-level read permission; write permissions scoped to the deploy job.
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: pages
   cancel-in-progress: true
 
-env:
-  PYTHON_VERSION: "3.12"
-  PYGBAG_VERSION: "0.9.3"
-  RUNTIME_VERSION: "0.9"
-  RUNTIME_ARCHIVE_DIR: build/archives-main
-
 jobs:
-  validate:
-    name: Validate Python sources
+  build:
+    name: Build web bundle
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pygame-ce pygbag==0.9.3
 
       - name: Syntax check
         run: python -m py_compile main.py arcade_app.py
 
-  build-pages:
-    name: Build web bundle
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Install build dependency
-        run: pip install pygbag==${{ env.PYGBAG_VERSION }}
-
-      - name: Cache pygbag runtime
-        id: cache-runtime
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }}
-          key: pygbag-runtime-${{ env.RUNTIME_VERSION }}-${{ env.PYGBAG_VERSION }}
-
-      - name: Download runtime
-        if: steps.cache-runtime.outputs.cache-hit != 'true'
+      - name: Build web bundle
+        # pygbag --build reads main.py from the current directory and writes
+        # the WebAssembly bundle to build/web/.  The CDN runtime is fetched
+        # automatically; no manual archive download is required.
         run: |
-          mkdir -p build
-          curl -fsSL https://github.com/pygame-web/archives/archive/refs/heads/main.zip -o build/pygame-web-archives.zip
-          unzip -q build/pygame-web-archives.zip 'archives-main/${{ env.RUNTIME_VERSION }}/*' -d build
-          find ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }} -type f -name '*.js' \
-            -exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$}' {} +
-
-      - name: Build app bundle
-        run: |
-          mkdir -p build/src
-          cp main.py arcade_app.py logo.png build/src/
-          [ -f highscores.json ] && cp highscores.json build/src/ || true
           python -m pygbag \
             --ume_block 0 \
             --width 640 \
             --height 640 \
             --title "DIY Arcade Machine" \
             --icon logo.png \
-            --cdn "./archives/${{ env.RUNTIME_VERSION }}/" \
-            --template "${{ github.workspace }}/web/default.tmpl" \
-            --build build/src
+            --build .
 
-      - name: Prepare Pages artifact
-        run: |
-          mkdir -p dist
-          cp -R build/src/build/web/. dist/
-          cp web/coi-serviceworker.js dist/
-          mkdir -p dist/archives
-          cp -R ${{ env.RUNTIME_ARCHIVE_DIR }}/${{ env.RUNTIME_VERSION }} dist/archives/
-
-      - name: Verify runtime files
-        run: |
-          for f in \
-            dist/archives/${{ env.RUNTIME_VERSION }}/pythons.js \
-            dist/archives/${{ env.RUNTIME_VERSION }}/browserfs.min.js \
-            dist/archives/${{ env.RUNTIME_VERSION }}/vt/xterm.js \
-            dist/archives/${{ env.RUNTIME_VERSION }}/vt/xterm-addon-image.js \
-            dist/archives/${{ env.RUNTIME_VERSION }}/vt/xterm.css; do
-            test -f "$f" || { echo "Missing: $f"; exit 1; }
-          done
+      - name: Verify build output
+        # Fail fast if pygbag did not produce the expected entry point.
+        run: test -f build/web/index.html || { echo "build/web/index.html missing"; exit 1; }
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
-          path: dist
+          path: build/web
 
-  deploy-pages:
+  deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-pages
+    needs: build
     runs-on: ubuntu-latest
+    # Pages deployment needs write access to pages and an OIDC token.
     permissions:
-      contents: read
       pages: write
       id-token: write
     environment:
@@ -125,4 +69,4 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

@@ -2,7 +2,8 @@
 
 ![Python](https://img.shields.io/badge/Python-3.x-blue?style=flat-square&logo=python)
 ![MicroPython](https://img.shields.io/badge/MicroPython-RP2040-green?style=flat-square)
-![PyGame](https://img.shields.io/badge/PyGame-Supported-yellow?style=flat-square)
+![PyGame](https://img.shields.io/badge/PyGame-CE-yellow?style=flat-square)
+[![Deploy to GitHub Pages](https://github.com/SimonWaldherr/DIY-Arcade-Machine/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/SimonWaldherr/DIY-Arcade-Machine/actions/workflows/deploy-pages.yml)
 
 [![Short video of the DIY Arcade Console in action (on YouTube)](https://img.youtube.com/vi/3mumzf_0GiM/0.jpg)](https://www.youtube.com/watch?v=3mumzf_0GiM)
 
@@ -29,6 +30,8 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
 
 ## Table of Contents
 
+- [Quick Start](#quick-start)
+- [Web build (Pygbag)](#web-build-pygbag)
 - [Hardware Requirements](#hardware-requirements)
 - [Software Requirements](#software-requirements)
 - [Installation](#installation)
@@ -41,6 +44,47 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
 - [Usage](#usage)
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Start
+
+### Run on desktop
+
+```bash
+pip install pygame-ce        # or: make install
+python main.py               # or: make run
+```
+
+### Test in browser locally
+
+```bash
+pip install pygame-ce pygbag==0.9.3   # or: make web-install
+python -m pygbag .                    # build + serve at http://localhost:8000
+# Safari: make web-safari (adds required COOP+COEP headers)
+```
+
+### Deploy to GitHub Pages
+
+Push to `main` — the [GitHub Actions workflow](.github/workflows/deploy-pages.yml) builds the
+WebAssembly bundle with `python -m pygbag --build .` (Python 3.11) and deploys it to GitHub Pages automatically.
+
+---
+
+## Web build (Pygbag)
+
+**Local preview** (build + serve at `http://localhost:8000`):
+```bash
+pip install pygame-ce pygbag==0.9.3
+python -m pygbag .
+```
+
+**CI / offline bundle** (writes to `build/web/`):
+```bash
+python -m pygbag --build .
+```
+
+**GitHub Pages**: in your repo go to *Settings → Pages → Source* and select **GitHub Actions**. Every push to `main` triggers the workflow which builds and deploys automatically.
 
 ---
 
@@ -74,7 +118,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
 ### Desktop
 
 - Python 3.7+
-- PyGame 2.x
+- pygame-ce 2.x (Community Edition — drop-in replacement for pygame)
 
 ---
 
@@ -84,7 +128,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
 
 1. **Install dependencies**:
    ```bash
-   pip install pygame
+   pip install pygame-ce
    ```
 
 2. **Run the game**:
@@ -97,25 +141,26 @@ A 640×640 window will appear showing the emulated LED matrix (10× scale).
 
 ### Browser Setup (pygbag)
 
-[pygbag](https://pygame-web.github.io/) packages the PyGame emulator as WebAssembly so it runs in any modern browser — no Python installation needed.
+[pygbag](https://pygame-web.github.io/) packages the game as WebAssembly so it runs in any modern browser — no Python installation needed.
 
-1. **Install pygbag**:
+1. **Install dependencies**:
    ```bash
-   make web-install
-   # or manually: pip install pygbag==0.9.3
+   pip install pygame-ce pygbag==0.9.3
+   # or via make: make web-install
    ```
 
-2. **Build and serve**:
+2. **Build and serve locally**:
    ```bash
-   make web           # Chrome / Firefox
-   make web-safari    # Safari (adds required COOP+COEP headers)
+   python -m pygbag .    # build + serve at http://localhost:8000
+   make web              # same, via Makefile (Chrome / Firefox)
+   make web-safari       # Safari (adds required COOP+COEP headers)
    ```
-
-   pygbag bundles the game and starts a local server. Navigate to `http://localhost:8000` when prompted.
 
 3. **Controls in browser**: same keyboard mapping as desktop — Arrow Keys, `Z`/`Space` to confirm, `X`/`Escape` to cancel.
 
 > **Browser support:** Chrome and Firefox work out of the box. Safari requires `Cross-Origin-Isolation` headers (`make web-safari` handles this automatically).
+>
+> **Automated deployment:** every push to `main` triggers the GitHub Actions workflow which builds with `python -m pygbag --build .` (Python 3.11) and deploys the result to GitHub Pages automatically.
 >
 > **Note:** High scores are stored in-memory while the page is open and reset on page reload.
 
