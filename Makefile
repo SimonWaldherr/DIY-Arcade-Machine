@@ -91,6 +91,9 @@ web-build: web-install web-runtime
 		--cdn "$(WEB_CDN)" --template $(abspath $(WEB_TEMPLATE)) \
 		--build $(WEB_SRC)
 	cp web/coi-serviceworker.js $(WEB_SRC)/build/web/
+	cp web/manifest.webmanifest $(WEB_SRC)/build/web/
+	cp web/favicon.ico web/favicon-16.png web/favicon-32.png web/og-image.png $(WEB_SRC)/build/web/
+	cp -R web/icons $(WEB_SRC)/build/web/
 	mkdir -p $(WEB_SRC)/build/web/archives
 	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
 	mkdir -p $(WEB_SRC)/build/web/archives/repo

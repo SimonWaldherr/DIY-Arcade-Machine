@@ -1,0 +1,48 @@
+{
+  "id": "/DIY-Arcade-Machine/",
+  "name": "DIY Arcade Machine",
+  "short_name": "DIY Arcade",
+  "description": "Play a collection of classic-inspired 64x64 arcade games in the browser, on desktop, or on LED matrix hardware.",
+  "categories": ["games", "entertainment"],
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#050509",
+  "theme_color": "#050509",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

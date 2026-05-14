@@ -1,4 +1,4 @@
-<html lang="en-us">
+<html lang="en" dir="ltr">
 <script>
 (() => {
     const { pathname, search, hash } = window.location;
@@ -199,14 +199,62 @@ config = {
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Play 27+ classic-inspired 64x64 arcade games in the browser, on desktop, or on LED matrix hardware.">
+<meta name="author" content="Simon Waldherr">
+<meta name="robots" content="index, follow">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050509">
+<meta name="theme-color" content="#050509" media="(prefers-color-scheme: dark)">
+<meta name="format-detection" content="telephone=no">
 <meta name="application-name" content="DIY Arcade Machine">
 <meta name="apple-mobile-web-app-title" content="DIY Arcade Machine">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta property="og:site_name" content="DIY Arcade Machine">
+<meta property="og:title" content="DIY Arcade Machine">
+<meta property="og:description" content="Play 27+ classic-inspired 64x64 arcade games directly in the browser.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/">
+<meta property="og:image" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/og-image.png">
+<meta property="og:image:secure_url" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="DIY Arcade Machine logo and title on a dark arcade background">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="de_DE">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="DIY Arcade Machine">
+<meta name="twitter:description" content="Play 27+ classic-inspired 64x64 arcade games directly in the browser.">
+<meta name="twitter:image" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/og-image.png">
+<meta name="twitter:image:alt" content="DIY Arcade Machine logo and title on a dark arcade background">
+<link rel="canonical" href="https://simonwaldherr.github.io/DIY-Arcade-Machine/">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="prefetch" href="{{cookiecutter.cdn}}cpythonrc.py">
 <link rel="prefetch" href="{{cookiecutter.cdn}}vt/xterm.js">
 <link rel="prefetch" href="{{cookiecutter.cdn}}vt/xterm-addon-image.js">
-<link rel="icon" type="image/png" href="favicon.png" sizes="16x16">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="favicon-16.png" sizes="16x16">
+<link rel="icon" type="image/png" href="favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "VideoGame",
+  "name": "DIY Arcade Machine",
+  "description": "A browser-playable collection of classic-inspired 64x64 arcade games for WebAssembly, desktop, and LED matrix hardware.",
+  "url": "https://simonwaldherr.github.io/DIY-Arcade-Machine/",
+  "image": "https://simonwaldherr.github.io/DIY-Arcade-Machine/og-image.png",
+  "applicationCategory": "GameApplication",
+  "operatingSystem": "Web Browser",
+  "inLanguage": ["en", "de"],
+  "author": {
+    "@type": "Person",
+    "name": "Simon Waldherr"
+  }
+}
+</script>
 <script src="{{cookiecutter.cdn}}browserfs.min.js"></script>
 <style>
 html,
@@ -239,6 +287,17 @@ body.ios-touch-enabled {
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
+}
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 @supports (height: 100dvh) {
 body.ios-touch-enabled {
@@ -544,13 +603,13 @@ body.ios-touch-enabled .repo-badge {
 </style>
 </head>
 <body>
-<div id="transfer" align="center">
+<div id="transfer" align="center" aria-busy="true">
     <div class="loader-panel" role="status" aria-live="polite">
         <div class="loader-badge" aria-hidden="true"></div>
         <h1 class="loader-title">DIY Arcade Machine</h1>
-        <div class="loader-subtitle">Loading WebAssembly arcade...</div>
-        <progress value="0" max="100" id="progress"></progress>
-        <div class="emscripten" id="status">Downloading...</div>
+        <div class="loader-subtitle" data-i18n="loaderSubtitle">Loading WebAssembly arcade...</div>
+        <progress value="0" max="100" id="progress" aria-label="Loading progress" data-i18n-aria-label="loadingProgress"></progress>
+        <div class="emscripten" id="status" aria-live="polite" data-i18n="statusDownloading">Downloading...</div>
         <div class="loader-pixels" aria-hidden="true">
             <span></span><span></span><span></span><span></span>
             <span></span><span></span><span></span><span></span>
@@ -559,22 +618,23 @@ body.ios-touch-enabled .repo-badge {
     </div>
 </div>
 
-<canvas class="emscripten" id="canvas" width="1px" height="1px" oncontextmenu="event.preventDefault()" tabindex="1"></canvas>
+<p id="canvas-description" class="sr-only" data-i18n="canvasDescription">Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, and X or Escape for back or cancel.</p>
+<canvas class="emscripten" id="canvas" width="1px" height="1px" oncontextmenu="event.preventDefault()" tabindex="1" role="application" aria-label="DIY Arcade Machine game canvas" aria-describedby="canvas-description" data-i18n-aria-label="canvasLabel"></canvas>
 
 <div id="ios-touch-controls" aria-hidden="true">
-    <div class="touch-dpad" aria-label="Directional controls">
-        <button type="button" class="touch-button touch-up" data-touch-key="up" aria-label="Arrow Up">↑</button>
-        <button type="button" class="touch-button touch-left" data-touch-key="left" aria-label="Arrow Left">←</button>
-        <button type="button" class="touch-button touch-right" data-touch-key="right" aria-label="Arrow Right">→</button>
-        <button type="button" class="touch-button touch-down" data-touch-key="down" aria-label="Arrow Down">↓</button>
+    <div class="touch-dpad" role="group" aria-label="Directional controls" data-i18n-aria-label="directionalControls">
+        <button type="button" class="touch-button touch-up" data-touch-key="up" aria-label="Arrow Up" data-i18n-aria-label="arrowUp">↑</button>
+        <button type="button" class="touch-button touch-left" data-touch-key="left" aria-label="Arrow Left" data-i18n-aria-label="arrowLeft">←</button>
+        <button type="button" class="touch-button touch-right" data-touch-key="right" aria-label="Arrow Right" data-i18n-aria-label="arrowRight">→</button>
+        <button type="button" class="touch-button touch-down" data-touch-key="down" aria-label="Arrow Down" data-i18n-aria-label="arrowDown">↓</button>
     </div>
-    <div class="touch-actions" aria-label="Action controls">
-        <button type="button" class="touch-button touch-x" data-touch-key="x" aria-label="X">X</button>
-        <button type="button" class="touch-button touch-space" data-touch-key="space" aria-label="Space">Space</button>
+    <div class="touch-actions" role="group" aria-label="Action controls" data-i18n-aria-label="actionControls">
+        <button type="button" class="touch-button touch-x" data-touch-key="x" aria-label="Back or cancel" data-i18n-aria-label="backCancel">X</button>
+        <button type="button" class="touch-button touch-space" data-touch-key="space" aria-label="Primary action" data-i18n-aria-label="primaryAction" data-i18n="spaceButton">Space</button>
     </div>
 </div>
 
-<a class="repo-badge" href="https://github.com/SimonWaldherr/DIY-Arcade-Machine" target="_blank" rel="noopener noreferrer" aria-label="Open DIY Arcade Machine on GitHub">GitHub Repo</a>
+<a class="repo-badge" href="https://github.com/SimonWaldherr/DIY-Arcade-Machine" target="_blank" rel="noopener noreferrer" aria-label="Open DIY Arcade Machine on GitHub" data-i18n-aria-label="githubLabel" data-i18n="githubText">GitHub Repo</a>
 
 <div id="html"></div>
 <div id="crt" class="bottomright">
@@ -611,10 +671,75 @@ body.ios-touch-enabled .repo-badge {
 
 <script type="application/javascript">
 const DIY_ARCADE_TITLE = "DIY Arcade Machine";
+const DIY_ARCADE_TRANSLATIONS = {
+    en: {
+        actionControls: "Action controls",
+        arrowDown: "Arrow Down",
+        arrowLeft: "Arrow Left",
+        arrowRight: "Arrow Right",
+        arrowUp: "Arrow Up",
+        backCancel: "Back or cancel",
+        canvasDescription: "Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, and X or Escape for back or cancel.",
+        canvasLabel: "DIY Arcade Machine game canvas",
+        directionalControls: "Directional controls",
+        githubLabel: "Open DIY Arcade Machine on GitHub",
+        githubText: "GitHub Repo",
+        loaderSubtitle: "Loading WebAssembly arcade...",
+        loadingProgress: "Loading progress",
+        primaryAction: "Primary action",
+        spaceButton: "Space",
+        statusDownloading: "Downloading...",
+    },
+    de: {
+        actionControls: "Aktionstasten",
+        arrowDown: "Pfeil nach unten",
+        arrowLeft: "Pfeil nach links",
+        arrowRight: "Pfeil nach rechts",
+        arrowUp: "Pfeil nach oben",
+        backCancel: "Zurueck oder abbrechen",
+        canvasDescription: "Interaktive Arcade-Spielflaeche. Bewege dich mit den Pfeiltasten, nutze Leertaste oder Z fuer die Hauptaktion und X oder Escape fuer Zurueck oder Abbrechen.",
+        canvasLabel: "DIY Arcade Machine Spielflaeche",
+        directionalControls: "Richtungssteuerung",
+        githubLabel: "DIY Arcade Machine auf GitHub oeffnen",
+        githubText: "GitHub Repo",
+        loaderSubtitle: "WebAssembly-Arcade wird geladen...",
+        loadingProgress: "Ladefortschritt",
+        primaryAction: "Hauptaktion",
+        spaceButton: "Space",
+        statusDownloading: "Wird heruntergeladen...",
+    },
+};
+
 function DIYArcadeSetPageTitle() {
     document.title = DIY_ARCADE_TITLE;
 }
+
+function DIYArcadeLocale() {
+    const language = (navigator.language || "en").toLowerCase();
+    return language.startsWith("de") ? "de" : "en";
+}
+
+function DIYArcadeApplyI18n() {
+    const locale = DIYArcadeLocale();
+    const messages = DIY_ARCADE_TRANSLATIONS[locale] || DIY_ARCADE_TRANSLATIONS.en;
+    document.documentElement.lang = locale;
+    document.documentElement.dir = "ltr";
+    document.querySelectorAll("[data-i18n]").forEach((element) => {
+        const message = messages[element.dataset.i18n];
+        if (message) {
+            element.textContent = message;
+        }
+    });
+    document.querySelectorAll("[data-i18n-aria-label]").forEach((element) => {
+        const message = messages[element.dataset.i18nAriaLabel];
+        if (message) {
+            element.setAttribute("aria-label", message);
+        }
+    });
+}
+
 DIYArcadeSetPageTitle();
+DIYArcadeApplyI18n();
 
 window.DIYArcadeLoaderReady = false;
 window.DIYArcadeLoaderFallbackTimer = null;
@@ -626,6 +751,7 @@ window.DIYArcadeHideLoader = function() {
     }
     const transfer = document.getElementById("transfer");
     if (transfer) {
+        transfer.setAttribute("aria-busy", "false");
         transfer.classList.add("loader-hidden");
         transfer.hidden = true;
         transfer.style.display = "none";

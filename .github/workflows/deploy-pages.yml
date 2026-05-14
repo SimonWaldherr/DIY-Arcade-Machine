@@ -43,6 +43,11 @@ jobs:
         # Fail fast if the Pages artifact is missing the entry point or runtime.
         run: |
           test -f build/web/index.html || { echo "build/web/index.html missing"; exit 1; }
+          test -f build/web/manifest.webmanifest || { echo "build/web/manifest.webmanifest missing"; exit 1; }
+          test -f build/web/favicon.ico || { echo "build/web/favicon.ico missing"; exit 1; }
+          test -f build/web/icons/icon-192.png || { echo "build/web/icons/icon-192.png missing"; exit 1; }
+          test -f build/web/icons/maskable-512.png || { echo "build/web/icons/maskable-512.png missing"; exit 1; }
+          test -f build/web/og-image.png || { echo "build/web/og-image.png missing"; exit 1; }
           test -f build/web/coi-serviceworker.js || { echo "build/web/coi-serviceworker.js missing"; exit 1; }
           test -f build/web/archives/${RUNTIME_VERSION}/pythons.js || { echo "build/web/archives/${RUNTIME_VERSION}/pythons.js missing"; exit 1; }
           test -f build/web/archives/${RUNTIME_VERSION}/browserfs.min.js || { echo "build/web/archives/${RUNTIME_VERSION}/browserfs.min.js missing"; exit 1; }
