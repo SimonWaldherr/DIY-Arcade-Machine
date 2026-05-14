@@ -8,7 +8,7 @@ Each file combines gameplay notes with technical descriptions in two views:
 
 ## Games
 
-**DEMOS** is always the first entry in the menu; all other games are listed alphabetically.
+**DEMOS** is always the first entry in the menu; the remaining games follow the registry order in `arcade_app.py`.
 
 | Game ID | Name | File |
 | --- | --- | --- |
@@ -18,9 +18,11 @@ Each file combines gameplay notes with technical descriptions in two views:
 | `BEJWL` | Bejeweled | [BEJWL.md](./BEJWL.md) |
 | `BRKOUT` | Breakout | [BRKOUT.md](./BRKOUT.md) |
 | `CAVEFL` | Cave Flyer | [CAVEFL.md](./CAVEFL.md) |
+| `CATCH` | Catch | [CATCH.md](./CATCH.md) |
 | `DODGE` | Dodge | [DODGE.md](./DODGE.md) |
 | `DOOMLT` | Doom Lite | [DOOMLT.md](./DOOMLT.md) |
 | `FLAPPY` | Flappy Bird | [FLAPPY.md](./FLAPPY.md) |
+| `FROGGR` | Frogger | [FROGGR.md](./FROGGR.md) |
 | `INVADR` | Invaders | [INVADR.md](./INVADR.md) |
 | `LANDER` | Lunar Lander | [LANDER.md](./LANDER.md) |
 | `LOCO` | LocoMotion | [LOCO.md](./LOCO.md) |
