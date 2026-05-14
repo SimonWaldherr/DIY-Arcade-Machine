@@ -10,10 +10,10 @@
     }
 
     const params = new URLSearchParams(search);
-    const pygbagPackageRepoParam = "PYGPI";
-    if (!params.has(pygbagPackageRepoParam)) {
+    const PYGBAG_PACKAGE_REPO_PARAM = "PYGPI";
+    if (!params.has(PYGBAG_PACKAGE_REPO_PARAM)) {
         const separator = search ? `${search}&` : "?";
-        window.history.replaceState(null, "", `${pathname}${separator}${pygbagPackageRepoParam}=./archives/repo/${window.location.hash || ""}`);
+        window.history.replaceState(null, "", `${pathname}${separator}${PYGBAG_PACKAGE_REPO_PARAM}=./archives/repo/${window.location.hash || ""}`);
     }
 })();
 </script>
@@ -151,7 +151,7 @@ async def custom_site():
     screen.fill((0, 0, 0, 0))
     pygame.display.flip()
 
-    async def skip_package_preload(cls, _code, _callback=None, loaderhome=".", _hint=""):
+    async def local_only_preload(cls, _code, _callback=None, loaderhome=".", _hint=""):
         import os
         import sys
 
@@ -162,7 +162,7 @@ async def custom_site():
         PyConfig.imports_ready = True
         return True
 
-    TopLevel_async_handler.preload_code = classmethod(skip_package_preload)
+    TopLevel_async_handler.preload_code = classmethod(local_only_preload)
 
     await shell.runpy(main, callback=ui_callback)
 
