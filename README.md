@@ -15,7 +15,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **26+ Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, Invaders, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, Ray Racer, Bejeweled, Sokoban, and more
+- **27 Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, Invaders, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, Ray Racer, Bejeweled, Sokoban, Catch, Frogger, and more
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -75,7 +75,7 @@ WebAssembly bundle with `python -m pygbag --build .` (Python 3.11) and deploys i
 
 **Local preview** (build + serve at `http://localhost:8000`):
 ```bash
-pip install pygame-ce pygbag==0.9.2```
+pip install pygame-ce pygbag==0.9.2
 
 **CI / offline bundle** (writes to `build/web/`):
 ```bash
@@ -217,7 +217,7 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes **27+ games** accessible via the main menu. **DEMOS** always appears at the top; all other games are listed alphabetically.
+The arcade includes **28 menu entries**: **DEMOS** plus 27 games in the same order used by `GameSelect` in `arcade_app.py`.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
@@ -229,9 +229,11 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
 | `BRKOUT` | Breakout | Brick breaker with rainbow bricks |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
+| `CATCH` | Catch | Catch stars, avoid bombs, and keep the basket moving |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
 | `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
+| `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
 | `LOCO` | LocoMotion | Sliding railway puzzle with train routing |
