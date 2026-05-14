@@ -3,6 +3,8 @@
 PORT           ?= 8000
 PYGBAG_VERSION ?= 0.9.2
 RUNTIME_VERSION ?= 0.9
+RUNTIME_INDEX   ?= $(subst .,,$(RUNTIME_VERSION))0
+PYTHON_ABI      ?= cp312
 WEB_TEMPLATE   ?= web/default.tmpl
 WEB_TITLE      ?= DIY Arcade Machine
 WEB_SRC        ?= build/web-src
@@ -10,6 +12,9 @@ WEB_CDN        ?= ./archives/$(RUNTIME_VERSION)/
 WEB_ARCHIVES_URL ?= https://github.com/pygame-web/archives/archive/refs/heads/main.zip
 WEB_ARCHIVES_ZIP ?= build/pygame-web-archives.zip
 WEB_ARCHIVES_SRC ?= build/archives-main/$(RUNTIME_VERSION)
+WEB_REPO_URL     ?= https://pygame-web.github.io/archives/repo
+WEB_REPO_CACHE   ?= build/pygame-web-repo
+WEB_PYGAME_STATIC_WHEEL ?= pygame_static-1.0-$(PYTHON_ABI)-$(PYTHON_ABI)-wasm32_bi_emscripten.whl
 
 # Default behavior is to show help
 .PHONY: all help run upload build clean clean-all install web-install web-build web web-safari
@@ -67,6 +72,12 @@ web-runtime:
 		find "$(WEB_ARCHIVES_SRC)" -type f -name '*.js' \
 			-exec perl -ni -e 'print unless m{^//# sourceMappingURL=.*\.map\s*$$}' {} +; \
 	fi
+	@mkdir -p "$(WEB_REPO_CACHE)/$(PYTHON_ABI)"
+	@if [ ! -f "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" ]; then \
+		echo "Downloading pygbag pygame runtime wheel..."; \
+		curl -fsSL "$(WEB_REPO_URL)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" \
+			-o "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)"; \
+	fi
 
 web-build: web-install web-runtime
 	@echo "Building WebAssembly version..."
@@ -82,6 +93,13 @@ web-build: web-install web-runtime
 	cp web/coi-serviceworker.js $(WEB_SRC)/build/web/
 	mkdir -p $(WEB_SRC)/build/web/archives
 	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
+	mkdir -p $(WEB_SRC)/build/web/archives/repo
+	mkdir -p $(WEB_SRC)/build/web/archives/repo/$(PYTHON_ABI)
+	cp "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" \
+		$(WEB_SRC)/build/web/archives/repo/$(PYTHON_ABI)/
+	# pygbag expects -CDN- in package indexes as the wheel base URL.
+	printf '{"-CDN-":"./archives/repo/"}\n' > $(WEB_SRC)/build/web/archives/repo/index-$(RUNTIME_INDEX)-$(PYTHON_ABI).json
+	printf '{"packages":{}}\n' > $(WEB_SRC)/build/web/archives/repo/repodata.json
 	rm -rf build/web
 	cp -R $(WEB_SRC)/build/web build/web
 
@@ -96,7 +114,7 @@ web: web-build
 # behavior; pygbag runtime files are served from build/web/archives.
 # Run `make web` first to build, then `make web-safari` to serve.
 web-safari: web-install
-	@if [ ! -f build/web/index.html ]; then \
+	@if [ ! -f build/web/index.html ] || [ ! -f "build/web/archives/repo/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" ]; then \
 		echo "No build found – building first..."; \
 		$(MAKE) web-build; \
 	fi

@@ -52,10 +52,12 @@ async def main():
         pygame.init()
         flags = 0
         size = (640, 640)
-        if getattr(sys, "platform", "") == "emscripten":
-            flags = getattr(pygame, "SCALED", 0)
-            size = (64, 64)
-        _surf = pygame.display.set_mode(size, flags)
+        existing = pygame.display.get_surface()
+        if existing is not None:
+            size = existing.get_size()
+            _surf = existing
+        else:
+            _surf = pygame.display.set_mode(size, flags)
         pygame.display.set_caption("DIY Arcade Machine")
         _surf.fill((10, 0, 30))                        # dark purple
 
@@ -82,11 +84,12 @@ async def main():
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
-# asyncio.run() MUST be at module level for pygbag to schedule the coroutine.
-# This also works on desktop Python 3.7+ and MicroPython (uasyncio).
+# Desktop and MicroPython run this file as __main__. pygbag's browser loader
+# can execute it with a different module name, so also key off emscripten.
 try:
     import asyncio
 except ImportError:
     import uasyncio as asyncio  # type: ignore
 
-asyncio.run(main())
+if __name__ == "__main__" or getattr(sys, "platform", "") == "emscripten":
+    asyncio.run(main())

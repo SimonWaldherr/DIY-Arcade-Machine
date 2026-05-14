@@ -401,7 +401,9 @@ else:
             self._screen = None
             self._surface = None
             self._scaled_surface = None
-            self._web_scaled = bool(IS_WEB)
+            # pygame.SCALED asks SDL for a renderer. That fails in some
+            # pygbag browser runtimes, so web uses the software-scaling path.
+            self._use_pygame_scaled = False
             self._inited = False
 
         def start(self):
@@ -417,7 +419,7 @@ else:
             pygame.display.set_caption("DIY Arcade Machine")
             flags = 0
             target = (self.w * self.scale, self.h * self.scale)
-            if self._web_scaled:
+            if self._use_pygame_scaled:
                 flags = getattr(pygame, "SCALED", 0)
                 target = (self.w, self.h)
             # Reuse an existing display surface of the same size so that a
@@ -428,7 +430,11 @@ else:
                 self._screen = existing
             else:
                 self._screen = pygame.display.set_mode(target, flags)
-            if self._web_scaled:
+            try:
+                self._screen.set_colorkey(None)
+            except Exception:
+                pass
+            if self._use_pygame_scaled:
                 self._surface = self._screen
                 self._scaled_surface = None
             else:
@@ -468,7 +474,7 @@ else:
                 return
             # keep window responsive
             self._pg.event.pump()
-            if self._web_scaled:
+            if self._use_pygame_scaled:
                 self._pg.display.flip()
                 return
             if self._scaled_surface is not None:
