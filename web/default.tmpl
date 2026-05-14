@@ -9,12 +9,6 @@
         window.location.replace(nextUrl);
     }
 
-    const params = new URLSearchParams(search);
-    const PYGBAG_PACKAGE_REPO_PARAM = "PYGPI";
-    if (!params.has(PYGBAG_PACKAGE_REPO_PARAM)) {
-        const separator = search ? `${search}&` : "?";
-        window.history.replaceState(null, "", `${pathname}${separator}${PYGBAG_PACKAGE_REPO_PARAM}=./archives/repo/${window.location.hash || ""}`);
-    }
 })();
 </script>
 <!-- COI Service Worker: enables SharedArrayBuffer on static hosts (GitHub Pages)
