@@ -35,7 +35,8 @@ jobs:
 
       - name: Build web bundle
         # Build the same self-contained bundle as the local `make web-build`
-        # target so GitHub Pages does not depend on the external pygame-web CDN.
+        # target. The Makefile handles the repo's browser-build dependencies
+        # and avoids any runtime dependency on the external pygame-web CDN.
         run: make web-build
 
       - name: Verify build output
