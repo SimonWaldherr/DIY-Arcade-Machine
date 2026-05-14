@@ -207,6 +207,35 @@ body {
     background: #050509;
     font-family: Arial, sans-serif;
 }
+body.ios-touch-enabled {
+    --ios-control-area: clamp(148px, 28dvh, 216px);
+    --ios-game-size: min(
+        94vw,
+        calc(100vh - var(--ios-control-area) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px)
+    );
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    overscroll-behavior: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+@supports (height: 100dvh) {
+body.ios-touch-enabled {
+    --ios-game-size: min(
+        94vw,
+        calc(100dvh - var(--ios-control-area) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px)
+    );
+}
+}
 #status {
     display: inline-block;
     margin-top: 20px;
@@ -232,6 +261,96 @@ canvas.emscripten {
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     z-index: 5;
+}
+body.ios-touch-enabled canvas.emscripten {
+    position: relative !important;
+    inset: auto !important;
+    display: block !important;
+    flex: 0 0 auto;
+    width: var(--ios-game-size) !important;
+    height: var(--ios-game-size) !important;
+    max-width: 640px;
+    max-height: 640px;
+}
+#ios-touch-controls {
+    display: none;
+}
+body.ios-touch-enabled #ios-touch-controls {
+    display: grid;
+    flex: 0 0 auto;
+    grid-template-columns: minmax(168px, 260px) minmax(168px, 260px);
+    align-items: center;
+    justify-content: space-between;
+    gap: clamp(18px, 8vw, 64px);
+    width: min(94vw, 640px);
+    min-height: 136px;
+    z-index: 20;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+.touch-dpad,
+.touch-actions {
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+.touch-dpad {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(48px, 1fr));
+    grid-template-rows: repeat(3, minmax(42px, 1fr));
+    gap: 8px;
+}
+.touch-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(70px, 1fr));
+    gap: 12px;
+    align-items: center;
+}
+.touch-button {
+    min-width: 0;
+    min-height: 54px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #f5f7fb;
+    font: 700 20px/1 Arial, sans-serif;
+    letter-spacing: 0;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+.touch-button:active,
+.touch-button.is-active {
+    background: rgba(255, 255, 255, 0.28);
+    border-color: rgba(255, 255, 255, 0.58);
+}
+.touch-up {
+    grid-column: 2;
+    grid-row: 1;
+}
+.touch-left {
+    grid-column: 1;
+    grid-row: 2;
+}
+.touch-right {
+    grid-column: 3;
+    grid-row: 2;
+}
+.touch-down {
+    grid-column: 2;
+    grid-row: 3;
+}
+.touch-x,
+.touch-space {
+    min-height: 72px;
+}
+.touch-space {
+    font-size: 18px;
 }
 .bottomright {
     position: absolute;
@@ -260,6 +379,19 @@ canvas.emscripten {
 </div>
 
 <canvas class="emscripten" id="canvas" width="1px" height="1px" oncontextmenu="event.preventDefault()" tabindex="1"></canvas>
+
+<div id="ios-touch-controls" aria-hidden="true">
+    <div class="touch-dpad" aria-label="Directional controls">
+        <button type="button" class="touch-button touch-up" data-touch-key="up" aria-label="Arrow Up">↑</button>
+        <button type="button" class="touch-button touch-left" data-touch-key="left" aria-label="Arrow Left">←</button>
+        <button type="button" class="touch-button touch-right" data-touch-key="right" aria-label="Arrow Right">→</button>
+        <button type="button" class="touch-button touch-down" data-touch-key="down" aria-label="Arrow Down">↓</button>
+    </div>
+    <div class="touch-actions" aria-label="Action controls">
+        <button type="button" class="touch-button touch-x" data-touch-key="x" aria-label="X">X</button>
+        <button type="button" class="touch-button touch-space" data-touch-key="space" aria-label="Space">Space</button>
+    </div>
+</div>
 
 <div id="html"></div>
 <div id="crt" class="bottomright">
@@ -296,6 +428,116 @@ canvas.emscripten {
 </div>
 
 <script type="application/javascript">
+(function setupIOSTouchControls() {
+    const keys = ["up", "down", "left", "right", "x", "space"];
+    const state = {};
+    const presses = {};
+
+    keys.forEach((key) => {
+        state[key] = false;
+        presses[key] = 0;
+    });
+    state.presses = presses;
+
+    window.DIYArcadeTouchInput = state;
+
+    function isIOS() {
+        const ua = navigator.userAgent || "";
+        const platform = navigator.platform || "";
+        return (
+            /iPad|iPhone|iPod/.test(ua) ||
+            (platform === "MacIntel" && navigator.maxTouchPoints > 1)
+        ) && !window.MSStream;
+    }
+
+    function setKey(key, active, button) {
+        if (state[key] === active) {
+            if (button) {
+                button.classList.toggle("is-active", active);
+            }
+            return;
+        }
+        state[key] = active;
+        if (active) {
+            presses[key] += 1;
+        }
+        if (button) {
+            button.classList.toggle("is-active", active);
+        }
+    }
+
+    function resetAll() {
+        document.querySelectorAll("[data-touch-key]").forEach((button) => {
+            const key = button.dataset.touchKey;
+            if (key) {
+                setKey(key, false, button);
+            }
+            if (button._touchIds) {
+                button._touchIds.clear();
+            }
+        });
+    }
+
+    function preventGesture(event) {
+        event.preventDefault();
+    }
+
+    if (!isIOS()) {
+        return;
+    }
+
+    document.body.classList.add("ios-touch-enabled");
+    const controls = document.getElementById("ios-touch-controls");
+    if (!controls) {
+        return;
+    }
+    controls.setAttribute("aria-hidden", "false");
+
+    const listenerOptions = { passive: false };
+    controls.addEventListener("touchstart", preventGesture, listenerOptions);
+    controls.addEventListener("touchend", preventGesture, listenerOptions);
+    controls.addEventListener("touchcancel", preventGesture, listenerOptions);
+    controls.addEventListener("touchmove", preventGesture, listenerOptions);
+    controls.addEventListener("gesturestart", preventGesture, listenerOptions);
+    controls.addEventListener("gesturechange", preventGesture, listenerOptions);
+    controls.addEventListener("gestureend", preventGesture, listenerOptions);
+    controls.addEventListener("contextmenu", preventGesture);
+
+    document.querySelectorAll("[data-touch-key]").forEach((button) => {
+        const key = button.dataset.touchKey;
+        button._touchIds = new Set();
+
+        button.addEventListener("touchstart", (event) => {
+            event.preventDefault();
+            for (const touch of event.changedTouches) {
+                button._touchIds.add(touch.identifier);
+            }
+            setKey(key, true, button);
+        }, listenerOptions);
+
+        const endTouch = (event) => {
+            event.preventDefault();
+            for (const touch of event.changedTouches) {
+                button._touchIds.delete(touch.identifier);
+            }
+            if (button._touchIds.size === 0) {
+                setKey(key, false, button);
+            }
+        };
+
+        button.addEventListener("touchend", endTouch, listenerOptions);
+        button.addEventListener("touchcancel", endTouch, listenerOptions);
+    });
+
+    window.addEventListener("blur", resetAll);
+    window.addEventListener("pagehide", resetAll);
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+            resetAll();
+        }
+    });
+})();
+
 async function custom_onload(debug_hidden) {
     console.log(__FILE__, "custom_onload");
     pyconsole.hidden = debug_hidden;

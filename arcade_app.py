@@ -767,6 +767,38 @@ JOYSTICK_UP_RIGHT = "UP-RIGHT"
 JOYSTICK_DOWN_LEFT = "DOWN-LEFT"
 JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 
+_WEB_TOUCH_KEYS = ("up", "down", "left", "right", "x", "space")
+
+def _js_prop(obj, name, default=None):
+    try:
+        return obj[name]
+    except Exception:
+        try:
+            return getattr(obj, name)
+        except Exception:
+            return default
+
+def _read_web_touch_input():
+    if not IS_WEB:
+        return None
+    try:
+        import platform  # type: ignore
+        state = getattr(platform.window, "DIYArcadeTouchInput", None)
+    except Exception:
+        return None
+    if state is None:
+        return None
+
+    presses = _js_prop(state, "presses", None)
+    result = {}
+    for key in _WEB_TOUCH_KEYS:
+        result[key] = bool(_js_prop(state, key, False))
+        try:
+            result[key + "_presses"] = int(_js_prop(presses, key, 0) or 0)
+        except Exception:
+            result[key + "_presses"] = 0
+    return result
+
 def direction_to_delta(direction, default_dx=0, default_dy=0):
     """Map 4-way joystick direction constants to (dx, dy), else return provided defaults."""
     if direction == JOYSTICK_UP:
@@ -1374,6 +1406,7 @@ else:
             self._right_until = 0
             self._up_until = 0
             self._down_until = 0
+            self._touch_press_counts = {}
 
         def _poll(self):
             try:
@@ -1404,17 +1437,32 @@ else:
                 elif key == pygame.K_DOWN:
                     self._down_until = now + _KEY_LATCH_MS
 
+            touch = _read_web_touch_input()
+            if touch:
+                for touch_key, until_attr in (
+                    ("left", "_left_until"),
+                    ("right", "_right_until"),
+                    ("up", "_up_until"),
+                    ("down", "_down_until"),
+                    ("x", "_c_until"),
+                    ("space", "_z_until"),
+                ):
+                    press_count = touch.get(touch_key + "_presses", 0)
+                    if press_count != self._touch_press_counts.get(touch_key, 0):
+                        setattr(self, until_attr, now + _KEY_LATCH_MS)
+                        self._touch_press_counts[touch_key] = press_count
+
             keys = pygame.key.get_pressed()
-            left = bool(keys[pygame.K_LEFT] or ticks_diff(self._left_until, now) > 0)
-            right = bool(keys[pygame.K_RIGHT] or ticks_diff(self._right_until, now) > 0)
-            up = bool(keys[pygame.K_UP] or ticks_diff(self._up_until, now) > 0)
-            down = bool(keys[pygame.K_DOWN] or ticks_diff(self._down_until, now) > 0)
+            left = bool(keys[pygame.K_LEFT] or ticks_diff(self._left_until, now) > 0 or (touch and touch.get("left")))
+            right = bool(keys[pygame.K_RIGHT] or ticks_diff(self._right_until, now) > 0 or (touch and touch.get("right")))
+            up = bool(keys[pygame.K_UP] or ticks_diff(self._up_until, now) > 0 or (touch and touch.get("up")))
+            down = bool(keys[pygame.K_DOWN] or ticks_diff(self._down_until, now) > 0 or (touch and touch.get("down")))
 
             # Z button: z/space/enter
-            self._held_z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN])
+            self._held_z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN] or (touch and touch.get("space")))
             self._z = bool(self._held_z or ticks_diff(self._z_until, now) > 0)
             # C button: x/escape
-            self._held_c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE])
+            self._held_c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE] or (touch and touch.get("x")))
             self._c = bool(self._held_c or ticks_diff(self._c_until, now) > 0)
 
             x = 128
