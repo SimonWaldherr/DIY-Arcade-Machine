@@ -8942,7 +8942,11 @@ class DemosGame:
                   "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
                   "BOIDS", "NBODY", "CRT", "WINMAZE")
         )
-        self.demos = tuple("G:" + name for name in self.GAME_DEMOS) + effects
+
+        # The actual demo list only includes the effects for now since the game demos are pretty slow to init and run on low-end hardware. 
+        # The game demos can be re-enabled by uncommenting the line below and commenting out the line after it.
+        #self.demos = tuple("G:" + name for name in self.GAME_DEMOS) + effects
+        self.demos = effects
         self.idx = 0
         self._init = False
         self._last_move = ticks_ms()
