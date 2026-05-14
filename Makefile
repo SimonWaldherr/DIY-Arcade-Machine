@@ -3,6 +3,7 @@
 PORT           ?= 8000
 PYGBAG_VERSION ?= 0.9.3
 RUNTIME_VERSION ?= 0.9
+RUNTIME_INDEX   ?= $(subst .,,$(RUNTIME_VERSION))0
 PYTHON_ABI      ?= cp312
 WEB_TEMPLATE   ?= web/default.tmpl
 WEB_TITLE      ?= DIY Arcade Machine
@@ -84,7 +85,7 @@ web-build: web-install web-runtime
 	mkdir -p $(WEB_SRC)/build/web/archives
 	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
 	mkdir -p $(WEB_SRC)/build/web/archives/repo
-	printf '{"-CDN-":"./archives/repo/"}\n' > $(WEB_SRC)/build/web/archives/repo/index-090-$(PYTHON_ABI).json
+	printf '{"-CDN-":"./archives/repo/"}\n' > $(WEB_SRC)/build/web/archives/repo/index-$(RUNTIME_INDEX)-$(PYTHON_ABI).json
 	printf '{"packages":{}}\n' > $(WEB_SRC)/build/web/archives/repo/repodata.json
 	rm -rf build/web
 	cp -R $(WEB_SRC)/build/web build/web

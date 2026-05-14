@@ -10,9 +10,10 @@
     }
 
     const params = new URLSearchParams(search);
-    if (!params.has("PYGPI")) {
+    const pygbagPackageRepoArg = "PYGPI";
+    if (!params.has(pygbagPackageRepoArg)) {
         const separator = search ? `${search}&` : "?";
-        window.history.replaceState(null, "", `${pathname}${separator}PYGPI=./archives/repo/${hash}`);
+        window.history.replaceState(null, "", `${pathname}${separator}${pygbagPackageRepoArg}=./archives/repo/${hash}`);
     }
 })();
 </script>
@@ -150,7 +151,7 @@ async def custom_site():
     screen.fill((0, 0, 0, 0))
     pygame.display.flip()
 
-    async def skip_package_preload(cls, code, callback=None, loaderhome=".", hint=""):
+    async def skip_package_preload(cls, _code, _callback=None, loaderhome=".", _hint=""):
         import os
         import sys
 
