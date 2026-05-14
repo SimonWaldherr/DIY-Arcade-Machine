@@ -145,7 +145,7 @@ async def custom_site():
     screen.fill((0, 0, 0, 0))
     pygame.display.flip()
 
-    async def local_only_preload(cls, _code, _callback=None, loaderhome=".", _hint=""):
+    async def local_only_preload(cls, code, callback=None, loaderhome=".", hint=""):
         import os
         import sys
 
