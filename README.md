@@ -236,7 +236,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
-| `LOCO` | LocoMotion | Sliding railway puzzle with train routing |
+| `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |

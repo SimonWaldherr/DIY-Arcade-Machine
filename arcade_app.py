@@ -2199,6 +2199,8 @@ class PongGame:
     def __init__(self):
         self.paddle_height = 10
         self.paddle_speed = 3
+        self.ai_min_speed = 1
+        self.ai_max_speed = 3
         self.left_paddle_x = 1
         self.right_paddle_x = WIDTH - 2
         self.left_paddle_y = PLAY_HEIGHT // 2 - self.paddle_height // 2
@@ -2213,6 +2215,15 @@ class PongGame:
     def reset_ball(self):
         self.ball_position = [WIDTH // 2, PLAY_HEIGHT // 2]
         self.ball_speed = [random.choice([-1, 1]), random.choice([-1, 1])]
+
+    def reset_match(self):
+        self.left_paddle_y = PLAY_HEIGHT // 2 - self.paddle_height // 2
+        self.right_paddle_y = PLAY_HEIGHT // 2 - self.paddle_height // 2
+        self._prev_left_paddle_y = self.left_paddle_y
+        self._prev_right_paddle_y = self.right_paddle_y
+        self.left_score = 0
+        self.lives = 3
+        self.reset_ball()
 
     def _draw_paddle(self, x, y, color):
         for py in range(y, y + self.paddle_height):
@@ -2261,13 +2272,22 @@ class PongGame:
         elif d == JOYSTICK_DOWN:
             self.left_paddle_y = min(self.left_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
 
-        # simple AI right
+        # Lightweight AI: good enough to rally, imperfect enough to beat.
         by = self.ball_position[1]
         pc = self.right_paddle_y + self.paddle_height // 2
+        ai_speed = self.ai_min_speed + min(self.ai_max_speed - self.ai_min_speed, self.left_score // 35)
+        if self.ball_speed[0] < 0:
+            # Re-center slowly while the ball travels away.
+            target = PLAY_HEIGHT // 2
+            if pc < target - 2:
+                self.right_paddle_y = min(self.right_paddle_y + 1, PLAY_HEIGHT - self.paddle_height)
+            elif pc > target + 2:
+                self.right_paddle_y = max(self.right_paddle_y - 1, 0)
+            return
         if by < pc - 1:
-            self.right_paddle_y = max(self.right_paddle_y - self.paddle_speed, 0)
+            self.right_paddle_y = max(self.right_paddle_y - ai_speed, 0)
         elif by > pc + 1:
-            self.right_paddle_y = min(self.right_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+            self.right_paddle_y = min(self.right_paddle_y + ai_speed, PLAY_HEIGHT - self.paddle_height)
 
     def update_ball(self):
         global game_over, global_score
@@ -2281,6 +2301,7 @@ class PongGame:
         if y <= 0 or y >= PLAY_HEIGHT - 1:
             self.ball_position[1] = max(0, min(PLAY_HEIGHT - 1, y))
             self.ball_speed[1] = -self.ball_speed[1]
+            y = self.ball_position[1]
 
         # left paddle hit
         if x == self.left_paddle_x + 1 and self.left_paddle_y <= y < self.left_paddle_y + self.paddle_height:
@@ -2299,9 +2320,7 @@ class PongGame:
         if x <= 0:
             self.lives -= 1
             if self.lives <= 0:
-                # behalte erreichte Punkte für Highscore-Tracking
-                global_score = self.left_score
-                game_over = True
+                set_game_over_score(self.left_score, won=False)
                 return
             # nur leichte Strafe, keine komplette Score-Nullung
             if self.left_score > 0:
@@ -2321,9 +2340,7 @@ class PongGame:
         global game_over
         game_over = False
         display.clear()
-        self.reset_ball()
-        self._prev_left_paddle_y = self.left_paddle_y
-        self._prev_right_paddle_y = self.right_paddle_y
+        self.reset_match()
         display_score_and_time(0, force=True)
         def step():
             c_button, _ = joystick.read_buttons()
@@ -5456,7 +5473,12 @@ class CaveFlyGame:
     def main_loop(self, joystick):
         step = self._build_step(joystick)
         self._draw()
-        sleep_ms(2000)
+        start_wait = ticks_ms()
+        while ticks_diff(ticks_ms(), start_wait) < 900:
+            c_button, _z_button = joystick.read_buttons()
+            if c_button:
+                return
+            sleep_ms(20)
         _run_game_loop_sync(33, step)
 
     async def main_loop_async(self, joystick):
@@ -5464,7 +5486,12 @@ class CaveFlyGame:
             return self.main_loop(joystick)
         step = self._build_step(joystick)
         self._draw()
-        await asyncio.sleep(2.0)
+        start_wait = ticks_ms()
+        while ticks_diff(ticks_ms(), start_wait) < 900:
+            c_button, _z_button = joystick.read_buttons()
+            if c_button:
+                return
+            await asyncio.sleep(0.020)
         await _run_game_loop_async(33, step)
 
 
@@ -6326,7 +6353,7 @@ class LocoMotionGame:
     Controls:
       - Left / Right / Up / Down: move cursor
       - Z (tap): rotate tile under cursor
-      - Z (hold): start / abort train run
+      - Z (tap on start/end or hold): start / abort train run
       - C: return to menu
     """
 
@@ -6694,6 +6721,12 @@ class LocoMotionGame:
         except Exception:
             pass
 
+    def _cursor_on_endpoint(self):
+        """Return True when the cursor is on the fixed start or end tile."""
+        v = self._get(self.cur_x, self.cur_y)
+        flag = v & 0xF0
+        return flag == self.TFLAG_START or flag == self.TFLAG_END
+
     def _rotate_tile_at_cursor(self):
         """Rotate the tile under the cursor clockwise and update view."""
         x, y = self.cur_x, self.cur_y
@@ -6701,6 +6734,8 @@ class LocoMotionGame:
         flag = v & 0xF0
         bits = v & 0x0F
 
+        if flag in (self.TFLAG_START, self.TFLAG_END):
+            return
         if flag == self.TFLAG_EMPTY and bits == 0:
             return
 
@@ -6721,6 +6756,8 @@ class LocoMotionGame:
 
     def _start_run(self):
         """Begin a run: set running mode and initialize train position."""
+        if self.mode_run:
+            return
         self.mode_run = True
         self.tr_cx = self.start_x
         self.tr_cy = self.start_y
@@ -6998,8 +7035,13 @@ class LocoMotionGame:
             else:
                 if self._z_down_ms is not None:
                     held = ticks_diff(now, self._z_down_ms)
-                    if held < self.Z_LONG_MS and self._z_armed and (not self.mode_run):
-                        self._rotate_tile_at_cursor()
+                    if held < self.Z_LONG_MS and self._z_armed:
+                        if self.mode_run:
+                            self._abort_run()
+                        elif self._cursor_on_endpoint():
+                            self._start_run()
+                        else:
+                            self._rotate_tile_at_cursor()
                     self._z_down_ms = None
                     self._z_armed = False
 
@@ -7106,8 +7148,13 @@ class LocoMotionGame:
             else:
                 if self._z_down_ms is not None:
                     held = ticks_diff(now, self._z_down_ms)
-                    if held < self.Z_LONG_MS and self._z_armed and (not self.mode_run):
-                        self._rotate_tile_at_cursor()
+                    if held < self.Z_LONG_MS and self._z_armed:
+                        if self.mode_run:
+                            self._abort_run()
+                        elif self._cursor_on_endpoint():
+                            self._start_run()
+                        else:
+                            self._rotate_tile_at_cursor()
                     self._z_down_ms = None
                     self._z_armed = False
 
