@@ -85,6 +85,7 @@ web-build: web-install web-runtime
 	mkdir -p $(WEB_SRC)/build/web/archives
 	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
 	mkdir -p $(WEB_SRC)/build/web/archives/repo
+	# pygbag expects -CDN- in package indexes as the wheel base URL.
 	printf '{"-CDN-":"./archives/repo/"}\n' > $(WEB_SRC)/build/web/archives/repo/index-$(RUNTIME_INDEX)-$(PYTHON_ABI).json
 	printf '{"packages":{}}\n' > $(WEB_SRC)/build/web/archives/repo/repodata.json
 	rm -rf build/web
