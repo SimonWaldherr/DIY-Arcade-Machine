@@ -82,12 +82,12 @@ async def main():
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
-# pygbag sets __name__ = "__main__" for the entrypoint, so this guard works
-# on desktop, MicroPython, and in the browser equally.
+# Desktop and MicroPython run this file as __main__. pygbag's browser loader
+# can execute it with a different module name, so also key off emscripten.
 try:
     import asyncio
 except ImportError:
     import uasyncio as asyncio  # type: ignore
 
-if __name__ == "__main__":
+if __name__ == "__main__" or getattr(sys, "platform", "") == "emscripten":
     asyncio.run(main())
