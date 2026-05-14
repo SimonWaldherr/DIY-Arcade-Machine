@@ -1,4 +1,13 @@
 <html lang="en-us">
+<script>
+(() => {
+    const { pathname, search, hash } = window.location;
+    const lastSegment = pathname.slice(pathname.lastIndexOf("/") + 1);
+    if (lastSegment && !lastSegment.includes(".")) {
+        window.location.replace(`${pathname}/${search}${hash}`);
+    }
+})();
+</script>
 <!-- COI Service Worker: enables SharedArrayBuffer on static hosts (GitHub Pages)
      by injecting Cross-Origin-Isolation headers via a service worker. -->
 <script src="coi-serviceworker.js"></script>
