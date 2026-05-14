@@ -740,16 +740,16 @@ COLORS_BRIGHT = [
 ]
 # Pre-computed to avoid list comprehension allocations during import
 colors = (
-    (127, 0, 0),
-    (0, 127, 0),
-    (0, 0, 127),
-    (127, 127, 0),
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 80, 255),
+    (255, 235, 0),
 )
 inactive_colors = (
-    (51, 0, 0),
-    (0, 51, 0),
-    (0, 0, 51),
-    (51, 51, 0),
+    (82, 0, 0),
+    (0, 82, 0),
+    (0, 24, 92),
+    (82, 76, 0),
 )
 
 WHITE = (255, 255, 255)
@@ -1818,6 +1818,7 @@ class SimonGame:
         draw_rectangle(x1, y1, x2, y2, *colors[idx])
         sleep_ms(duration_ms)
         draw_rectangle(x1, y1, x2, y2, *inactive_colors[idx])
+        display_flush()
 
     def play_sequence(self):
         for c in self.sequence:
@@ -1829,13 +1830,26 @@ class SimonGame:
             c_button, _ = joystick.read_buttons()
             if c_button:
                 return None
-            d = joystick.read_direction([JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT])
+            d = joystick.read_direction([
+                JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_LEFT, JOYSTICK_DOWN,
+                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT,
+                JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT,
+            ])
             if d:
                 return d
             sleep_ms(30)
 
     def translate(self, direction):
-        m = {JOYSTICK_UP_LEFT: 0, JOYSTICK_UP_RIGHT: 1, JOYSTICK_DOWN_LEFT: 2, JOYSTICK_DOWN_RIGHT: 3}
+        m = {
+            JOYSTICK_UP_LEFT: 0,
+            JOYSTICK_UP: 0,
+            JOYSTICK_UP_RIGHT: 1,
+            JOYSTICK_RIGHT: 1,
+            JOYSTICK_DOWN_LEFT: 2,
+            JOYSTICK_LEFT: 2,
+            JOYSTICK_DOWN_RIGHT: 3,
+            JOYSTICK_DOWN: 3,
+        }
         return m.get(direction, None)
 
     def main_loop(self, joystick):
@@ -1909,8 +1923,10 @@ class SimonGame:
                 if y2 >= PLAY_HEIGHT:
                     y2 = PLAY_HEIGHT - 1
                 draw_rectangle(x1, y1, x2, y2, *colors[c])
+                display_flush()
                 await asyncio.sleep(0.3)
                 draw_rectangle(x1, y1, x2, y2, *inactive_colors[c])
+                display_flush()
                 await asyncio.sleep(0.2)
 
             self.user_input = []
@@ -1923,6 +1939,8 @@ class SimonGame:
                     if c_button:
                         return
                     d = joystick.read_direction([
+                        JOYSTICK_UP, JOYSTICK_RIGHT,
+                        JOYSTICK_LEFT, JOYSTICK_DOWN,
                         JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT,
                         JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT,
                     ])
@@ -1942,8 +1960,10 @@ class SimonGame:
                 if y2 >= PLAY_HEIGHT:
                     y2 = PLAY_HEIGHT - 1
                 draw_rectangle(x1, y1, x2, y2, *colors[sel])
+                display_flush()
                 await asyncio.sleep(0.12)
                 draw_rectangle(x1, y1, x2, y2, *inactive_colors[sel])
+                display_flush()
 
                 self.user_input.append(sel)
                 if self.user_input != self.sequence[:len(self.user_input)]:
@@ -8092,7 +8112,7 @@ class BejeweledGame:
         self._needs_redraw = True
 
     def _find_matches(self):
-        # Identify connected components (4-connected) of the same color
+        # Identify connected components (4-connected) of the same color.
         matches = set()
         visited = set()
         for y in range(self.rows):
@@ -8103,7 +8123,7 @@ class BejeweledGame:
                 if color is None:
                     visited.add((x, y))
                     continue
-                # flood-fill this component
+
                 stack = [(x, y)]
                 comp = set()
                 while stack:
@@ -8116,7 +8136,6 @@ class BejeweledGame:
                         continue
                     comp.add((cx, cy))
                     visited.add((cx, cy))
-                    # 4-neighbors
                     stack.append((cx + 1, cy))
                     stack.append((cx - 1, cy))
                     stack.append((cx, cy + 1))
@@ -8261,6 +8280,7 @@ class BejeweledGame:
                                 )
 
                 display_score_and_time(self.score)
+                display_flush()
                 maybe_collect(10)
                 if delay_ms > 0:
                     sleep_ms(delay_ms)
@@ -8303,9 +8323,7 @@ class BejeweledGame:
             sx, sy = self.sel
             gx = sx * self.tile_w
             gy = sy * self.tile_h
-            draw_rectangle(
-                gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255
-            )
+            draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
 
     def _draw_cell(self, x, y):
         gx = x * self.tile_w
@@ -8318,12 +8336,12 @@ class BejeweledGame:
             draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 20, 20, 20)
 
         if self.sel == (x, y):
-            draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
+            draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
 
     def _draw_cursor(self):
-        ccx = int(self.cursor_x * self.tile_w + self.tile_w // 2)
-        ccy = int(self.cursor_y * self.tile_h + self.tile_h // 2)
-        display.set_pixel(ccx, ccy, 255, 255, 0)
+        gx = self.cursor_x * self.tile_w
+        gy = self.cursor_y * self.tile_h
+        draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 245, 0)
 
     def _draw_hud(self, force=False):
         if not force and self.score == self._last_drawn_score:
@@ -8358,6 +8376,7 @@ class BejeweledGame:
         self._prev_sel = self.sel
         self._full_redraw = False
         self._needs_redraw = False
+        display_flush()
 
     def main_loop(self, joystick):
         global game_over, global_score
@@ -12573,6 +12592,9 @@ class RayRacerGame:
     TRACK_LEN = 900.0
     RACE_LAPS = 3
     FRAME_MS = 34
+    NORMAL_MAX_SPEED = 2.25
+    BOOST_MAX_SPEED = 3.10
+    CRUISE_SPEED = NORMAL_MAX_SPEED * 0.5
 
     def __init__(self):
         self.row_depth = [0.0] * self.PLAY_H
@@ -12582,7 +12604,7 @@ class RayRacerGame:
 
     def reset(self):
         self.pos = 0.0
-        self.speed = 0.0
+        self.speed = self.CRUISE_SPEED
         self.lane = 0.0
         self.energy = 100.0
         self.score = 0
@@ -12655,18 +12677,25 @@ class RayRacerGame:
         sx, sy = direction_to_delta_8way(direction)
 
         if sy < 0:
-            self.speed += 0.060
+            self.speed += 0.070
         elif sy > 0:
-            self.speed -= 0.080
+            self.speed -= 0.110
         else:
-            self.speed -= 0.014
+            if self.speed < self.CRUISE_SPEED:
+                self.speed += 0.034
+                if self.speed > self.CRUISE_SPEED:
+                    self.speed = self.CRUISE_SPEED
+            elif self.speed > self.CRUISE_SPEED:
+                self.speed -= 0.022
+                if self.speed < self.CRUISE_SPEED:
+                    self.speed = self.CRUISE_SPEED
 
-        max_speed = 2.25
+        max_speed = self.NORMAL_MAX_SPEED
         if boost and self.energy > 2.0 and self.speed > 0.35:
             self.speed += 0.085
             self.energy -= 1.15
             self.boost_flash = 4
-            max_speed = 3.10
+            max_speed = self.BOOST_MAX_SPEED
         else:
             self.energy += 0.085
             if self.energy > 100.0:

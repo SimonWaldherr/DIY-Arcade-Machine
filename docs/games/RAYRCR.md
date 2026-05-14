@@ -8,7 +8,7 @@
 
 ## Controls
 
-- **UP/DOWN**: accelerate and brake.
+- **UP/DOWN**: accelerate above cruise speed and brake below it.
 - **LEFT/RIGHT**: steer.
 - **Z**: boost while energy is available.
 - **C**: return to the game menu.

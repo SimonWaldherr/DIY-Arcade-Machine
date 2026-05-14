@@ -441,13 +441,16 @@ body.ios-touch-enabled #ios-touch-controls {
 
     window.DIYArcadeTouchInput = state;
 
-    function isIOS() {
+    function isMobileTouchDevice() {
         const ua = navigator.userAgent || "";
         const platform = navigator.platform || "";
-        return (
+        const iOS = (
             /iPad|iPhone|iPod/.test(ua) ||
             (platform === "MacIntel" && navigator.maxTouchPoints > 1)
         ) && !window.MSStream;
+        const android = /Android/.test(ua);
+        const mobileUA = /Mobi|Mobile|Tablet/.test(ua);
+        return navigator.maxTouchPoints > 0 && (iOS || android || mobileUA);
     }
 
     function setKey(key, active, button) {
@@ -482,7 +485,7 @@ body.ios-touch-enabled #ios-touch-controls {
         event.preventDefault();
     }
 
-    if (!isIOS()) {
+    if (!isMobileTouchDevice()) {
         return;
     }
 
