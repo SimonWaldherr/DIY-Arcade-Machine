@@ -4,7 +4,10 @@
     const { pathname, search, hash } = window.location;
     const lastSegment = pathname.slice(pathname.lastIndexOf("/") + 1);
     if (lastSegment && !lastSegment.includes(".")) {
-        window.location.replace(`${pathname}/${search}${hash}`);
+        const nextUrl = new URL(`${pathname}/`, window.location.origin);
+        nextUrl.search = search;
+        nextUrl.hash = hash;
+        window.location.replace(nextUrl);
     }
 })();
 </script>
