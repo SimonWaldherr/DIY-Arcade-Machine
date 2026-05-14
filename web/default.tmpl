@@ -2,8 +2,7 @@
 <script>
 (() => {
     const { pathname, search, hash } = window.location;
-    const segments = pathname.split("/").filter(Boolean);
-    if (segments.length === 1 && !segments[0].includes(".")) {
+    if (!pathname.endsWith("/") && !pathname.endsWith("/index.html")) {
         const nextUrl = new URL(`${pathname}/`, window.location.origin);
         nextUrl.search = search;
         nextUrl.hash = hash;
