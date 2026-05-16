@@ -259,13 +259,37 @@ config = {
 <style>
 html,
 body {
+    --arcade-bg: #050509;
+    --arcade-panel: rgba(9, 12, 18, 0.78);
+    --arcade-yellow: #fff245;
     width: 100%;
     height: 100%;
     margin: 0;
     padding: 0;
     overflow: hidden;
-    background: #050509;
+    background:
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        var(--arcade-bg);
+    background-size: 16px 16px;
     font-family: Arial, sans-serif;
+}
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.035) 0,
+            rgba(255, 255, 255, 0.035) 1px,
+            transparent 1px,
+            transparent 4px
+        );
+    mix-blend-mode: screen;
+    opacity: 0.32;
 }
 body.ios-touch-enabled {
     --ios-control-area: clamp(188px, 34dvh, 256px);
@@ -322,7 +346,7 @@ div.emscripten {
     background:
         linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-        #050509;
+        var(--arcade-bg);
     background-size: 18px 18px;
     pointer-events: none;
 }
@@ -339,11 +363,8 @@ div.emscripten {
     height: 72px;
     margin: 0 auto 18px;
     border: 2px solid rgba(55, 230, 255, 0.85);
-    box-shadow: 0 0 0 4px rgba(255, 45, 210, 0.18), inset 0 0 0 6px #050509;
-    background:
-        linear-gradient(90deg, transparent 47%, rgba(255, 245, 0, 0.9) 47% 53%, transparent 53%),
-        linear-gradient(transparent 47%, rgba(255, 245, 0, 0.9) 47% 53%, transparent 53%),
-        #101726;
+    box-shadow: 0 0 0 4px rgba(255, 45, 210, 0.18), inset 0 0 0 5px #050509;
+    background: #101726 url("icons/icon-192.png") center / 64px 64px no-repeat;
     image-rendering: pixelated;
 }
 .loader-title {
@@ -454,6 +475,10 @@ canvas.emscripten {
     image-rendering: crisp-edges;
     z-index: 5;
 }
+canvas.emscripten:focus-visible {
+    outline: 2px solid var(--arcade-yellow);
+    outline-offset: -8px;
+}
 body.ios-touch-enabled canvas.emscripten {
     position: relative !important;
     inset: auto !important;
@@ -506,20 +531,29 @@ body.ios-touch-enabled #ios-touch-controls {
     min-height: 54px;
     border: 1px solid rgba(255, 255, 255, 0.28);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.12);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)),
+        rgba(255, 255, 255, 0.08);
     color: #f5f7fb;
     font: 700 20px/1 Arial, sans-serif;
     letter-spacing: 0;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.45), 0 5px 16px rgba(0, 0, 0, 0.25);
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
 }
+.touch-button:focus-visible {
+    outline: 2px solid var(--arcade-yellow);
+    outline-offset: 3px;
+}
 .touch-button:active,
 .touch-button.is-active {
+    transform: translateY(1px);
     background: rgba(255, 255, 255, 0.28);
     border-color: rgba(255, 255, 255, 0.58);
+    box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 .touch-up {
     grid-column: 2;
@@ -557,7 +591,7 @@ body.ios-touch-enabled #ios-touch-controls {
     border: 1px solid rgba(55, 230, 255, 0.48);
     border-radius: 8px;
     color: #f5f7fb;
-    background: rgba(5, 5, 9, 0.78);
+    background: var(--arcade-panel);
     box-shadow: 0 0 0 2px rgba(255, 45, 210, 0.12);
     font: 700 13px/1 Arial, sans-serif;
     letter-spacing: 0;
@@ -578,11 +612,105 @@ body.ios-touch-enabled #ios-touch-controls {
     border-color: rgba(255, 242, 69, 0.8);
     background: rgba(16, 23, 38, 0.92);
 }
+.sound-toggle {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    z-index: 30;
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 50%;
+    color: #f5f7fb;
+    background: var(--arcade-panel);
+    box-shadow: 0 0 0 2px rgba(55, 230, 255, 0.10);
+    font: 700 20px/1 Arial, sans-serif;
+    letter-spacing: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.sound-toggle.is-on {
+    border-color: rgba(255, 242, 69, 0.76);
+    box-shadow: 0 0 0 2px rgba(255, 242, 69, 0.16);
+}
+.sound-toggle:hover,
+.sound-toggle:focus-visible {
+    border-color: rgba(55, 230, 255, 0.84);
+    outline: none;
+}
 body.ios-touch-enabled .repo-badge {
     position: static;
     flex: 0 0 auto;
     min-height: 32px;
     touch-action: manipulation;
+}
+body.ios-touch-enabled .sound-toggle {
+    position: absolute;
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    touch-action: manipulation;
+}
+@media (max-width: 520px) {
+    .repo-badge {
+        min-height: 32px;
+        padding: 0 10px;
+        font-size: 12px;
+    }
+    .repo-badge::before {
+        width: 10px;
+        height: 10px;
+    }
+    .sound-toggle {
+        width: 34px;
+        height: 34px;
+        font-size: 18px;
+    }
+}
+@media (orientation: landscape) {
+    body.ios-touch-enabled {
+        --ios-controls-width: clamp(224px, 40dvw, 330px);
+        --ios-game-size: min(
+            calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 18px),
+            calc(100dvw - var(--ios-controls-width) - env(safe-area-inset-left) - env(safe-area-inset-right) - 34px)
+        );
+        flex-direction: row;
+        gap: clamp(10px, 3dvw, 24px);
+        justify-content: center;
+        padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    }
+    body.ios-touch-enabled #ios-touch-controls {
+        width: var(--ios-controls-width);
+        min-height: 0;
+        grid-template-columns: minmax(132px, 1fr) minmax(82px, 0.72fr);
+        gap: clamp(8px, 2dvw, 14px);
+        justify-content: center;
+    }
+    .touch-dpad {
+        grid-template-columns: repeat(3, minmax(36px, 1fr));
+        grid-template-rows: repeat(3, minmax(34px, 1fr));
+        gap: 6px;
+        max-width: 184px;
+        justify-self: end;
+    }
+    .touch-actions {
+        grid-template-columns: minmax(76px, 1fr);
+        max-width: 110px;
+        justify-self: start;
+    }
+    .touch-button {
+        min-height: 40px;
+    }
+    .touch-x,
+    .touch-space {
+        min-height: 46px;
+    }
+    body.ios-touch-enabled .repo-badge {
+        position: absolute;
+        top: max(8px, env(safe-area-inset-top));
+        right: max(8px, env(safe-area-inset-right));
+    }
 }
 .bottomright {
     position: absolute;
@@ -620,6 +748,8 @@ body.ios-touch-enabled .repo-badge {
 
 <p id="canvas-description" class="sr-only" data-i18n="canvasDescription">Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, and X or Escape for back or cancel.</p>
 <canvas class="emscripten" id="canvas" width="1px" height="1px" oncontextmenu="event.preventDefault()" tabindex="1" role="application" aria-label="DIY Arcade Machine game canvas" aria-describedby="canvas-description" data-i18n-aria-label="canvasLabel"></canvas>
+
+<button type="button" id="sound-toggle" class="sound-toggle" aria-label="Enable arcade sounds" data-i18n-aria-label="soundToggleOff">♪</button>
 
 <div id="ios-touch-controls" aria-hidden="true">
     <div class="touch-dpad" role="group" aria-label="Directional controls" data-i18n-aria-label="directionalControls">
@@ -689,6 +819,8 @@ const DIY_ARCADE_TRANSLATIONS = {
         primaryAction: "Primary action",
         spaceButton: "Space",
         statusDownloading: "Downloading...",
+        soundToggleOff: "Enable arcade sounds",
+        soundToggleOn: "Disable arcade sounds",
     },
     de: {
         actionControls: "Aktionstasten",
@@ -707,6 +839,8 @@ const DIY_ARCADE_TRANSLATIONS = {
         primaryAction: "Hauptaktion",
         spaceButton: "Space",
         statusDownloading: "Wird heruntergeladen...",
+        soundToggleOff: "Arcade-Sounds einschalten",
+        soundToggleOn: "Arcade-Sounds ausschalten",
     },
 };
 
@@ -740,6 +874,131 @@ function DIYArcadeApplyI18n() {
 
 DIYArcadeSetPageTitle();
 DIYArcadeApplyI18n();
+
+(function setupArcadeSound() {
+    const storageKey = "DIYArcadeSoundEnabled";
+    const button = document.getElementById("sound-toggle");
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    let audioContext = null;
+    let enabled = false;
+    try {
+        enabled = window.localStorage.getItem(storageKey) === "1";
+    } catch (_error) {
+        enabled = false;
+    }
+
+    function currentMessages() {
+        return DIY_ARCADE_TRANSLATIONS[DIYArcadeLocale()] || DIY_ARCADE_TRANSLATIONS.en;
+    }
+
+    function updateButton() {
+        if (!button) {
+            return;
+        }
+        const messages = currentMessages();
+        button.classList.toggle("is-on", enabled);
+        button.textContent = enabled ? "♫" : "♪";
+        button.setAttribute("aria-label", enabled ? messages.soundToggleOn : messages.soundToggleOff);
+        button.setAttribute("title", enabled ? messages.soundToggleOn : messages.soundToggleOff);
+    }
+
+    function ensureAudioContext() {
+        if (!AudioContextCtor) {
+            return null;
+        }
+        if (!audioContext) {
+            audioContext = new AudioContextCtor();
+        }
+        if (audioContext.state === "suspended") {
+            audioContext.resume().catch(() => {});
+        }
+        return audioContext;
+    }
+
+    function tone(freq, duration, type, delay, gainValue) {
+        const ctx = ensureAudioContext();
+        if (!ctx) {
+            return;
+        }
+        const start = ctx.currentTime + (delay || 0);
+        const length = duration || 0.055;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type || "square";
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(gainValue || 0.030, start + 0.006);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + length);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + length + 0.015);
+    }
+
+    function play(kind, toneIndex) {
+        if (!enabled || document.hidden) {
+            return;
+        }
+        const t = Number(toneIndex || 0);
+        const base = 180 + ((t % 11) * 18);
+        switch (kind) {
+            case "select":
+                tone(440 + t * 5, 0.030, "square", 0, 0.026);
+                break;
+            case "start":
+                tone(220 + (t % 4) * 35, 0.045, "triangle", 0, 0.024);
+                tone(330 + (t % 5) * 28, 0.060, "square", 0.040, 0.024);
+                break;
+            case "bounce":
+                tone(260 + (t % 5) * 44, 0.034, "square", 0, 0.024);
+                break;
+            case "coin":
+                tone(640 + (t % 3) * 70, 0.040, "square", 0, 0.030);
+                tone(960 + (t % 3) * 80, 0.055, "square", 0.045, 0.026);
+                break;
+            case "zap":
+                tone(190, 0.065, "sawtooth", 0, 0.022);
+                break;
+            case "ping":
+                tone(base + 520, 0.050, "sine", 0, 0.020);
+                break;
+            default:
+                tone(360, 0.045, "square", 0, 0.022);
+                break;
+        }
+    }
+
+    window.DIYArcadeSound = play;
+    window.DIYArcadeSetSoundEnabled = function(nextEnabled) {
+        enabled = Boolean(nextEnabled);
+        try {
+            window.localStorage.setItem(storageKey, enabled ? "1" : "0");
+        } catch (_error) {}
+        updateButton();
+        if (enabled) {
+            ensureAudioContext();
+            tone(520, 0.030, "square", 0, 0.022);
+        }
+    };
+
+    if (button) {
+        button.addEventListener("click", () => {
+            window.DIYArcadeSetSoundEnabled(!enabled);
+        });
+    }
+
+    document.addEventListener("pointerdown", () => {
+        if (enabled) {
+            ensureAudioContext();
+        }
+    }, { passive: true, capture: true });
+    document.addEventListener("keydown", () => {
+        if (enabled) {
+            ensureAudioContext();
+        }
+    }, { passive: true, capture: true });
+    updateButton();
+})();
 
 window.DIYArcadeLoaderReady = false;
 window.DIYArcadeLoaderFallbackTimer = null;

@@ -9,7 +9,7 @@ Each file combines gameplay notes with technical descriptions in two views:
 ## Games
 
 **DEMOS** is always the first entry in the menu; the remaining games follow the registry order in `arcade_app.py`.
-There are currently **39 menu entries**: **DEMOS** plus **38 playable games**.
+There are over 30 games and some demo animations.
 
 | Game ID | Name | File |
 | --- | --- | --- |
@@ -32,6 +32,7 @@ There are currently **39 menu entries**: **DEMOS** plus **38 playable games**.
 | `INVADR` | Invaders | [INVADR.md](./INVADR.md) |
 | `LANDER` | Lunar Lander | [LANDER.md](./LANDER.md) |
 | `LASER` | Laser | [LASER.md](./LASER.md) |
+| `CGOLG` | Conway's Game of Life Game | [CGOLG.md](./CGOLG.md) |
 | `LOCO` | LocoMotion | [LOCO.md](./LOCO.md) |
 | `MAZE` | Maze Explorer | [MAZE.md](./MAZE.md) |
 | `MINES` | Mines | [MINES.md](./MINES.md) |

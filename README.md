@@ -15,7 +15,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **38 Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
+- **39 Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -219,7 +219,7 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes **42 menu entries**: **DEMOS** plus 41 games in the same order used by `GameSelect` in `arcade_app.py`.
+The arcade includes demo animations and over 30 games. Each game is documented in detail in the [Game Documentation](./docs/games/README.md) with gameplay notes and technical descriptions.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
@@ -244,6 +244,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
+| `CGOLG` | Conway's Game of Life Game | Competitive Life battle with directed gliders and spaceships |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `MINES` | Mines | Minesweeper-style reveal puzzle for the LED matrix |
