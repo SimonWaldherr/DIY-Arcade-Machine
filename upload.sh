@@ -47,7 +47,7 @@ fi
 if command -v mpy-cross >/dev/null 2>&1; then
 	echo "Compiling arcade_app.py with mpy-cross..."
 	if [ ! -f ./arcade_app.mpy ] || [ ./arcade_app.py -nt ./arcade_app.mpy ]; then
-		mpy-cross ./arcade_app.py
+		mpy-cross -X heapsize=8388608 ./arcade_app.py
 		echo "✓ Compiled to arcade_app.mpy"
 	else
 		echo "✓ arcade_app.mpy is up to date"

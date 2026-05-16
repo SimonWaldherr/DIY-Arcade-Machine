@@ -95,7 +95,9 @@ async def main():
         import pygame
         pygame.init()
         try:
-            pygame.mixer.quit()
+            mixer = getattr(pygame, "mixer", None)
+            if mixer is not None:
+                mixer.quit()
         except Exception:
             pass
         flags = 0

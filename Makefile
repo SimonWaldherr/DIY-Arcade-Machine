@@ -129,7 +129,7 @@ web-safari: web-install
 build:
 	@if command -v mpy-cross >/dev/null 2>&1; then \
 		echo "Compiling arcade_app.py..."; \
-		mpy-cross arcade_app.py; \
+		mpy-cross -X heapsize=8388608 arcade_app.py; \
 		echo "Done."; \
     else \
 		echo "mpy-cross not found. Cannot compile ahead-of-time."; \
