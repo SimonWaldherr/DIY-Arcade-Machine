@@ -15,7 +15,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **27 Built-in Games**: Simon, Snake, Pong, Breakout, Tetris, Asteroids, Qix, Maze, Flappy, Invaders, PacMan, R-Type, Cave Flyer, Pitfall, Lunar Lander, UFO Defense, Doom-Lite, Ray Racer, Bejeweled, Sokoban, Catch, Frogger, and more
+- **38 Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -76,6 +76,8 @@ WebAssembly bundle with `python -m pygbag --build .` (Python 3.11) and deploys i
 **Local preview** (build + serve at `http://localhost:8000`):
 ```bash
 pip install pygame-ce pygbag==0.9.2
+python -m pygbag .
+```
 
 **CI / offline bundle** (writes to `build/web/`):
 ```bash
@@ -217,7 +219,7 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes **28 menu entries**: **DEMOS** plus 27 games in the same order used by `GameSelect` in `arcade_app.py`.
+The arcade includes **42 menu entries**: **DEMOS** plus 41 games in the same order used by `GameSelect` in `arcade_app.py`.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
@@ -225,20 +227,28 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 |---------|------|-------------|
 | `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Cube, Spark, Plasma, Orbit, Warp, Bounce, Tunnel, Matrix, Fire |
 | `2048` | 2048 | Sliding tile puzzle with merge scoring |
+| `ARENA` | Arena | Top-down wave survival with movement and shooting |
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
+| `BOMBER` | Bomber | Timed bombs, block clearing, and maze enemies |
 | `BRKOUT` | Breakout | Brick breaker with rainbow bricks |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
 | `CATCH` | Catch | Catch stars, avoid bombs, and keep the basket moving |
+| `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
+| `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
 | `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
+| `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
+| `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
+| `MINES` | Mines | Minesweeper-style reveal puzzle for the LED matrix |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
+| `PAIRS` | Pairs | Memory card matching on a 4x4 board |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
 | `PONG` | Pong | Paddle vs. AI, increasing difficulty |
 | `QIX` | Qix | Territory capture, avoid the enemy |
@@ -246,12 +256,14 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `REVRS` | Othello/Reversi | Board game with simple CPU opponent |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
+| `SKYWAR` | Sky War | Helicopter battlefield shooter with air and ground targets |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
 | `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `SOKO` | Sokoban | Crate-pushing puzzle levels |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
 | `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
+| `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
 
 Each game tracks high scores with optional initials entry.
 
