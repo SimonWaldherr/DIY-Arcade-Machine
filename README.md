@@ -232,8 +232,9 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
 | `BOMBER` | Bomber | Timed bombs, block clearing, and maze enemies |
 | `BRKOUT` | Breakout | Brick breaker with rainbow bricks |
-| `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
 | `CATCH` | Catch | Catch stars, avoid bombs, and keep the basket moving |
+| `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
+| `CGOLG` | Conway's Game of Life Game | Competitive Life battle with directed gliders and spaceships |
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
@@ -244,7 +245,6 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
-| `CGOLG` | Conway's Game of Life Game | Competitive Life battle with directed gliders and spaceships |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `MINES` | Mines | Minesweeper-style reveal puzzle for the LED matrix |
@@ -259,8 +259,8 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
 | `SKYWAR` | Sky War | Helicopter battlefield shooter with air and ground targets |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
-| `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `SOKO` | Sokoban | Crate-pushing puzzle levels |
+| `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
 | `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |

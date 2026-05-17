@@ -20,8 +20,9 @@ There are over 30 games and some demo animations.
 | `BEJWL` | Bejeweled | [BEJWL.md](./BEJWL.md) |
 | `BOMBER` | Bomber | [BOMBER.md](./BOMBER.md) |
 | `BRKOUT` | Breakout | [BRKOUT.md](./BRKOUT.md) |
-| `CAVEFL` | Cave Flyer | [CAVEFL.md](./CAVEFL.md) |
 | `CATCH` | Catch | [CATCH.md](./CATCH.md) |
+| `CAVEFL` | Cave Flyer | [CAVEFL.md](./CAVEFL.md) |
+| `CGOLG` | Conway's Game of Life Game | [CGOLG.md](./CGOLG.md) |
 | `CLIMB` | Climber | [CLIMB.md](./CLIMB.md) |
 | `DEFUSE` | Defuse | [DEFUSE.md](./DEFUSE.md) |
 | `DODGE` | Dodge | [DODGE.md](./DODGE.md) |
@@ -32,7 +33,6 @@ There are over 30 games and some demo animations.
 | `INVADR` | Invaders | [INVADR.md](./INVADR.md) |
 | `LANDER` | Lunar Lander | [LANDER.md](./LANDER.md) |
 | `LASER` | Laser | [LASER.md](./LASER.md) |
-| `CGOLG` | Conway's Game of Life Game | [CGOLG.md](./CGOLG.md) |
 | `LOCO` | LocoMotion | [LOCO.md](./LOCO.md) |
 | `MAZE` | Maze Explorer | [MAZE.md](./MAZE.md) |
 | `MINES` | Mines | [MINES.md](./MINES.md) |
@@ -47,8 +47,8 @@ There are over 30 games and some demo animations.
 | `SIMON` | Simon Says | [SIMON.md](./SIMON.md) |
 | `SKYWAR` | Sky War | [SKYWAR.md](./SKYWAR.md) |
 | `SNAKE` | Snake | [SNAKE.md](./SNAKE.md) |
-| `STACK` | Stacker | [STACK.md](./STACK.md) |
 | `SOKO` | Sokoban | [SOKO.md](./SOKO.md) |
+| `STACK` | Stacker | [STACK.md](./STACK.md) |
 | `TETRIS` | Tetris | [TETRIS.md](./TETRIS.md) |
 | `TRON` | Tron Lightcycle | [TRON.md](./TRON.md) |
 | `UFODEF` | UFO Defense | [UFODEF.md](./UFODEF.md) |

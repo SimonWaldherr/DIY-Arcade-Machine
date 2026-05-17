@@ -3423,9 +3423,11 @@ class MazeGame:
 
     def get_visible_cells(self):
         vis = []
+        seen = set()
         def add_vis(px, py):
             cell = (px, py)
-            if cell not in vis:
+            if cell not in seen:
+                seen.add(cell)
                 vis.append(cell)
         def add_side_peek(px, py, dx, dy):
             if abs(px - x) + abs(py - y) > 5:
@@ -8325,6 +8327,15 @@ class BejeweledGame:
         if y1 <= y2:
             draw_rectangle(gx, y1, gx + self.tile_w - 1, y1, min(255, col[0] + 35), min(255, col[1] + 35), min(255, col[2] + 35))
 
+    def _draw_tile_value(self, x, y, value, empty_color=(20, 20, 20)):
+        gx = x * self.tile_w
+        gy = y * self.tile_h
+        if value is None:
+            draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *empty_color)
+        else:
+            col = self.COLORS[value % len(self.COLORS)]
+            draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *col)
+
     def _draw_falling_tiles(self, movers, frame_px):
         display.clear()
         for x, start_px, end_px, value in movers:
@@ -8374,49 +8385,11 @@ class BejeweledGame:
 
     def _remove_matches_and_score(self, delay_ms=50):
         total_removed = 0
-        # Repeatedly find runs; for each run, remove the entire connected
-        # region (4-connected) of the same color and animate the removal.
         while True:
-            m = self._find_matches()
-            if not m:
+            removed_coords = self._find_matches()
+            if not removed_coords:
                 break
 
-            # Build connected components for matched tiles (flood-fill)
-            processed = set()
-            comps = []  # list of (color_index, set_of_coords)
-            for x, y in m:
-                if (x, y) in processed:
-                    continue
-                color = self.grid[y][x]
-                if color is None:
-                    continue
-                stack = [(x, y)]
-                comp = set()
-                while stack:
-                    px, py = stack.pop()
-                    if (px, py) in comp:
-                        continue
-                    if not (0 <= px < self.cols and 0 <= py < self.rows):
-                        continue
-                    if self.grid[py][px] != color:
-                        continue
-                    comp.add((px, py))
-                    # 4-neighbors
-                    stack.append((px + 1, py))
-                    stack.append((px - 1, py))
-                    stack.append((px, py + 1))
-                    stack.append((px, py - 1))
-                if comp:
-                    comps.append((color, comp))
-                    processed |= comp
-
-            if not comps:
-                break
-
-            # Count removed tiles and mark them as None only after preparing animation
-            removed_coords = set()
-            for color, comp in comps:
-                removed_coords |= comp
             total_removed += len(removed_coords)
 
             # Animate removal: matched blocks dissolve into dark pixels.
@@ -8442,27 +8415,9 @@ class BejeweledGame:
                                                           min(255, base[1] + glow),
                                                           min(255, base[2] + glow))
                         else:
-                            if v is not None:
-                                col = self.COLORS[v % len(self.COLORS)]
-                                draw_rectangle(
-                                    gx,
-                                    gy,
-                                    gx + self.tile_w - 1,
-                                    gy + self.tile_h - 1,
-                                    *col,
-                                )
-                            else:
-                                draw_rectangle(
-                                    gx,
-                                    gy,
-                                    gx + self.tile_w - 1,
-                                    gy + self.tile_h - 1,
-                                    16,
-                                    16,
-                                    16,
-                                )
+                            self._draw_tile_value(rx, ry, v, empty_color=(16, 16, 16))
 
-                display_score_and_time(self.score)
+                self._draw_hud(force=True)
                 display_flush()
                 maybe_collect(10)
                 if delay_ms > 0:
@@ -8489,18 +8444,7 @@ class BejeweledGame:
     def _draw_board(self):
         for y in range(self.rows):
             for x in range(self.cols):
-                gx = x * self.tile_w
-                gy = y * self.tile_h
-                v = self.grid[y][x]
-                if v is not None:
-                    col = self.COLORS[v % len(self.COLORS)]
-                    draw_rectangle(
-                        gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *col
-                    )
-                else:
-                    draw_rectangle(
-                        gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 20, 20, 20
-                    )
+                self._draw_tile_value(x, y, self.grid[y][x])
         # selection highlight
         if self.sel is not None:
             sx, sy = self.sel
@@ -8509,16 +8453,10 @@ class BejeweledGame:
             draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
 
     def _draw_cell(self, x, y):
-        gx = x * self.tile_w
-        gy = y * self.tile_h
-        v = self.grid[y][x]
-        if v is not None:
-            col = self.COLORS[v % len(self.COLORS)]
-            draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *col)
-        else:
-            draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 20, 20, 20)
-
+        self._draw_tile_value(x, y, self.grid[y][x])
         if self.sel == (x, y):
+            gx = x * self.tile_w
+            gy = y * self.tile_h
             draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
 
     def _draw_cursor(self):
@@ -9083,11 +9021,11 @@ class DemosGame:
       - C: return to menu
     """
     GAME_DEMOS = (
-        "2048", "ARENA", "ASTRD", "BEJWL", "BOMBER", "BRKOUT", "CAVEFL", "CATCH",
-        "CLIMB", "DEFUSE", "DODGE", "DOOMLT", "FLAPPY", "FROGGR", "GOLF",
-        "INVADR", "LANDER", "LASER", "CGOLG", "LOCO", "MAZE", "MINES", "PACMAN",
+        "2048", "ARENA", "ASTRD", "BEJWL", "BOMBER", "BRKOUT", "CATCH", "CAVEFL",
+        "CGOLG", "CLIMB", "DEFUSE", "DODGE", "DOOMLT", "FLAPPY", "FROGGR",
+        "GOLF", "INVADR", "LANDER", "LASER", "LOCO", "MAZE", "MINES", "PACMAN",
         "PAIRS", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE", 
-        "SIMON", "SKYWAR", "SNAKE", "STACK", "SOKO", "TETRIS", "TRON", 
+        "SIMON", "SKYWAR", "SNAKE", "SOKO", "STACK", "TETRIS", "TRON", 
         "UFODEF", "WINGS",
     )
     GAME_CLASS_NAMES = {
@@ -9097,8 +9035,9 @@ class DemosGame:
         "BEJWL": "BejeweledGame",
         "BOMBER": "BomberGame",
         "BRKOUT": "BreakoutGame",
-        "CAVEFL": "CaveFlyGame",
         "CATCH": "CatchGame",
+        "CAVEFL": "CaveFlyGame",
+        "CGOLG": "CgolgGame",
         "CLIMB": "ClimberGame",
         "DEFUSE": "DefuseGame",
         "DODGE": "DodgeGame",
@@ -9109,7 +9048,6 @@ class DemosGame:
         "INVADR": "InvaderGame",
         "LANDER": "LunarLanderGame",
         "LASER": "LaserGame",
-        "CGOLG": "CgolgGame",
         "LOCO": "LocoMotionGame",
         "MAZE": "MazeGame",
         "MINES": "MinesGame",
@@ -9124,8 +9062,8 @@ class DemosGame:
         "SIMON": "SimonGame",
         "SKYWAR": "SkyWarGame",
         "SNAKE": "SnakeGame",
-        "STACK": "StackerGame",
         "SOKO": "SokobanGame",
+        "STACK": "StackerGame",
         "TETRIS": "TetrisGame",
         "TRON": "TronGame",
         "UFODEF": "UFODefenseGame",
@@ -13956,8 +13894,9 @@ class ArenaGame:
 
     def _spawn_wave(self):
         self.enemies = []
-        count = min(12, 3 + self.wave)
-        for _i in range(count):
+        count = min(10, 3 + (self.wave + 1) // 2)
+        fast_count = min(count // 2, max(0, (self.wave - 3) // 3))
+        for i in range(count):
             edge = random.randint(0, 3)
             if edge == 0:
                 x, y = random.randint(0, WIDTH - 3), 0
@@ -13967,7 +13906,7 @@ class ArenaGame:
                 x, y = 0, random.randint(0, PLAY_HEIGHT - 3)
             else:
                 x, y = WIDTH - 3, random.randint(0, PLAY_HEIGHT - 3)
-            speed = 2 if self.wave >= 5 else 1
+            speed = 2 if i < fast_count else 1
             self.enemies.append([x, y, speed])
 
     def _move_player(self, joystick):
@@ -13995,7 +13934,7 @@ class ArenaGame:
             if 0 <= s[0] < WIDTH and 0 <= s[1] < PLAY_HEIGHT:
                 keep.append(s)
         self.shots = keep
-        step_delay = max(2, 5 - self.wave // 2)
+        step_delay = max(3, 6 - self.wave // 3)
         if self.frame % step_delay == 0:
             for e in self.enemies:
                 spd = e[2]
@@ -14043,11 +13982,11 @@ class ArenaGame:
     def _hit_player(self):
         now = ticks_ms()
         if ticks_diff(now, self.invincible_until) < 0:
-            return False
-        for e in self.enemies:
+            return -1
+        for i, e in enumerate(self.enemies):
             if rects_overlap(self.x, self.y, 3, 3, e[0], e[1], 3, 3):
-                return True
-        return False
+                return i
+        return -1
 
     def _draw(self):
         display.clear()
@@ -14084,7 +14023,9 @@ class ArenaGame:
             if z_button:
                 self._fire()
             self._advance()
-            if self._hit_player():
+            hit_i = self._hit_player()
+            if hit_i >= 0:
+                del self.enemies[hit_i]
                 self.lives -= 1
                 self.invincible_until = ticks_ms() + self.INVINCIBLE_MS
                 if self.lives <= 0:
@@ -14273,10 +14214,19 @@ class GolfGame:
         self.angle = -45   # degrees, full 360° allowed
         self.power = 4
         self.strokes = 0
+        self.par = 3 + min(2, self.hole // 4)
         self.hole_x = WIDTH - 7 - ((seed * 3) % 8)
         self.hole_y = 6 + (seed % 40)
         # Obstacles: [x, y, w, h, kind] where kind 0=tree 1=bunker 2=wall
         self.obstacles = []
+        if self.hole % 2:
+            gap_y = 16 + (seed % 22)
+            self.obstacles.append([28, 5, 2, max(4, gap_y - 6), 2])
+            self.obstacles.append([28, gap_y + 8, 2, max(4, PLAY_HEIGHT - gap_y - 13), 2])
+        else:
+            gap_x = 20 + (seed % 22)
+            self.obstacles.append([10, 27, max(4, gap_x - 10), 2, 2])
+            self.obstacles.append([gap_x + 9, 27, max(4, WIDTH - gap_x - 15), 2, 2])
         n = min(6, 2 + self.hole // 2)
         for i in range(n):
             ox = 14 + i * 7 + ((seed + i * 13) % 5)
@@ -14314,6 +14264,9 @@ class GolfGame:
     def _moving(self):
         return abs(self.vx) > 0.05 or abs(self.vy) > 0.05
 
+    def _ball_speed(self):
+        return abs(self.vx) + abs(self.vy)
+
     def _advance_ball(self):
         self.ball_x += self.vx
         self.ball_y += self.vy
@@ -14334,11 +14287,15 @@ class GolfGame:
         for o in self.obstacles:
             ox, oy, ow, oh = o[0], o[1], o[2], o[3]
             if rects_overlap(int(self.ball_x), int(self.ball_y), 2, 2, ox, oy, ow, oh):
+                if o[4] == 1:
+                    self.vx *= 0.72
+                    self.vy *= 0.72
+                    continue
                 bxc = self.ball_x + 1.0
                 byc = self.ball_y + 1.0
                 ocx = ox + ow * 0.5
                 ocy = oy + oh * 0.5
-                loss = 0.60 if o[4] == 1 else 0.65  # bunkers absorb more
+                loss = 0.65
                 if abs(bxc - ocx) / ow > abs(byc - ocy) / oh:
                     self.vx = -self.vx * loss
                     self.ball_x += self.vx * 2
@@ -14348,12 +14305,18 @@ class GolfGame:
         # Uniform rolling friction (grass, same in all directions — top-down)
         self.vx *= 0.96
         self.vy *= 0.96
+        if abs(self.ball_x - self.hole_x) <= 4 and abs(self.ball_y - self.hole_y) <= 4:
+            if self._ball_speed() < 1.35:
+                self.ball_x += (self.hole_x - self.ball_x) * 0.35
+                self.ball_y += (self.hole_y - self.ball_y) * 0.35
+                self.vx *= 0.78
+                self.vy *= 0.78
         if not self._moving():
             self.vx = 0.0
             self.vy = 0.0
 
     def _in_hole(self):
-        return abs(self.ball_x - self.hole_x) <= 3 and abs(self.ball_y - self.hole_y) <= 3
+        return abs(self.ball_x - self.hole_x) <= 2 and abs(self.ball_y - self.hole_y) <= 2 and self._ball_speed() < 0.6
 
     def _draw(self):
         display.clear()
@@ -14382,7 +14345,7 @@ class GolfGame:
             draw_rectangle(1, 1, self.power * 4, 2, 255, 180, 0)
         # Ball
         draw_rectangle(int(self.ball_x), int(self.ball_y), int(self.ball_x) + 1, int(self.ball_y) + 1, 255, 255, 255)
-        draw_text_small(1, 52, "H" + str(self.hole) + " S" + str(self.strokes), 200, 200, 200)
+        draw_text_small(1, 52, "H" + str(self.hole) + " P" + str(self.par), 200, 200, 200)
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -14403,10 +14366,10 @@ class GolfGame:
                     self._shoot()
             last_z = z_button
             if self._in_hole():
-                self.score += max(1, 20 - self.strokes * 3) + self.hole * 2
+                self.score += max(1, 26 - self.strokes * 3 + self.par * 2) + self.hole * 2
                 self.hole += 1
                 self._new_hole()
-            if self.strokes >= 10:
+            if self.strokes >= self.par + 6:
                 set_game_over_score(self.score)
                 return False
             self._draw()
@@ -15563,6 +15526,8 @@ class CgolgGame:
     LEFT_W = WIDTH // 4
     RIGHT_X = WIDTH - LEFT_W
     BASE_HP = 72
+    PLAYER_MAX_ENERGY = 16
+    ENEMY_MAX_ENERGY = 18
     PLAYER_REGEN_MS = 850
     ENEMY_REGEN_MS = 560
     PLAYER_COLOR = (0, 70, 255)
@@ -15605,6 +15570,8 @@ class CgolgGame:
         self.last_enemy_spawn = ticks_ms() + 400
         self.enemy_spawn_ms = 620
         self.flash_until = 0
+        self.blue_hit_until = 0
+        self.red_hit_until = 0
         self._seed_opening()
 
     def _idx(self, x, y):
@@ -15687,10 +15654,10 @@ class CgolgGame:
     def _regen(self):
         now = ticks_ms()
         if ticks_diff(now, self.last_player_regen) >= self.PLAYER_REGEN_MS:
-            self.player_energy = min(16, self.player_energy + 1)
+            self.player_energy = min(self.PLAYER_MAX_ENERGY, self.player_energy + 1)
             self.last_player_regen = now
         if ticks_diff(now, self.last_enemy_regen) >= self.ENEMY_REGEN_MS:
-            self.enemy_energy = min(18, self.enemy_energy + 1)
+            self.enemy_energy = min(self.ENEMY_MAX_ENERGY, self.enemy_energy + 1)
             self.last_enemy_regen = now
 
     def _enemy_choose_y(self):
@@ -15710,6 +15677,22 @@ class CgolgGame:
                 best_y = min(PLAY_HEIGHT - 6, band + 2)
         return best_y
 
+    def _choose_enemy_pattern(self, choices):
+        pressure = self.BASE_HP - self.enemy_hp + self.score // 60
+        if pressure > 18 and 4 in choices and random.randint(0, 1) == 0:
+            return 4
+        if pressure > 8 and 3 in choices and random.randint(0, 2) != 0:
+            return 3
+        if 2 in choices and random.randint(0, 1) == 0:
+            return 2
+        return choices[random.randint(0, len(choices) - 1)]
+
+    def _enemy_bonus_spawn(self, y):
+        if self.enemy_energy < 3 or random.randint(0, 3) != 0:
+            return
+        lane = clamp(y + random.choice((-7, 7)), 2, PLAY_HEIGHT - 8)
+        self._spawn_pattern(WIDTH - 6, lane, random.randint(0, 1), False)
+
     def _enemy_spawn(self):
         now = ticks_ms()
         if ticks_diff(now, self.last_enemy_spawn) < self.enemy_spawn_ms:
@@ -15720,23 +15703,14 @@ class CgolgGame:
                 choices.append(i)
         if not choices:
             return
-        pressure = self.BASE_HP - self.enemy_hp + self.score // 60
-        if pressure > 18 and 4 in choices and random.randint(0, 1) == 0:
-            idx = 4
-        elif pressure > 8 and 3 in choices and random.randint(0, 2) != 0:
-            idx = 3
-        elif 2 in choices and random.randint(0, 1) == 0:
-            idx = 2
-        else:
-            idx = choices[random.randint(0, len(choices) - 1)]
+        idx = self._choose_enemy_pattern(choices)
         y = self._enemy_choose_y()
         if random.randint(0, 3) == 0:
             y = random.randint(2, PLAY_HEIGHT - 8)
         if self._spawn_pattern(WIDTH - 6, y, idx, False):
             self.last_enemy_spawn = now
             self.enemy_spawn_ms = max(430, self.enemy_spawn_ms - 5)
-            if self.enemy_energy >= 3 and random.randint(0, 3) == 0:
-                self._spawn_pattern(WIDTH - 6, clamp(y + random.choice((-7, 7)), 2, PLAY_HEIGHT - 8), random.randint(0, 1), False)
+            self._enemy_bonus_spawn(y)
 
     def _generation(self):
         alive = self.alive
@@ -15813,9 +15787,11 @@ class CgolgGame:
             dmg = min(3, 1 + blue_right // 14)
             self.enemy_hp = max(0, self.enemy_hp - dmg)
             self.score += dmg * 10 + blue_right // 2
+            self.blue_hit_until = ticks_ms() + 140
         if red_left:
             dmg = min(3, 1 + red_left // 14)
             self.player_hp = max(0, self.player_hp - dmg)
+            self.red_hit_until = ticks_ms() + 140
         self.score += max(0, blue_total - red_total) // 12
         if self.enemy_hp <= 0:
             set_game_over_score(self.score + 200, won=True)
@@ -15837,6 +15813,30 @@ class CgolgGame:
             draw_rectangle(1, 4, min(self.LEFT_W - 2, self.player_energy), 4, 0, 180, 255)
         if self.enemy_energy > 0:
             draw_rectangle(max(self.RIGHT_X + 1, WIDTH - 1 - self.enemy_energy), 4, WIDTH - 2, 4, 255, 60, 0)
+
+    def _draw_bases(self):
+        now = ticks_ms()
+        left_col = (70, 190, 255) if ticks_diff(now, self.red_hit_until) >= 0 else (255, 255, 255)
+        right_col = (255, 90, 45) if ticks_diff(now, self.blue_hit_until) >= 0 else (255, 255, 255)
+        draw_rect_outline(0, 8, self.LEFT_W - 1, PLAY_HEIGHT - 2, 0, 42, 110)
+        draw_rect_outline(self.RIGHT_X, 8, WIDTH - 1, PLAY_HEIGHT - 2, 110, 25, 0)
+        draw_rectangle(2, PLAY_HEIGHT // 2 - 3, 5, PLAY_HEIGHT // 2 + 3, left_col[0], left_col[1], left_col[2])
+        draw_rectangle(3, PLAY_HEIGHT // 2 - 1, 6, PLAY_HEIGHT // 2 + 1, 0, 45, 110)
+        cx = WIDTH - 4
+        cy = PLAY_HEIGHT // 2
+        draw_rect_outline(cx - 3, cy - 3, cx + 2, cy + 3, right_col[0], right_col[1], right_col[2])
+        draw_line(cx - 4, cy, cx + 3, cy, right_col[0], right_col[1], right_col[2])
+        draw_line(cx, cy - 4, cx, cy + 4, right_col[0], right_col[1], right_col[2])
+
+    def _draw_goal_hint(self):
+        if self.frame > 170:
+            return
+        y = 10 + ((self.frame // 18) % 3) * 8
+        x1 = self.LEFT_W + 3
+        x2 = self.RIGHT_X - 4
+        draw_line(x1, y, x2, y, 0, 110, 255)
+        draw_line(x2 - 3, y - 2, x2, y, 0, 170, 255)
+        draw_line(x2 - 3, y + 2, x2, y, 0, 170, 255)
 
     def _draw_pattern_preview(self, base_x, base_y, pattern_idx, is_player):
         _name, _cost, cells = self.PATTERNS[pattern_idx]
@@ -15863,6 +15863,7 @@ class CgolgGame:
         display.clear()
         draw_line(self.LEFT_W, 0, self.LEFT_W, PLAY_HEIGHT - 1, 0, 30, 80)
         draw_line(self.RIGHT_X - 1, 0, self.RIGHT_X - 1, PLAY_HEIGHT - 1, 80, 20, 0)
+        self._draw_goal_hint()
         sp = display.set_pixel
         for y in range(PLAY_HEIGHT):
             row = y * WIDTH
@@ -15878,6 +15879,7 @@ class CgolgGame:
                 else:
                     b = max(b, 100)
                 sp(x, y, r, g, b)
+        self._draw_bases()
 
         cy = self.cursor_y
         col = (255, 255, 255) if ticks_diff(ticks_ms(), self.flash_until) < 0 else (0, 180, 255)
@@ -16021,8 +16023,9 @@ class GameSelect:
         ("BEJWL", BejeweledGame, GAME_FLAG_HEAVY),
         ("BOMBER", BomberGame, 0),
         ("BRKOUT", BreakoutGame, 0),
-        ("CAVEFL", CaveFlyGame, 0),
         #("CATCH", CatchGame, 0),
+        ("CAVEFL", CaveFlyGame, 0),
+        ("CGOLG", CgolgGame, 0),
         ("CLIMB", ClimberGame, 0),
         ("DEFUSE", DefuseGame, 0),
         #("DODGE", DodgeGame, 0),
@@ -16033,7 +16036,6 @@ class GameSelect:
         ("INVADR", InvaderGame, 0),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
         ("LASER", LaserGame, 0),
-        ("CGOLG", CgolgGame, 0),
         ("LOCO", LocoMotionGame, GAME_FLAG_HEAVY),
         ("MAZE", MazeGame, GAME_FLAG_HEAVY),
         ("MINES", MinesGame, 0),
@@ -16048,8 +16050,8 @@ class GameSelect:
         ("SIMON", SimonGame, 0),
         #("SKYWAR", SkyWarGame, 0),
         ("SNAKE", SnakeGame, 0),
-        ("STACK", StackerGame, 0),
         ("SOKO", SokobanGame, GAME_FLAG_HEAVY),
+        ("STACK", StackerGame, 0),
         ("TETRIS", TetrisGame, GAME_FLAG_HEAVY),
         ("TRON", TronGame, 0),
         ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
