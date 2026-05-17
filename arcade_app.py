@@ -4931,32 +4931,79 @@ class PacmanGame:
     OFF_X = 0
     OFF_Y = 1
 
-    # 16 Zeichen pro Zeile, 14 Zeilen
-    MAP = [
-        "################",
-        "#P.....##......#",
-        "#.o###....###o.#",
-        "#......##......#",
-        "###.########.###",
-        "#......##......#",
-        "#.####.##.####.#",
-        "#.####....####.#",
-        "#...##.##.##...#",
-        "###....##....###",
-        "#.o....G......o#",
-        "#.###.####.###.#",
-        "#......##....G.#",
-        "################",
-    ]
+    # 16 characters per row, 15 rows. Each level must keep every pellet reachable.
+    MAPS = (
+        (
+            "################",
+            "#P.............#",
+            "#.##.#.##.#.##.#",
+            "#o...#....#...o#",
+            "###.########.###",
+            "#......##......#",
+            "#.####.##.####.#",
+            "#......GG......#",
+            "#.####.##.####.#",
+            "#......##......#",
+            "###.########.###",
+            "#o...#....#...o#",
+            "#.##.#.##.#.##.#",
+            "#..............#",
+            "################",
+        ),
+        (
+            "################",
+            "#P....#........#",
+            "#.##..#.####.#.#",
+            "#o....#....#.#o#",
+            "####.####..#.#.#",
+            "#....#.....#...#",
+            "#.##.#.##.###.##",
+            "#....#.GG......#",
+            "##.###.##.#.##.#",
+            "#...#.....#....#",
+            "#.#.#..####.####",
+            "#o#.#....#....o#",
+            "#.#.####.#..##.#",
+            "#........#.....#",
+            "################",
+        ),
+        (
+            "################",
+            "#P.....#.......#",
+            "#.###..#.####..#",
+            "#o..#.......#o.#",
+            "###.#.#####.#.##",
+            "#...#...#...#..#",
+            "#.#####.#.###..#",
+            "#.......GG.....#",
+            "#..###.#.#####.#",
+            "#..#...#...#...#",
+            "##.#.#####.#.###",
+            "#.o#.......#..o#",
+            "#..####.#..###.#",
+            "#.......#......#",
+            "################",
+        ),
+    )
 
     # dirs: 0 U, 1 D, 2 L, 3 R
     DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
     OPP  = (1, 0, 3, 2)
+    GHOST_ACTIVE = 0
+    GHOST_HIDDEN = 1
+    GHOST_HARMLESS = 2
+    GHOST_RESPAWN_TICKS = 42  # about 5 seconds at logic_ms=120
 
     def __init__(self):
         self.reset()
 
     def reset(self):
+        self.level = 0
+        self.score = 0
+        self._load_level()
+
+    def _load_level(self):
+        self.map = self.MAPS[self.level % len(self.MAPS)]
         self.wall = bytearray(self.W * self.H)      # 1 if wall
         self.pel = bytearray(self.W * self.H)       # 0 none, 1 pellet, 2 power
         self.wall_list = []
@@ -4966,15 +5013,14 @@ class PacmanGame:
         self.pdir = 3  # right
         self.want_dir = 3
 
-        self.ghosts = []  # each: [x,y,dir,home_x,home_y]
+        self.ghosts = []  # each: [x,y,dir,home_x,home_y,state,timer]
         self.power_timer = 0  # ticks (logic steps)
 
-        self.score = 0
         self.pellet_count = 0
 
         # parse map
         for y in range(self.H):
-            row = self.MAP[y]
+            row = self.map[y]
             for x in range(self.W):
                 ch = row[x]
                 i = y * self.W + x
@@ -4996,11 +5042,11 @@ class PacmanGame:
                         self.px, self.py = x, y
                     elif ch == "G":
                         # ghost start
-                        self.ghosts.append([x, y, random.randint(0, 3), x, y])
+                        self.ghosts.append([x, y, random.randint(0, 3), x, y, self.GHOST_ACTIVE, 0])
 
         if len(self.ghosts) < 2:
             # safety
-            self.ghosts.append([self.W - 2, 1, 2, self.W - 2, 1])
+            self.ghosts.append([self.W - 2, 1, 2, self.W - 2, 1, self.GHOST_ACTIVE, 0])
 
         self.last_logic = ticks_ms()
         self.logic_ms = 120
@@ -5055,7 +5101,7 @@ class PacmanGame:
 
     def _ghost_moves(self, g):
         # returns list of possible dirs
-        x, y, d, hx, hy = g
+        x, y, d, hx, hy = g[:5]
         moves = []
         for nd in (0, 1, 2, 3):
             dx, dy = self.DIRS[nd]
@@ -5068,7 +5114,7 @@ class PacmanGame:
         return moves
 
     def _ghost_pick(self, g):
-        x, y, d, hx, hy = g
+        x, y, d, hx, hy = g[:5]
         moves = self._ghost_moves(g)
         if not moves:
             return d
@@ -5102,6 +5148,23 @@ class PacmanGame:
                     best = nd
         return best
 
+    def _update_ghost_states(self):
+        for g in self.ghosts:
+            if g[5] == self.GHOST_ACTIVE:
+                continue
+            g[6] -= 1
+            if g[6] > 0:
+                continue
+            if g[5] == self.GHOST_HIDDEN:
+                g[0], g[1] = g[3], g[4]
+                g[2] = random.randint(0, 3)
+                g[5] = self.GHOST_HARMLESS
+                g[6] = self.GHOST_RESPAWN_TICKS
+            else:
+                g[5] = self.GHOST_ACTIVE
+                g[6] = 0
+            self._dirty = True
+
     def _move_ghosts(self):
         # ghost speed: every 2nd logic tick
         self.ghost_tick = (self.ghost_tick + 1) & 1
@@ -5109,6 +5172,8 @@ class PacmanGame:
             return
 
         for g in self.ghosts:
+            if g[5] == self.GHOST_HIDDEN:
+                continue
             nd = self._ghost_pick(g)
             g[2] = nd
             dx, dy = self.DIRS[nd]
@@ -5119,12 +5184,16 @@ class PacmanGame:
     def _check_collisions(self):
         global game_over, global_score
         for g in self.ghosts:
+            if g[5] != self.GHOST_ACTIVE:
+                continue
             if g[0] == self.px and g[1] == self.py:
                 if self.power_timer > 0:
                     # eat ghost
                     self.score += 50
                     g[0], g[1] = g[3], g[4]
                     g[2] = random.randint(0, 3)
+                    g[5] = self.GHOST_HIDDEN
+                    g[6] = self.GHOST_RESPAWN_TICKS
                     self._dirty = True
                 else:
                     global_score = self.score
@@ -5196,20 +5265,25 @@ class PacmanGame:
     def _draw_ghosts(self):
         frightened = (self.power_timer > 0)
         for gi, g in enumerate(self.ghosts):
+            if g[5] == self.GHOST_HIDDEN:
+                continue
             gx = self.OFF_X + g[0] * self.CELL
             gy = self.OFF_Y + g[1] * self.CELL
-            if frightened:
+            if g[5] == self.GHOST_HARMLESS:
+                col = (90, 55, 95) if gi == 0 else (95, 50, 90)
+            elif frightened:
                 col = (80, 120, 255)
             else:
                 col = (255, 60, 60) if gi == 0 else (255, 80, 210)
             draw_rectangle(gx, gy + 1, gx + 3, gy + 3, *col)
             draw_rectangle(gx + 1, gy, gx + 2, gy, *col)
-            display.set_pixel(gx + 1, gy + 1, 255, 255, 255)
-            display.set_pixel(gx + 2, gy + 1, 255, 255, 255)
-            eye_col = (0, 0, 90) if frightened else (0, 0, 0)
+            eye = 140 if g[5] == self.GHOST_HARMLESS else 255
+            display.set_pixel(gx + 1, gy + 1, eye, eye, eye)
+            display.set_pixel(gx + 2, gy + 1, eye, eye, eye)
+            eye_col = (0, 0, 90) if frightened or g[5] == self.GHOST_HARMLESS else (0, 0, 0)
             display.set_pixel(gx + 1, gy + 2, *eye_col)
             display.set_pixel(gx + 2, gy + 2, *eye_col)
-            if not frightened:
+            if not frightened and g[5] == self.GHOST_ACTIVE:
                 display.set_pixel(gx, gy + 3, 0, 0, 0)
                 display.set_pixel(gx + 3, gy + 3, 0, 0, 0)
 
@@ -5239,6 +5313,7 @@ class PacmanGame:
         self._draw_player()
         self._draw_ghosts()
 
+        draw_text_small(46, PLAY_HEIGHT, "L" + str(self.level + 1), 120, 120, 120)
         display_score_and_time(self.score)
         self._dirty = False
 
@@ -5254,6 +5329,7 @@ class PacmanGame:
         # redraw sprites on top
         self._draw_player()
         self._draw_ghosts()
+        draw_text_small(46, PLAY_HEIGHT, "L" + str(self.level + 1), 120, 120, 120)
         display_score_and_time(self.score)
 
     def main_loop(self, joystick):
@@ -5301,6 +5377,7 @@ class PacmanGame:
 
                 self._move_player()
                 self._eat()
+                self._update_ghost_states()
                 self._move_ghosts()
 
                 if self._check_collisions():
@@ -5309,9 +5386,20 @@ class PacmanGame:
 
                 # win?
                 if self.pellet_count <= 0:
+                    self.score += 100 + self.level * 50
                     global_score = self.score
-                    show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score, delay_ms=1300)
-                    return
+                    if self.level + 1 >= len(self.MAPS):
+                        show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score, delay_ms=1300)
+                        return
+                    self.level += 1
+                    self._load_level()
+                    self._draw_background()
+                    self._draw()
+                    show_center_message(("LVL", str(self.level + 1)), start_y=18, line_height=15, r=255, g=255, b=0, score=global_score, delay_ms=700)
+                    self.last_logic = ticks_ms()
+                    self._drawn_bg = False
+                    self._dirty = True
+                    continue
 
                 global_score = self.score
 
@@ -5392,6 +5480,7 @@ class PacmanGame:
 
                 self._move_player()
                 self._eat()
+                self._update_ghost_states()
                 self._move_ghosts()
 
                 if self._check_collisions():
@@ -5400,10 +5489,22 @@ class PacmanGame:
 
                 # win?
                 if self.pellet_count <= 0:
+                    self.score += 100 + self.level * 50
                     global_score = self.score
-                    show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score)
-                    await asyncio.sleep(1.3)
-                    return
+                    if self.level + 1 >= len(self.MAPS):
+                        show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score)
+                        await asyncio.sleep(1.3)
+                        return
+                    self.level += 1
+                    self._load_level()
+                    self._draw_background()
+                    self._draw()
+                    show_center_message(("LVL", str(self.level + 1)), start_y=18, line_height=15, r=255, g=255, b=0, score=global_score)
+                    await asyncio.sleep(0.7)
+                    self.last_logic = ticks_ms()
+                    self._drawn_bg = False
+                    self._dirty = True
+                    continue
 
                 global_score = self.score
 
@@ -6549,6 +6650,24 @@ class LocoMotionGame:
             b"..|.--.|",
             b"..L-JJ..",
             b"........",
+        ),
+        (
+            b"S----7..",
+            b".....|..",
+            b".....|..",
+            b".....|..",
+            b"E----F..",
+            b"........",
+            b"........",
+        ),
+        (
+            b"S--7....",
+            b"..|.F--E",
+            b"..L-7...",
+            b"....|...",
+            b".F--J...",
+            b".|......",
+            b".L--T...",
         ),
     ]
 
@@ -7842,6 +7961,38 @@ class SokobanGame:
             b"#..............#",
             b"################",
         ),
+        (
+            b"################",
+            b"#..............#",
+            b"#..#####.......#",
+            b"#..#...#.......#",
+            b"#..#PBG#.......#",
+            b"#..#...#.......#",
+            b"#..#####.......#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#..########....#",
+            b"#..#......#....#",
+            b"#..#P.B.G.#....#",
+            b"#..#..B.G.#....#",
+            b"#..#......#....#",
+            b"#..########....#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"#..............#",
+            b"################",
+        ),
     ]
 
     # Colors (tweak to taste)
@@ -7883,6 +8034,7 @@ class SokobanGame:
             pass
 
         self.level_idx = 0
+        self.score = 0
         self.moves = 0
         self.undo = []
         self._last_input_ms = 0
@@ -7911,6 +8063,7 @@ class SokobanGame:
         """
         if reset_all:
             self.level_idx = 0
+            self.score = 0
         self.moves = 0
         self.undo = []
 
@@ -8115,7 +8268,8 @@ class SokobanGame:
 
                 if self._is_solved():
                     finish_score = max(1, 1000 - self.moves + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100)
-                    set_game_over_score(finish_score, won=True)
+                    self.score += finish_score
+                    global_score = self.score
                     display.clear()
                     draw_text(4, 16, "SOLVED", 0, 255, 0)
                     draw_text(
@@ -8128,7 +8282,13 @@ class SokobanGame:
                     )
                     display_score_and_time(global_score, force=True)
                     sleep_ms(1300)
-                    return
+                    if self.level_idx + 1 >= len(self.SOK_LEVELS):
+                        set_game_over_score(self.score, won=True)
+                        return
+                    self.level_idx += 1
+                    self.reset_level(reset_all=False)
+                    self._last_input_ms = ticks_ms()
+                    continue
 
             else:
                 self._last_input_ms = now - (self.input_ms // 2)
@@ -8201,7 +8361,8 @@ class SokobanGame:
 
                 if self._is_solved():
                     finish_score = max(1, 1000 - self.moves + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100)
-                    set_game_over_score(finish_score, won=True)
+                    self.score += finish_score
+                    global_score = self.score
                     display.clear()
                     draw_text(4, 16, "SOLVED", 0, 255, 0)
                     draw_text(
@@ -8214,7 +8375,13 @@ class SokobanGame:
                     )
                     display_score_and_time(global_score, force=True)
                     await asyncio.sleep(1.3)
-                    return
+                    if self.level_idx + 1 >= len(self.SOK_LEVELS):
+                        set_game_over_score(self.score, won=True)
+                        return
+                    self.level_idx += 1
+                    self.reset_level(reset_all=False)
+                    self._last_input_ms = ticks_ms()
+                    continue
 
             else:
                 self._last_input_ms = now - (self.input_ms // 2)
@@ -9024,8 +9191,8 @@ class DemosGame:
         "2048", "ARENA", "ASTRD", "BEJWL", "BOMBER", "BRKOUT", "CATCH", "CAVEFL",
         "CGOLG", "CLIMB", "DEFUSE", "DODGE", "DOOMLT", "FLAPPY", "FROGGR",
         "GOLF", "INVADR", "LANDER", "LASER", "LOCO", "MAZE", "MINES", "PACMAN",
-        "PAIRS", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE", 
-        "SIMON", "SKYWAR", "SNAKE", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
+        "PAIRS", "PINBAL", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE",
+        "SABOTR", "SIMON", "SKYWAR", "SNAKE", "SOCCER", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
         "UFODEF", "WINGS",
     )
     GAME_CLASS_NAMES = {
@@ -9053,15 +9220,18 @@ class DemosGame:
         "MINES": "MinesGame",
         "PACMAN": "PacmanGame",
         "PAIRS": "PairsGame",
+        "PINBAL": "PinballGame",
         "PITFAL": "PitfallGame",
         "PONG": "PongGame",
         "QIX": "QixGame",
         "RAYRCR": "RayRacerGame",
         "REVRS": "OthelloGame",
         "RTYPE": "RTypeGame",
+        "SABOTR": "SabotrGame",
         "SIMON": "SimonGame",
         "SKYWAR": "SkyWarGame",
         "SNAKE": "SnakeGame",
+        "SOCCER": "SoccerGame",
         "SOKO": "SokobanGame",
         "STACK": "StackerGame",
         "TETRIS": "TetrisGame",
@@ -11063,6 +11233,19 @@ class LunarLanderGame:
     """
     _STEP = 5
     _LUT = None
+    # pad_x, pad_w, pad_y, terrain control points, fuel, gravity, thrust.
+    # Profiles are deliberately fixed so each level can be checked for a clear,
+    # reachable landing pad instead of relying on random terrain.
+    LEVELS = (
+        (25, 10, 48, (48, 46, 49, 47, 50), 760, 0.10, 0.30),
+        (9, 10, 44, (42, 45, 43, 48, 46), 720, 0.105, 0.30),
+        (45, 9, 42, (50, 47, 45, 43, 41), 700, 0.112, 0.31),
+        (18, 9, 39, (46, 43, 40, 44, 48), 680, 0.118, 0.31),
+        (36, 8, 36, (52, 47, 42, 38, 44), 650, 0.124, 0.32),
+        (7, 8, 35, (39, 42, 45, 40, 37), 630, 0.130, 0.32),
+        (49, 7, 33, (50, 45, 39, 35, 34), 610, 0.136, 0.33),
+        (27, 7, 31, (44, 40, 36, 32, 38), 590, 0.142, 0.33),
+    )
 
     @classmethod
     def _ensure_lut(cls):
@@ -11085,12 +11268,15 @@ class LunarLanderGame:
             self.level = 1
             self.total_score = 0
         
-        self.terrain = self._make_terrain()
+        profile = self.LEVELS[(self.level - 1) % len(self.LEVELS)]
+        cycle = (self.level - 1) // len(self.LEVELS)
+        self.terrain = self._make_terrain(profile, cycle)
 
-        # Pad gets smaller and fuel/gravity adjust per level
-        self.pad_w = max(6, 10 - self.level)
-        self.pad_x = random.randint(6, WIDTH - self.pad_w - 6)
-        self.pad_y = self.terrain[self.pad_x]
+        # Pad/fuel/gravity come from fixed profiles, with a small cap for
+        # repeat cycles after the handcrafted set.
+        self.pad_x = profile[0]
+        self.pad_w = max(6, profile[1] - min(2, cycle))
+        self.pad_y = profile[2]
         for x in range(self.pad_x, self.pad_x + self.pad_w):
             self.terrain[x] = self.pad_y
 
@@ -11100,30 +11286,32 @@ class LunarLanderGame:
         self.vy = 0.0
         self.angle = 90
 
-        # Fuel decreases and gravity increases per level
-        self.fuel_max = max(400, 700 - (self.level - 1) * 60)
+        self.fuel_max = max(470, int(profile[4] - cycle * 30))
         self.fuel = self.fuel_max
 
-        self.g = 0.10 + (self.level - 1) * 0.015
-        self.thrust = 0.30
+        self.g = profile[5] + cycle * 0.006
+        self.thrust = profile[6]
 
         self.points = 300
         self.last_points_ms = ticks_ms()
         self.frame = 0
 
-    def _make_terrain(self):
+    def _make_terrain(self, profile, cycle=0):
+        control = profile[3]
+        span = WIDTH - 1
         t = [0] * WIDTH
-        y = random.randint(PLAY_HEIGHT - 18, PLAY_HEIGHT - 10)
         lo = PLAY_HEIGHT - 24
         hi = PLAY_HEIGHT - 4
-
         for x in range(WIDTH):
-            y += random.randint(-2, 2)
-            if y < lo:
-                y = lo
-            if y > hi:
-                y = hi
-            t[x] = y
+            pos = x * (len(control) - 1) / span
+            i = int(pos)
+            if i >= len(control) - 1:
+                y = control[-1]
+            else:
+                frac = pos - i
+                y = int(control[i] * (1.0 - frac) + control[i + 1] * frac)
+            ripple = ((x * 7 + self.level * 5) % 5) - 2
+            t[x] = clamp(y + ripple + min(2, cycle), lo, hi)
 
         # smooth
         for _ in range(2):
@@ -11941,8 +12129,42 @@ class DoomLiteGame:
         b"#..............#",
         b"#..##########..#",
         b"################",
+    ), (
+        b"################",
+        b"#..............#",
+        b"#.##.######.##.#",
+        b"#.#..........#.#",
+        b"#.#.###..###.#.#",
+        b"#...#......#...#",
+        b"###.#.####.#.###",
+        b"#.....#..#.....#",
+        b"#.###.#..#.###.#",
+        b"#...#......#...#",
+        b"#.#.########.#.#",
+        b"#.#..........#.#",
+        b"#.##.######.##.#",
+        b"#..............#",
+        b"#..##########..#",
+        b"################",
+    ), (
+        b"################",
+        b"#..............#",
+        b"#.####....####.#",
+        b"#....#.##.#....#",
+        b"####.#.##.#.####",
+        b"#....#....#....#",
+        b"#.##.######.##.#",
+        b"#.#..........#.#",
+        b"#.#.###..###.#.#",
+        b"#...#......#...#",
+        b"###.#.####.#.###",
+        b"#.....#..#.....#",
+        b"#.###.#..#.###.#",
+        b"#..............#",
+        b"#..##########..#",
+        b"################",
     ))
-    STARTS = ((2.5, 2.5), (1.5, 1.5), (2.5, 13.5), (1.5, 7.5))
+    STARTS = ((2.5, 2.5), (1.5, 1.5), (2.5, 13.5), (1.5, 7.5), (1.5, 1.5), (1.5, 13.5))
 
     # Raycaster Parameter
     ANGLE_MAX = 256               # 0..255 entspricht 0..360°
@@ -15925,6 +16147,743 @@ class CgolgGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
+class PinballGame:
+    """
+    PINBAL
+    Controls:
+      - Hold Z at launch: charge plunger
+      - Left / Right: flippers
+      - C: return to menu
+    Compact pinball table with bumpers, targets, flippers, plunger strength,
+    three balls, and a score multiplier.
+    """
+    FRAME_MS = 30
+    BALL_R = 1.45
+    LANE_X = 55.0
+    LANE_GATE_Y = 10.0
+    LANE_BOTTOM_Y = 52.0
+    POSTS = ((7, 47), (52, 47), (31, 51), (33, 51))
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+        self.balls = 3
+        self.mult = 1
+        self.charge = 0
+        self.last_z = False
+        self.frame = 0
+        self.hit_cooldown = 0
+        self.bumpers = ((20, 16, 5), (43, 17, 5), (32, 30, 6))
+        self.targets = [[8, 24, 0], [51, 24, 0], [12, 39, 0], [49, 39, 0]]
+        self._new_ball()
+
+    def _new_ball(self):
+        self.ball_x = 58.0
+        self.ball_y = 50.0
+        self.vx = 0.0
+        self.vy = 0.0
+        self.in_plunger = True
+        self.charge = 0
+
+    def _launch(self):
+        strength = 2.2 + self.charge * 0.10
+        self.vx = -0.45
+        self.vy = -strength
+        self.in_plunger = False
+        self.charge = 0
+
+    def _flipper_input(self, joystick):
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        return d == JOYSTICK_LEFT, d == JOYSTICK_RIGHT
+
+    def _reflect_on_normal(self, nx, ny, boost=1.0):
+        dot = self.vx * nx + self.vy * ny
+        if dot < 0:
+            self.vx = (self.vx - 2 * dot * nx) * boost
+            self.vy = (self.vy - 2 * dot * ny) * boost
+
+    def _bounce_circle(self, cx, cy, radius, score):
+        dx = self.ball_x - cx
+        dy = self.ball_y - cy
+        min_d = radius + self.BALL_R
+        d2 = dx * dx + dy * dy
+        if d2 > min_d * min_d:
+            return False
+        dist = math.sqrt(d2) or 1.0
+        nx = dx / dist
+        ny = dy / dist
+        self.ball_x = cx + nx * min_d
+        self.ball_y = cy + ny * min_d
+        self._reflect_on_normal(nx, ny, 1.08)
+        if score > 0 and self.hit_cooldown <= 0:
+            self.score += score * self.mult
+            self.hit_cooldown = 5
+        return True
+
+    def _bounce_segment(self, x1, y1, x2, y2, active=False, side=0):
+        vx = x2 - x1
+        vy = y2 - y1
+        seg_len2 = vx * vx + vy * vy
+        if seg_len2 <= 0:
+            return False
+        t = ((self.ball_x - x1) * vx + (self.ball_y - y1) * vy) / seg_len2
+        t = clamp(t, 0.0, 1.0)
+        cx = x1 + vx * t
+        cy = y1 + vy * t
+        dx = self.ball_x - cx
+        dy = self.ball_y - cy
+        min_d = self.BALL_R + 0.55
+        d2 = dx * dx + dy * dy
+        if d2 > min_d * min_d:
+            return False
+        dist = math.sqrt(d2) or 1.0
+        nx = dx / dist
+        ny = dy / dist
+        self.ball_x = cx + nx * min_d
+        self.ball_y = cy + ny * min_d
+        self._reflect_on_normal(nx, ny, 0.92)
+        if active and self.ball_y >= 43:
+            self.vx += side * 0.85
+            self.vy = min(self.vy, -3.8)
+            self.score += 1
+        return True
+
+    def _apply_flippers(self, left_on, right_on):
+        left_tip_y = 46 if left_on else 55
+        right_tip_y = 46 if right_on else 55
+        self._bounce_segment(11, 52, 29, left_tip_y, left_on, 1)
+        self._bounce_segment(53, 52, 35, right_tip_y, right_on, -1)
+
+    def _hit_bumpers(self):
+        for bx, by, radius in self.bumpers:
+            self._bounce_circle(bx, by, radius, 15)
+
+    def _hit_targets(self):
+        for t in self.targets:
+            tx, ty, lit = t
+            if abs(self.ball_x - tx) <= 2 + self.BALL_R and abs(self.ball_y - ty) <= 4 + self.BALL_R:
+                if not lit:
+                    t[2] = 1
+                    self.score += 25 * self.mult
+                    if all(tt[2] for tt in self.targets):
+                        self.mult = min(5, self.mult + 1)
+                        for tt in self.targets:
+                            tt[2] = 0
+                if abs(self.ball_x - tx) > abs(self.ball_y - ty) * 0.45:
+                    self.vx = -self.vx * 0.9
+                    self.ball_x = tx + (3.6 if self.ball_x >= tx else -3.6)
+                else:
+                    self.vy = -self.vy * 0.85
+                    self.ball_y = ty + (5.4 if self.ball_y >= ty else -5.4)
+
+    def _hit_posts(self):
+        for x, y in self.POSTS:
+            self._bounce_circle(x, y, 1.6, 0)
+
+    def _wall_collisions(self):
+        if self.ball_x <= 3 + self.BALL_R:
+            self.ball_x = 3 + self.BALL_R
+            self.vx = abs(self.vx) * 0.84
+        elif self.ball_x >= WIDTH - 4 - self.BALL_R:
+            self.ball_x = WIDTH - 4 - self.BALL_R
+            self.vx = -abs(self.vx) * 0.84
+
+        if self.ball_y <= 2 + self.BALL_R:
+            self.ball_y = 2 + self.BALL_R
+            self.vy = abs(self.vy) * 0.78
+            if self.ball_x > self.LANE_X:
+                self.vx = min(self.vx - 0.75, -0.85)
+
+        if self.LANE_GATE_Y < self.ball_y < self.LANE_BOTTOM_Y:
+            if self.ball_x > self.LANE_X and self.ball_x < self.LANE_X + self.BALL_R:
+                self.ball_x = self.LANE_X + self.BALL_R
+                self.vx = abs(self.vx) * 0.65
+            elif self.ball_x <= self.LANE_X and self.ball_x > self.LANE_X - self.BALL_R:
+                self.ball_x = self.LANE_X - self.BALL_R
+                self.vx = -abs(self.vx) * 0.65
+        elif self.ball_y <= self.LANE_GATE_Y and self.ball_x > self.LANE_X:
+            self.vx = min(self.vx, -0.8)
+
+        if self.ball_y >= PLAY_HEIGHT - 3 - self.BALL_R:
+            if self.ball_x < 26:
+                self.ball_y = PLAY_HEIGHT - 3 - self.BALL_R
+                self.vx = max(self.vx, 0.8)
+                self.vy = -abs(self.vy) * 0.7
+            elif self.ball_x > 38:
+                self.ball_y = PLAY_HEIGHT - 3 - self.BALL_R
+                self.vx = min(self.vx, -0.8)
+                self.vy = -abs(self.vy) * 0.7
+
+    def _advance_ball(self, left_on, right_on):
+        if self.in_plunger:
+            return True
+        if self.hit_cooldown > 0:
+            self.hit_cooldown -= 1
+        steps = max(1, int(max(abs(self.vx), abs(self.vy))) + 1)
+        gravity = 0.10 / steps
+        for _ in range(steps):
+            self.vy += gravity
+            self.ball_x += self.vx / steps
+            self.ball_y += self.vy / steps
+            self._wall_collisions()
+            self._hit_bumpers()
+            self._hit_posts()
+            self._hit_targets()
+            self._apply_flippers(left_on, right_on)
+
+        self.vx *= 0.992
+        self.vy *= 0.995
+        if self.ball_y > PLAY_HEIGHT + 4:
+            self.balls -= 1
+            if self.balls <= 0:
+                set_game_over_score(self.score)
+                return False
+            self._new_ball()
+        return True
+
+    def _draw(self, left_on=False, right_on=False):
+        display.clear()
+        draw_rect_outline(2, 1, WIDTH - 3, PLAY_HEIGHT - 1, 40, 80, 120)
+        draw_line(55, 8, 55, PLAY_HEIGHT - 3, 70, 70, 90)
+        draw_line(55, 8, 60, 3, 70, 70, 90)
+        draw_rectangle(56, 49 - self.charge // 3, 60, 55, 255, 120, 20)
+        for bx, by, radius in self.bumpers:
+            draw_rect_outline(bx - radius, by - radius, bx + radius, by + radius, 0, 120, 255)
+            draw_rectangle(bx - 1, by - 1, bx + 1, by + 1, 255, 80, 180)
+        for x, y in self.POSTS:
+            draw_rectangle(x - 1, y - 1, x + 1, y + 1, 200, 210, 230)
+        for tx, ty, lit in self.targets:
+            col = (255, 240, 80) if lit else (150, 80, 30)
+            draw_rectangle(tx - 1, ty - 3, tx + 1, ty + 3, *col)
+        if left_on:
+            draw_line(11, 52, 28, 46, 255, 255, 255)
+        else:
+            draw_line(11, 52, 28, 55, 180, 180, 180)
+        if right_on:
+            draw_line(53, 52, 36, 46, 255, 255, 255)
+        else:
+            draw_line(53, 52, 36, 55, 180, 180, 180)
+        draw_rectangle(int(self.ball_x) - 1, int(self.ball_y) - 1, int(self.ball_x) + 1, int(self.ball_y) + 1, 255, 255, 255)
+        draw_text_small(1, PLAY_HEIGHT, "B" + str(self.balls), 255, 255, 255)
+        draw_text_small(19, PLAY_HEIGHT, "X" + str(self.mult), 255, 220, 60)
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        self.reset()
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            left_on, right_on = self._flipper_input(joystick)
+            if self.in_plunger:
+                if z_button:
+                    self.charge = min(28, self.charge + 1)
+                elif self.last_z:
+                    self._launch()
+            if not self._advance_ball(left_on, right_on):
+                return False
+            self.last_z = z_button
+            self._draw(left_on, right_on)
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        begin_game(0)
+        self.reset()
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        begin_game(0)
+        self.reset()
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
+class SabotrGame:
+    """
+    SABOTR
+    Controls:
+      - Directions: move
+      - Hold Z: sneak; Z next to a guard from behind: takedown
+      - C: return to menu
+    Stealth puzzle: avoid enemy sight windows, hide bodies from patrols, and
+    reach the target.
+    """
+    FRAME_MS = 80
+    W = 16
+    H = 14
+    CELL = 4
+    MAPS = (
+        (
+            "################",
+            "#P.....#......T#",
+            "#.###..#..###..#",
+            "#...#.....#....#",
+            "###.#.###.#.####",
+            "#.....#...#....#",
+            "#.#####.###.##.#",
+            "#......G.......#",
+            "#.##.###.#####.#",
+            "#....#...#.....#",
+            "####.#.###.#.###",
+            "#....#.....#...#",
+            "#..G....#......#",
+            "################",
+        ),
+        (
+            "################",
+            "#P.............#",
+            "#....G.........#",
+            "#..............#",
+            "#......####....#",
+            "#......#..#....#",
+            "#......#..#....#",
+            "#......####....#",
+            "#..............#",
+            "#..........G...#",
+            "#..............#",
+            "#.....####.....#",
+            "#............T.#",
+            "################",
+        ),
+        (
+            "################",
+            "#P....#.......T#",
+            "#.##..#..####..#",
+            "#..#.....#.....#",
+            "#..#######.###.#",
+            "#........G#...##",
+            "####.######.#.##",
+            "#....#......#.##",
+            "#.##.#.######.##",
+            "#.#..#....G...##",
+            "#.#.#######.####",
+            "#.#...........##",
+            "#....####.....##",
+            "################",
+        ),
+        (
+            "################",
+            "#P.............#",
+            "#..######..G...#",
+            "#..#....#......#",
+            "#..#....####...#",
+            "#..#...........#",
+            "#..#######.#####",
+            "#........#.....#",
+            "#####.####.###.#",
+            "#.....#....#...#",
+            "#.#####.####.#.#",
+            "#.......G....#T#",
+            "#.............##",
+            "################",
+        ),
+    )
+    DIRS = {JOYSTICK_UP: (0, -1), JOYSTICK_DOWN: (0, 1), JOYSTICK_LEFT: (-1, 0), JOYSTICK_RIGHT: (1, 0)}
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.level = 0
+        self.score = 0
+        self.last_move = ticks_ms()
+        self.last_z = False
+        self.frame = 0
+        self._load_map()
+
+    def _load_map(self):
+        self.map = self.MAPS[self.level % len(self.MAPS)]
+        self.walls = bytearray(self.W * self.H)
+        self.guards = []
+        self.bodies = []
+        self.player_dir = JOYSTICK_RIGHT
+        for y, row in enumerate(self.map):
+            for x, ch in enumerate(row):
+                self.walls[y * self.W + x] = 1 if ch == "#" else 0
+                if ch == "P":
+                    self.px, self.py = x, y
+                elif ch == "T":
+                    self.tx, self.ty = x, y
+                elif ch == "G":
+                    self.guards.append([x, y, random.choice((JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN)), 0])
+
+    def _blocked(self, x, y):
+        return x < 0 or x >= self.W or y < 0 or y >= self.H or self.walls[y * self.W + x]
+
+    def _guard_cells(self):
+        return set((g[0], g[1]) for g in self.guards)
+
+    def _behind_guard(self, g):
+        dx, dy = self.DIRS.get(g[2], (1, 0))
+        return g[0] - dx, g[1] - dy
+
+    def _try_takedown(self):
+        for g in list(self.guards):
+            if (self.px, self.py) == self._behind_guard(g) or abs(self.px - g[0]) + abs(self.py - g[1]) == 1:
+                self.guards.remove(g)
+                self.bodies.append((g[0], g[1]))
+                self.score += 25
+                return True
+        return False
+
+    def _move_player(self, joystick, sneaking):
+        now = ticks_ms()
+        delay = 210 if sneaking else 120
+        if ticks_diff(now, self.last_move) < delay:
+            return
+        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        if d not in self.DIRS:
+            return
+        dx, dy = self.DIRS[d]
+        nx, ny = self.px + dx, self.py + dy
+        if not self._blocked(nx, ny) and (nx, ny) not in self._guard_cells():
+            self.px, self.py = nx, ny
+            self.player_dir = d
+            self.last_move = now
+
+    def _guard_fov(self, g):
+        dx, dy = self.DIRS.get(g[2], (1, 0))
+        cells = []
+        for step in range(1, 6):
+            cx = g[0] + dx * step
+            cy = g[1] + dy * step
+            if self._blocked(cx, cy):
+                break
+            cells.append((cx, cy))
+            if step >= 3:
+                for sx, sy in ((-dy, dx), (dy, -dx)):
+                    px, py = cx + sx, cy + sy
+                    if not self._blocked(px, py):
+                        cells.append((px, py))
+        return cells
+
+    def _move_guards(self):
+        if (self.frame & 3) != 0:
+            return
+        for g in self.guards:
+            dx, dy = self.DIRS.get(g[2], (1, 0))
+            nx, ny = g[0] + dx, g[1] + dy
+            if self._blocked(nx, ny) or (nx, ny) in self._guard_cells():
+                options = []
+                for d, (odx, ody) in self.DIRS.items():
+                    tx, ty = g[0] + odx, g[1] + ody
+                    if not self._blocked(tx, ty):
+                        options.append(d)
+                if options:
+                    g[2] = random.choice(options)
+            else:
+                g[0], g[1] = nx, ny
+
+    def _caught(self):
+        for g in self.guards:
+            fov = self._guard_fov(g)
+            if (self.px, self.py) in fov:
+                return True
+            for body in self.bodies:
+                if body in fov:
+                    return True
+        return False
+
+    def _draw_cell(self, x, y, color):
+        px = x * self.CELL
+        py = y * self.CELL + 1
+        draw_rectangle(px, py, px + 3, py + 3, *color)
+
+    def _draw(self):
+        display.clear()
+        for y in range(self.H):
+            for x in range(self.W):
+                if self.walls[y * self.W + x]:
+                    self._draw_cell(x, y, (45, 55, 60))
+                else:
+                    self._draw_cell(x, y, (5, 18, 16))
+        for g in self.guards:
+            for x, y in self._guard_fov(g):
+                self._draw_cell(x, y, (45, 35, 8))
+        self._draw_cell(self.tx, self.ty, (0, 200, 80))
+        for x, y in self.bodies:
+            self._draw_cell(x, y, (110, 30, 30))
+        for g in self.guards:
+            self._draw_cell(g[0], g[1], (255, 120, 20))
+        self._draw_cell(self.px, self.py, (60, 190, 255))
+        draw_text_small(1, PLAY_HEIGHT, "L" + str(self.level + 1), 180, 180, 180)
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        self.reset()
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self.frame += 1
+            if z_button and not self.last_z:
+                self._try_takedown()
+            self._move_player(joystick, z_button)
+            self._move_guards()
+            self.last_z = z_button
+            if self._caught():
+                set_game_over_score(self.score)
+                return False
+            if self.px == self.tx and self.py == self.ty:
+                self.score += 100
+                self.level += 1
+                if self.level >= len(self.MAPS):
+                    set_game_over_score(self.score, won=True)
+                    return False
+                self._load_map()
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
+class SoccerGame:
+    """
+    SOCCER
+    Controls:
+      - Directions: move blue formation / goalkeeper with ball
+      - Z: kick when in possession
+      - C: return to menu
+    Atari-style 4-player-per-side soccer: striker, two defenders, goalkeeper,
+    formation motion, two halves, and timed scoring.
+    """
+    FRAME_MS = 38
+    HALF_TICKS = 1450
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.blue_goals = 0
+        self.red_goals = 0
+        self.half = 1
+        self.ticks_left = self.HALF_TICKS
+        self.frame = 0
+        self.anchor_x = 20
+        self.anchor_y = PLAY_HEIGHT // 2
+        self.red_anchor_x = 43
+        self.red_anchor_y = PLAY_HEIGHT // 2
+        self.blue_goalie_x = 5
+        self.blue_goalie_y = PLAY_HEIGHT // 2
+        self.red_goalie_x = 58
+        self.red_goalie_y = PLAY_HEIGHT // 2
+        self.ball_owner = None
+        self._kickoff()
+
+    def _formation(self, blue=True):
+        if blue:
+            ax = self.anchor_x
+            ay = self.anchor_y
+            return [[ax + 18, ay, "S"], [ax, ay - 9, "D"], [ax, ay + 9, "D"], [self.blue_goalie_x, self.blue_goalie_y, "G"]]
+        ax = self.red_anchor_x
+        ay = self.red_anchor_y
+        return [[ax - 18, ay, "S"], [ax, ay - 9, "D"], [ax, ay + 9, "D"], [self.red_goalie_x, self.red_goalie_y, "G"]]
+
+    def _kickoff(self):
+        self.ball_x = WIDTH / 2
+        self.ball_y = PLAY_HEIGHT / 2
+        self.vx = random.choice((-1.2, 1.2))
+        self.vy = random.choice((-0.45, 0.45))
+        self.ball_owner = None
+
+    def _move_blue(self, joystick):
+        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        dx, dy = direction_to_delta(d)
+        goalie_owned = self.ball_owner and self.ball_owner[0] == "B" and self.ball_owner[1] == 3
+        if goalie_owned:
+            if dx:
+                self.blue_goalie_x = clamp(self.blue_goalie_x + dx, 3, 12)
+            if dy:
+                self.blue_goalie_y = clamp(self.blue_goalie_y + dy * 2, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10)
+            return
+        if dx:
+            self.anchor_x = clamp(self.anchor_x + dx, 10, 31)
+        if dy:
+            self.anchor_y = clamp(self.anchor_y + dy * 2, 12, PLAY_HEIGHT - 12)
+
+    def _move_red_ai(self):
+        target = self.ball_y
+        if self.red_anchor_y < target - 2:
+            self.red_anchor_y += 1
+        elif self.red_anchor_y > target + 2:
+            self.red_anchor_y -= 1
+        if self.ball_x > WIDTH // 2 + 3:
+            self.red_anchor_x = max(35, self.red_anchor_x - 1)
+        elif self.ball_x < WIDTH // 2 - 8:
+            self.red_anchor_x = min(48, self.red_anchor_x + 1)
+        self.red_anchor_y = clamp(self.red_anchor_y, 12, PLAY_HEIGHT - 12)
+        if not (self.ball_owner and self.ball_owner[0] == "B" and self.ball_owner[1] == 3):
+            if self.blue_goalie_x > 5:
+                self.blue_goalie_x -= 1
+            elif self.blue_goalie_x < 5:
+                self.blue_goalie_x += 1
+            if self.blue_goalie_y < self.ball_y - 1:
+                self.blue_goalie_y += 1
+            elif self.blue_goalie_y > self.ball_y + 1:
+                self.blue_goalie_y -= 1
+        if self.red_goalie_x < 58:
+            self.red_goalie_x += 1
+        elif self.red_goalie_x > 58:
+            self.red_goalie_x -= 1
+        if self.red_goalie_y < self.ball_y - 1:
+            self.red_goalie_y += 1
+        elif self.red_goalie_y > self.ball_y + 1:
+            self.red_goalie_y -= 1
+        self.blue_goalie_x = clamp(self.blue_goalie_x, 3, 12)
+        self.blue_goalie_y = clamp(self.blue_goalie_y, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10)
+        self.red_goalie_x = clamp(self.red_goalie_x, 51, 60)
+        self.red_goalie_y = clamp(self.red_goalie_y, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10)
+
+    def _nearest_player(self, blue=True):
+        team = self._formation(blue)
+        best = 0
+        best_d = 9999
+        for i, p in enumerate(team):
+            dx = self.ball_x - p[0]
+            dy = self.ball_y - p[1]
+            d = dx * dx + dy * dy
+            if d < best_d:
+                best = i
+                best_d = d
+        return best, best_d
+
+    def _capture_ball(self):
+        if self.ball_owner:
+            return
+        bi, bd = self._nearest_player(True)
+        ri, rd = self._nearest_player(False)
+        if bd < 16:
+            self.ball_owner = ("B", bi)
+        elif rd < 16:
+            self.ball_owner = ("R", ri)
+
+    def _owner_pos(self):
+        side, idx = self.ball_owner
+        team = self._formation(side == "B")
+        return team[idx][0], team[idx][1], team[idx][2]
+
+    def _kick(self, blue=True):
+        if blue:
+            self.vx = 2.3
+            self.vy = (PLAY_HEIGHT // 2 - self.ball_y) * 0.035
+        else:
+            self.vx = -2.1
+            self.vy = (PLAY_HEIGHT // 2 - self.ball_y) * 0.035
+        self.ball_owner = None
+
+    def _advance_ball(self):
+        if self.ball_owner:
+            x, y, role = self._owner_pos()
+            self.ball_x = x + (3 if self.ball_owner[0] == "B" else -3)
+            self.ball_y = y
+            return
+        self.ball_x += self.vx
+        self.ball_y += self.vy
+        self.vx *= 0.992
+        self.vy *= 0.992
+        if self.ball_y <= 2:
+            self.ball_y = 2
+            self.vy = abs(self.vy)
+        elif self.ball_y >= PLAY_HEIGHT - 3:
+            self.ball_y = PLAY_HEIGHT - 3
+            self.vy = -abs(self.vy)
+        goal_y = PLAY_HEIGHT // 2
+        if self.ball_x <= 1:
+            if abs(self.ball_y - goal_y) <= 8:
+                self.red_goals += 1
+                self._kickoff()
+            else:
+                self.ball_x = 1
+                self.vx = abs(self.vx)
+        elif self.ball_x >= WIDTH - 2:
+            if abs(self.ball_y - goal_y) <= 8:
+                self.blue_goals += 1
+                self._kickoff()
+            else:
+                self.ball_x = WIDTH - 2
+                self.vx = -abs(self.vx)
+
+    def _red_action(self):
+        if self.ball_owner and self.ball_owner[0] == "R" and (self.frame % 18) == 0:
+            self._kick(False)
+
+    def _draw_team(self, team, color):
+        for x, y, role in team:
+            if role == "G":
+                draw_rectangle(int(x) - 1, int(y) - 3, int(x) + 1, int(y) + 3, *color)
+            elif role == "S":
+                draw_rectangle(int(x) - 2, int(y) - 2, int(x) + 2, int(y) + 2, *color)
+            else:
+                draw_rectangle(int(x) - 1, int(y) - 2, int(x) + 1, int(y) + 2, *color)
+
+    def _draw(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 5, 58, 22)
+        draw_line(WIDTH // 2, 1, WIDTH // 2, PLAY_HEIGHT - 2, 220, 220, 220)
+        draw_rect_outline(0, PLAY_HEIGHT // 2 - 10, 3, PLAY_HEIGHT // 2 + 10, 255, 255, 255)
+        draw_rect_outline(WIDTH - 4, PLAY_HEIGHT // 2 - 10, WIDTH - 1, PLAY_HEIGHT // 2 + 10, 255, 255, 255)
+        self._draw_team(self._formation(True), (45, 165, 255))
+        self._draw_team(self._formation(False), (255, 55, 45))
+        draw_rectangle(int(self.ball_x) - 1, int(self.ball_y) - 1, int(self.ball_x) + 1, int(self.ball_y) + 1, 255, 255, 255)
+        draw_text_small(1, PLAY_HEIGHT, str(self.blue_goals) + "-" + str(self.red_goals), 255, 255, 255)
+        draw_text_small(27, PLAY_HEIGHT, "H" + str(self.half), 180, 180, 180)
+        draw_text_small(45, PLAY_HEIGHT, str(max(0, self.ticks_left // 25)), 255, 220, 60)
+
+    def _build_step(self, joystick):
+        self.reset()
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self.frame += 1
+            self.ticks_left -= 1
+            self._move_blue(joystick)
+            self._move_red_ai()
+            self._capture_ball()
+            if z_button and self.ball_owner and self.ball_owner[0] == "B":
+                self._kick(True)
+            self._red_action()
+            self._advance_ball()
+            if self.ticks_left <= 0:
+                if self.half == 1:
+                    self.half = 2
+                    self.ticks_left = self.HALF_TICKS
+                    self._kickoff()
+                else:
+                    score = self.blue_goals * 100 + self.red_goals
+                    set_game_over_score(score, won=self.blue_goals >= self.red_goals)
+                    return False
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        begin_game(0)
+        self.reset()
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        begin_game(0)
+        self.reset()
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
 class TowerDefenseGame:
     """
     TWRDEF
@@ -15945,6 +16904,9 @@ class TowerDefenseGame:
         ("PATH", ((0, 1), (2, 1), (2, 3), (6, 3), (6, 1), (7, 1), (7, 5), (2, 5), (2, 6), (7, 6))),
         ("OPEN", None),
         ("PATH", ((0, 5), (3, 5), (3, 2), (5, 2), (5, 4), (7, 4), (7, 0))),
+        ("OPEN", None),
+        ("PATH", ((0, 3), (1, 3), (1, 1), (4, 1), (4, 5), (6, 5), (6, 2), (7, 2))),
+        ("PATH", ((0, 6), (3, 6), (3, 4), (1, 4), (1, 2), (5, 2), (5, 0), (7, 0))),
         ("OPEN", None),
     )
     TOWER_COST = (0, 12, 18, 28, 42)
@@ -16542,15 +17504,18 @@ class GameSelect:
         ("MINES", MinesGame, 0),
         ("PACMAN", PacmanGame, 0),
         ("PAIRS", PairsGame, 0),
+        ("PINBAL", PinballGame, 0),
         ("PITFAL", PitfallGame, 0),
         ("PONG", PongGame, 0),
         ("QIX", QixGame, GAME_FLAG_HEAVY),
         ("RAYRCR", RayRacerGame, GAME_FLAG_HEAVY),
         ("REVRS", OthelloGame, GAME_FLAG_HEAVY),
         ("RTYPE", RTypeGame, GAME_FLAG_HEAVY),
+        ("SABOTR", SabotrGame, 0),
         ("SIMON", SimonGame, 0),
         #("SKYWAR", SkyWarGame, 0),
         ("SNAKE", SnakeGame, 0),
+        ("SOCCER", SoccerGame, 0),
         ("SOKO", SokobanGame, GAME_FLAG_HEAVY),
         ("STACK", StackerGame, 0),
         ("TETRIS", TetrisGame, GAME_FLAG_HEAVY),

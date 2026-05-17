@@ -250,20 +250,23 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `MINES` | Mines | Minesweeper-style reveal puzzle for the LED matrix |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
 | `PAIRS` | Pairs | Memory card matching on a 4x4 board |
+| `PINBAL` | Pinball | Plunger launch, flippers, bumpers, targets, and multipliers |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
 | `PONG` | Pong | Paddle vs. AI, increasing difficulty |
 | `QIX` | Qix | Territory capture, avoid the enemy |
 | `RAYRCR` | Ray Racer | Raytrace-style anti-grav racing with boost, energy gates, and rival hovercars |
 | `REVRS` | Othello/Reversi | Board game with simple CPU opponent |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
+| `SABOTR` | Saboteur Stealth | Sneak through multiple patrol maps and reach the objective |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
 | `SKYWAR` | Sky War | Helicopter battlefield shooter with air and ground targets |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
-| `SOKO` | Sokoban | Crate-pushing puzzle levels |
+| `SOCCER` | Championship Soccer | Atari-style 4-player soccer with forward/back formation movement |
+| `SOKO` | Sokoban | Multi-level crate-pushing puzzle campaign |
 | `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
-| `TWRDEF` | Tower Defense | Build and upgrade towers to stop enemy waves on a winding path |
+| `TWRDEF` | Tower Defense | Build towers across rotating road and open-field layouts |
 | `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
 | `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
 
