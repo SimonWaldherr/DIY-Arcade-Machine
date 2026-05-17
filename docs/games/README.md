@@ -51,6 +51,7 @@ There are over 30 games and some demo animations.
 | `STACK` | Stacker | [STACK.md](./STACK.md) |
 | `TETRIS` | Tetris | [TETRIS.md](./TETRIS.md) |
 | `TRON` | Tron Lightcycle | [TRON.md](./TRON.md) |
+| `TWRDEF` | Tower Defense | [TWRDEF.md](./TWRDEF.md) |
 | `UFODEF` | UFO Defense | [UFODEF.md](./UFODEF.md) |
 | `WINGS` | Wings | [WINGS.md](./WINGS.md) |
 

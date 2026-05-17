@@ -9025,7 +9025,7 @@ class DemosGame:
         "CGOLG", "CLIMB", "DEFUSE", "DODGE", "DOOMLT", "FLAPPY", "FROGGR",
         "GOLF", "INVADR", "LANDER", "LASER", "LOCO", "MAZE", "MINES", "PACMAN",
         "PAIRS", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE", 
-        "SIMON", "SKYWAR", "SNAKE", "SOKO", "STACK", "TETRIS", "TRON", 
+        "SIMON", "SKYWAR", "SNAKE", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
         "UFODEF", "WINGS",
     )
     GAME_CLASS_NAMES = {
@@ -9066,6 +9066,7 @@ class DemosGame:
         "STACK": "StackerGame",
         "TETRIS": "TetrisGame",
         "TRON": "TronGame",
+        "TWRDEF": "TowerDefenseGame",
         "UFODEF": "UFODefenseGame",
         "WINGS": "WingsGame",
     }
@@ -15924,6 +15925,506 @@ class CgolgGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
+class TowerDefenseGame:
+    """
+    TWRDEF
+    Controls:
+      - Directions: move build cursor
+      - Z: build tower / upgrade tower
+      - C: return to menu
+    Stop enemy waves before they reach the base. Towers automatically target
+    enemies; repeated builds upgrade range, damage, slow, and splash.
+    """
+    FRAME_MS = 38
+    CELL = 8
+    GRID_W = WIDTH // CELL
+    GRID_H = PLAY_HEIGHT // CELL
+    OPEN_START = (0, 3)
+    OPEN_BASE = (7, 3)
+    LEVELS = (
+        ("PATH", ((0, 1), (2, 1), (2, 3), (6, 3), (6, 1), (7, 1), (7, 5), (2, 5), (2, 6), (7, 6))),
+        ("OPEN", None),
+        ("PATH", ((0, 5), (3, 5), (3, 2), (5, 2), (5, 4), (7, 4), (7, 0))),
+        ("OPEN", None),
+    )
+    TOWER_COST = (0, 12, 18, 28, 42)
+    TOWER_RANGE = (0, 18, 22, 26, 30)
+    TOWER_DAMAGE = (0, 5, 9, 12, 18)
+    TOWER_COOLDOWN = (0, 18, 16, 14, 12)
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.cursor_x = 3
+        self.cursor_y = 2
+        self.last_move = ticks_ms()
+        self.last_z = False
+        self.wave = 0
+        self.score = 0
+        self.money = 32
+        self.lives = 12
+        self.frame = 0
+        self.level = 1
+        self.layout_id = -1
+        self.open_level = False
+        self.path_cells = set()
+        self.route_cells = []
+        self.start_cell = self.OPEN_START
+        self.base_cell = self.OPEN_BASE
+        self.towers = []
+        self.enemies = []
+        self.shots = []
+        self.spawn_queue = 0
+        self.spawn_gap = 34
+        self.spawn_tick = 0
+        self.next_wave_tick = 20
+        self.flash_until = 0
+        self._load_layout(0, clear_towers=False)
+
+    def _cells_between(self, a, b):
+        ax, ay = a
+        bx, by = b
+        dx = 1 if bx > ax else -1 if bx < ax else 0
+        dy = 1 if by > ay else -1 if by < ay else 0
+        cells = []
+        x, y = ax, ay
+        cells.append((x, y))
+        while (x, y) != (bx, by):
+            x += dx
+            y += dy
+            cells.append((x, y))
+        return cells
+
+    def _build_route_from_waypoints(self, points):
+        route = []
+        for i in range(len(points) - 1):
+            segment = self._cells_between(points[i], points[i + 1])
+            if route:
+                segment = segment[1:]
+            route.extend(segment)
+        return route
+
+    def _load_layout(self, layout_id, clear_towers):
+        if clear_towers and self.towers:
+            self.money += min(36, len(self.towers) * 7)
+            self.towers = []
+        self.enemies = []
+        self.shots = []
+        self.layout_id = layout_id
+        self.level = layout_id + 1
+        kind, points = self.LEVELS[layout_id]
+        self.open_level = kind == "OPEN"
+        if self.open_level:
+            self.start_cell = self.OPEN_START
+            self.base_cell = self.OPEN_BASE
+            self.path_cells = set()
+            self.route_cells = []
+        else:
+            self.route_cells = self._build_route_from_waypoints(points)
+            self.path_cells = set(self.route_cells)
+            self.start_cell = self.route_cells[0]
+            self.base_cell = self.route_cells[-1]
+
+    def _near_path(self, px, py, pad=5.8):
+        return self._point_to_cell(px, py) in self.path_cells
+
+    def _cell_center(self, gx, gy):
+        return gx * self.CELL + self.CELL // 2, gy * self.CELL + self.CELL // 2
+
+    def _point_to_cell(self, px, py):
+        return (clamp(int(px) // self.CELL, 0, self.GRID_W - 1),
+                clamp(int(py) // self.CELL, 0, self.GRID_H - 1))
+
+    def _tower_at(self, gx, gy):
+        for t in self.towers:
+            if t[0] == gx and t[1] == gy:
+                return t
+        return None
+
+    def _can_build(self, gx, gy):
+        if not (0 <= gx < self.GRID_W and 0 <= gy < self.GRID_H):
+            return False
+        if (gx, gy) == self.start_cell or (gx, gy) == self.base_cell:
+            return False
+        if self._tower_at(gx, gy):
+            return False
+        if self.path_cells and (gx, gy) in self.path_cells:
+            return False
+        if self.open_level:
+            for e in self.enemies:
+                if self._point_to_cell(e[0], e[1]) == (gx, gy):
+                    return False
+            if not self._find_route(self.start_cell, blocked_extra=(gx, gy)):
+                return False
+            for e in self.enemies:
+                if not self._find_route(self._point_to_cell(e[0], e[1]), blocked_extra=(gx, gy)):
+                    return False
+            return True
+        return True
+
+    def _try_build_or_upgrade(self):
+        tower = self._tower_at(self.cursor_x, self.cursor_y)
+        if tower:
+            level = tower[2]
+            if level >= 4:
+                self.flash_until = ticks_ms() + 140
+                return
+            cost = self.TOWER_COST[level + 1]
+            if self.money >= cost:
+                self.money -= cost
+                tower[2] += 1
+                tower[3] = 0
+            else:
+                self.flash_until = ticks_ms() + 140
+            return
+
+        if not self._can_build(self.cursor_x, self.cursor_y):
+            self.flash_until = ticks_ms() + 140
+            return
+        cost = self.TOWER_COST[1]
+        if self.money >= cost:
+            self.money -= cost
+            self.towers.append([self.cursor_x, self.cursor_y, 1, 0])
+            if self.open_level:
+                self._reroute_open_enemies()
+        else:
+            self.flash_until = ticks_ms() + 140
+
+    def _move_cursor(self, joystick):
+        now = ticks_ms()
+        if ticks_diff(now, self.last_move) < 125:
+            return
+        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        dx, dy = direction_to_delta(d)
+        if dx or dy:
+            self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
+            self.cursor_y = clamp(self.cursor_y + dy, 0, self.GRID_H - 1)
+            self.last_move = now
+
+    def _start_wave(self):
+        next_wave = self.wave + 1
+        layout_id = ((next_wave - 1) // 3) % len(self.LEVELS)
+        if layout_id != self.layout_id:
+            self._load_layout(layout_id, clear_towers=self.wave > 0)
+        self.wave = next_wave
+        self.spawn_queue = 7 + self.wave * 2
+        self.spawn_gap = max(12, 34 - self.wave)
+        self.spawn_tick = 0
+        if self.wave % 5 == 0:
+            self.spawn_queue += 1
+
+    def _tower_cells(self):
+        return set((t[0], t[1]) for t in self.towers)
+
+    def _find_route(self, start, blocked_extra=None):
+        blocked = self._tower_cells()
+        if blocked_extra is not None:
+            blocked.add(blocked_extra)
+        blocked.discard(start)
+        blocked.discard(self.base_cell)
+        queue = [start]
+        prev = {start: None}
+        qi = 0
+        while qi < len(queue):
+            cell = queue[qi]
+            qi += 1
+            if cell == self.base_cell:
+                route = []
+                while cell is not None:
+                    route.append(cell)
+                    cell = prev[cell]
+                route.reverse()
+                return route
+            x, y = cell
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                n = (nx, ny)
+                if not (0 <= nx < self.GRID_W and 0 <= ny < self.GRID_H):
+                    continue
+                if n in blocked or n in prev:
+                    continue
+                prev[n] = cell
+                queue.append(n)
+        return []
+
+    def _route_for_enemy(self, start_cell=None):
+        if self.open_level:
+            return self._find_route(start_cell or self.start_cell)
+        return self.route_cells
+
+    def _reroute_open_enemies(self):
+        for e in self.enemies:
+            cell = self._point_to_cell(e[0], e[1])
+            route = self._find_route(cell)
+            if len(route) >= 2:
+                e[9] = route
+                e[2] = 1
+
+    def _spawn_enemy(self):
+        boss = self.wave % 5 == 0 and self.spawn_queue == 1
+        runner = (self.wave >= 4 and self.spawn_queue % 5 == 0)
+        hp = 14 + self.wave * 4
+        speed = 0.48 + min(0.30, self.wave * 0.018)
+        reward = 3 + self.wave // 2
+        kind = 0
+        if runner:
+            hp = max(8, hp - 6)
+            speed += 0.25
+            reward += 1
+            kind = 1
+        if boss:
+            hp = hp * 4
+            speed *= 0.62
+            reward += 12
+            kind = 2
+        route = self._route_for_enemy()
+        if len(route) < 2:
+            return
+        x, y = self._cell_center(route[0][0], route[0][1])
+        self.enemies.append([float(x), float(y), 1, float(hp), float(hp), speed, 0, kind, reward, route])
+
+    def _advance_waves(self):
+        if self.spawn_queue > 0:
+            self.spawn_tick += 1
+            if self.spawn_tick >= self.spawn_gap:
+                self.spawn_tick = 0
+                self._spawn_enemy()
+                self.spawn_queue -= 1
+            return
+        if not self.enemies:
+            self.next_wave_tick -= 1
+            if self.next_wave_tick <= 0:
+                self.next_wave_tick = 55
+                self._start_wave()
+
+    def _advance_enemies(self):
+        keep = []
+        for e in self.enemies:
+            if e[6] > 0:
+                e[6] -= 1
+            target_i = int(e[2])
+            route = e[9]
+            if target_i >= len(route):
+                target_i = len(route) - 1
+            tx, ty = self._cell_center(route[target_i][0], route[target_i][1])
+            dx = tx - e[0]
+            dy = ty - e[1]
+            dist = math.sqrt(dx * dx + dy * dy) or 1.0
+            speed = e[5] * (0.52 if e[6] > 0 else 1.0)
+            if dist <= speed:
+                e[0] = float(tx)
+                e[1] = float(ty)
+                e[2] += 1
+                if e[2] >= len(route):
+                    self.lives -= 2 if e[7] == 2 else 1
+                    self.flash_until = ticks_ms() + 180
+                    continue
+            else:
+                e[0] += dx / dist * speed
+                e[1] += dy / dist * speed
+            keep.append(e)
+        self.enemies = keep
+
+    def _enemy_progress(self, e):
+        return int(e[2]) * 1000 + int(e[0]) + int(e[1])
+
+    def _tower_target(self, tx, ty, rng):
+        best = None
+        best_p = -1
+        r2 = rng * rng
+        for e in self.enemies:
+            dx = e[0] - tx
+            dy = e[1] - ty
+            if dx * dx + dy * dy <= r2:
+                p = self._enemy_progress(e)
+                if p > best_p:
+                    best = e
+                    best_p = p
+        return best
+
+    def _damage_enemy(self, enemy, damage, slow=False, splash=0):
+        enemy[3] -= damage
+        if slow:
+            enemy[6] = max(enemy[6], 36)
+        if splash:
+            ex, ey = enemy[0], enemy[1]
+            for e in self.enemies:
+                if e is enemy:
+                    continue
+                dx = e[0] - ex
+                dy = e[1] - ey
+                if dx * dx + dy * dy <= splash * splash:
+                    e[3] -= damage * 0.45
+                    e[6] = max(e[6], 18)
+
+    def _fire_towers(self):
+        for t in self.towers:
+            if t[3] > 0:
+                t[3] -= 1
+                continue
+            cx, cy = self._cell_center(t[0], t[1])
+            level = t[2]
+            target = self._tower_target(cx, cy, self.TOWER_RANGE[level])
+            if not target:
+                continue
+            self._damage_enemy(target, self.TOWER_DAMAGE[level], slow=level >= 2, splash=4 if level >= 3 else 0)
+            t[3] = self.TOWER_COOLDOWN[level]
+            color = (0, 220, 255) if level >= 2 else (255, 240, 60)
+            if level >= 3:
+                color = (210, 90, 255)
+            self.shots.append([cx, cy, int(target[0]), int(target[1]), 4, color])
+
+    def _collect_dead(self):
+        keep = []
+        for e in self.enemies:
+            if e[3] <= 0:
+                self.money += e[8]
+                self.score += e[8] * 3 + self.wave
+            else:
+                keep.append(e)
+        self.enemies = keep
+
+    def _advance_shots(self):
+        keep = []
+        for s in self.shots:
+            s[4] -= 1
+            if s[4] > 0:
+                keep.append(s)
+        self.shots = keep
+
+    def _draw_path(self):
+        if self.path_cells:
+            for gx, gy in self.path_cells:
+                x = gx * self.CELL
+                y = gy * self.CELL
+                x2 = x + self.CELL - 1
+                y2 = min(PLAY_HEIGHT - 1, y + self.CELL - 1)
+                draw_rectangle(x, y, x2, y2, 98, 68, 34)
+                edge = (62, 44, 24)
+                if (gx, gy - 1) not in self.path_cells and not ((gx, gy) == self.base_cell and gy == 0):
+                    draw_line(x, y, x2, y, *edge)
+                if (gx + 1, gy) not in self.path_cells and not ((gx, gy) == self.base_cell and gx == self.GRID_W - 1):
+                    draw_line(x2, y, x2, y2, *edge)
+                if (gx, gy + 1) not in self.path_cells and not ((gx, gy) == self.base_cell and gy == self.GRID_H - 1):
+                    draw_line(x, y2, x2, y2, *edge)
+                if (gx - 1, gy) not in self.path_cells and not ((gx, gy) == self.start_cell and gx == 0):
+                    draw_line(x, y, x, y2, *edge)
+        else:
+            for x in range(0, WIDTH, self.CELL):
+                draw_line(x, 0, x, PLAY_HEIGHT - 1, 12, 34, 28)
+            for y in range(0, PLAY_HEIGHT, self.CELL):
+                draw_line(0, y, WIDTH - 1, y, 12, 34, 28)
+        sx, sy = self._cell_center(self.start_cell[0], self.start_cell[1])
+        ex, ey = self._cell_center(self.base_cell[0], self.base_cell[1])
+        draw_rectangle(sx - 3, sy - 3, sx + 3, sy + 3, 255, 95, 0)
+        draw_rectangle(ex - 4, ey - 4, ex + 4, ey + 4, 0, 160, 255)
+
+    def _draw_towers(self):
+        colors = ((0, 0, 0), (60, 220, 90), (60, 185, 255), (205, 85, 255), (255, 230, 90))
+        for gx, gy, level, cooldown in self.towers:
+            cx, cy = self._cell_center(gx, gy)
+            r, g, b = colors[level]
+            draw_rectangle(cx - 2, cy - 2, cx + 2, cy + 2, r, g, b)
+            if level >= 2:
+                draw_rectangle(cx - 1, cy - 4, cx + 1, cy - 3, r, g, b)
+            if level >= 3:
+                draw_rect_outline(cx - 3, cy - 3, cx + 3, cy + 3, r, g, b)
+
+    def _draw_enemies(self):
+        for e in self.enemies:
+            x = int(e[0])
+            y = int(e[1])
+            if e[7] == 2:
+                col = (255, 55, 220)
+                size = 2
+            elif e[7] == 1:
+                col = (255, 120, 20)
+                size = 1
+            else:
+                col = (255, 35, 35)
+                size = 1
+            if e[6] > 0:
+                col = (80, 190, 255)
+            draw_rectangle(x - size, y - size, x + size, y + size, col[0], col[1], col[2])
+            hp_w = max(1, int((e[3] * 5) / max(1, e[4])))
+            draw_rectangle(x - 2, y - size - 3, x - 3 + hp_w, y - size - 3, 0, 255, 80)
+
+    def _draw_shots(self):
+        for x1, y1, x2, y2, ttl, col in self.shots:
+            draw_line(x1, y1, x2, y2, col[0], col[1], col[2])
+
+    def _draw_cursor(self):
+        cx = self.cursor_x * self.CELL
+        cy = self.cursor_y * self.CELL
+        blocked = not self._can_build(self.cursor_x, self.cursor_y)
+        tower = self._tower_at(self.cursor_x, self.cursor_y)
+        if tower:
+            col = (255, 255, 255)
+        elif blocked or ticks_diff(ticks_ms(), self.flash_until) < 0:
+            col = (255, 50, 40)
+        else:
+            col = (255, 240, 60)
+        draw_rect_outline(cx, cy, cx + self.CELL - 1, cy + self.CELL - 1, col[0], col[1], col[2])
+        if tower:
+            tx, ty = self._cell_center(self.cursor_x, self.cursor_y)
+            rng = self.TOWER_RANGE[tower[2]]
+            draw_rect_outline(max(0, tx - rng), max(0, ty - rng),
+                              min(WIDTH - 1, tx + rng), min(PLAY_HEIGHT - 1, ty + rng),
+                              35, 70, 95)
+
+    def _draw_hud(self):
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, "W" + str(self.wave), 180, 180, 180)
+        draw_text_small(19, PLAY_HEIGHT, "$" + str(min(99, self.money)), 255, 220, 40)
+        draw_text_small(43, PLAY_HEIGHT, "B" + str(max(0, self.lives)), 80, 190, 255)
+        if self.open_level:
+            draw_rectangle(WIDTH - 2, PLAY_HEIGHT + 1, WIDTH - 1, PLAY_HEIGHT + 2, 80, 255, 140)
+
+    def _draw(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 8, 24, 20)
+        self._draw_path()
+        self._draw_towers()
+        self._draw_enemies()
+        self._draw_shots()
+        self._draw_cursor()
+        self._draw_hud()
+
+    def _build_step(self, joystick):
+        self.reset()
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self.frame += 1
+            self._move_cursor(joystick)
+            if z_button and not self.last_z:
+                self._try_build_or_upgrade()
+            self.last_z = z_button
+            self._advance_waves()
+            self._advance_enemies()
+            self._fire_towers()
+            self._collect_dead()
+            self._advance_shots()
+            if self.lives <= 0:
+                set_game_over_score(self.score)
+                return False
+            self._draw()
+            if (self.frame % 90) == 0:
+                gc.collect()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
 class GameOverMenu:
     """Simple menu shown after losing; choose retry or return to menu."""
     def __init__(self, joystick, score, best, best_name="---", title="LOST"):
@@ -16054,6 +16555,7 @@ class GameSelect:
         ("STACK", StackerGame, 0),
         ("TETRIS", TetrisGame, GAME_FLAG_HEAVY),
         ("TRON", TronGame, 0),
+        ("TWRDEF", TowerDefenseGame, 0),
         ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
         #("WINGS", WingsGame, 0),
     )

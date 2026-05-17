@@ -263,6 +263,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
+| `TWRDEF` | Tower Defense | Build and upgrade towers to stop enemy waves on a winding path |
 | `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
 | `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
 
