@@ -8575,6 +8575,8 @@ class BejeweledGame:
         while True:
             c_button, z_button = joystick.read_buttons()
             if c_button:
+                global_score = self.score
+                game_over = True
                 return
 
             now = ticks_ms()
@@ -8650,6 +8652,8 @@ class BejeweledGame:
         while True:
             c_button, z_button = joystick.read_buttons()
             if c_button:
+                global_score = self.score
+                game_over = True
                 return
 
             now = ticks_ms()
@@ -11164,7 +11168,7 @@ class LunarLanderGame:
         self.g = 0.10 + (self.level - 1) * 0.015
         self.thrust = 0.30
 
-        self.points = 0
+        self.points = 300
         self.last_points_ms = ticks_ms()
         self.frame = 0
 
@@ -11282,10 +11286,11 @@ class LunarLanderGame:
                 last_frame = now
                 self.frame += 1
 
-                # points over time
+                # time bonus counts down (faster landing = more points)
                 if ticks_diff(now, self.last_points_ms) >= 500:
                     self.last_points_ms = now
-                    self.points += 1
+                    if self.points > 0:
+                        self.points -= 1
 
                 # input
                 d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
@@ -11408,10 +11413,11 @@ class LunarLanderGame:
                 last_frame = now
                 self.frame += 1
 
-                # points over time
+                # time bonus counts down (faster landing = more points)
                 if ticks_diff(now, self.last_points_ms) >= 500:
                     self.last_points_ms = now
-                    self.points += 1
+                    if self.points > 0:
+                        self.points -= 1
 
                 # input
                 d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
@@ -14832,12 +14838,18 @@ class PairsGame:
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
         self.reset()
         display_score_and_time(0, force=True)
 
         def step():
+            global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
+                global_score = self.score
+                game_over = True
                 return False
             if not self.pause_until:
                 self._move_cursor(joystick)
@@ -14856,8 +14868,6 @@ class PairsGame:
         if asyncio is None:
             return self.main_loop(joystick)
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
 class BomberGame:
     """
     BOMBER
