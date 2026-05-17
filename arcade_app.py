@@ -11164,7 +11164,7 @@ class LunarLanderGame:
         self.g = 0.10 + (self.level - 1) * 0.015
         self.thrust = 0.30
 
-        self.points = 0
+        self.points = 300
         self.last_points_ms = ticks_ms()
         self.frame = 0
 
@@ -11282,10 +11282,11 @@ class LunarLanderGame:
                 last_frame = now
                 self.frame += 1
 
-                # points over time
+                # time bonus counts down (faster landing = more points)
                 if ticks_diff(now, self.last_points_ms) >= 500:
                     self.last_points_ms = now
-                    self.points += 1
+                    if self.points > 0:
+                        self.points -= 1
 
                 # input
                 d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
@@ -11408,10 +11409,11 @@ class LunarLanderGame:
                 last_frame = now
                 self.frame += 1
 
-                # points over time
+                # time bonus counts down (faster landing = more points)
                 if ticks_diff(now, self.last_points_ms) >= 500:
                     self.last_points_ms = now
-                    self.points += 1
+                    if self.points > 0:
+                        self.points -= 1
 
                 # input
                 d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
