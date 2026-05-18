@@ -15,7 +15,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **39 Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
+- **40+ Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -228,12 +228,15 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Cube, Spark, Plasma, Orbit, Warp, Bounce, Tunnel, Matrix, Fire |
 | `2048` | 2048 | Sliding tile puzzle with merge scoring |
 | `ARENA` | Arena | Top-down wave survival with movement and shooting |
+| `ARTILL` | Artillery Simulator | Turn-based angle-and-power shell duel with wind and deforming terrain |
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
 | `BOMBER` | Bomber | Timed bombs, block clearing, and maze enemies |
 | `BRKOUT` | Breakout | Brick breaker with rainbow bricks |
+| `BTLZON` | Battlezone | Atari-style vector tank combat with radar and incoming shells |
 | `CATCH` | Catch | Catch stars, avoid bombs, and keep the basket moving |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
+| `CENTI` | Centipede | Atari-style segmented shooter with mushrooms and waves |
 | `CGOLG` | Conway's Game of Life Game | Competitive Life battle with directed gliders and spaceships |
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
@@ -243,6 +246,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
 | `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
+| `KEEN` | Keen | Platformer with jumps, gems, keys, enemies, and exit doors |
 | `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
@@ -261,7 +265,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
 | `SKYWAR` | Sky War | Helicopter battlefield shooter with air and ground targets |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
-| `SOCCER` | Championship Soccer | Atari-style 4-player soccer with forward/back formation movement |
+| `SOCCER` | Championship Soccer | Atari-style soccer with direction-based passes and shots |
 | `SOKO` | Sokoban | Multi-level crate-pushing puzzle campaign |
 | `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
