@@ -14,6 +14,7 @@ Browser (pygbag / WebAssembly)
 
 import os
 import sys
+import importlib.util
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
@@ -95,8 +96,8 @@ async def main():
         import pygame
         pygame.init()
         try:
-            mixer = getattr(pygame, "mixer", None)
-            if mixer is not None:
+            if importlib.util.find_spec("pygame.mixer") is not None:
+                mixer = pygame.mixer
                 mixer.quit()
         except Exception:
             pass

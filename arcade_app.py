@@ -10,6 +10,7 @@ import time
 import math
 import gc
 import sys
+import importlib.util
 try:
     import uos as _os
 except ImportError:
@@ -429,7 +430,8 @@ else:
             self._pg = pygame
             pygame.init()
             try:
-                pygame.mixer.quit()
+                if importlib.util.find_spec("pygame.mixer") is not None:
+                    pygame.mixer.quit()
             except Exception:
                 pass
             pygame.display.set_caption("DIY Arcade Machine")
@@ -9834,40 +9836,6 @@ class CpuPlayerJoystick:
             target = getattr(g, "prev_x", 0)
             if abs(g.bar_x - target) <= max(1, getattr(g, "speed", 1)):
                 self._pulse_z(80)
-        elif n == "CATCH" and hasattr(g, "drops"):
-            target = WIDTH // 2
-            best_score = -99999
-            for drop in g.drops:
-                x, y, _speed, is_bomb = drop[:4]
-                center = g.basket_x + g.basket_w // 2
-                eta = max(1, (PLAY_HEIGHT - y) // max(1, _speed))
-                score = y * 4 - abs(center - x) * 3 - eta
-                if is_bomb and y > PLAY_HEIGHT - 18 and abs(center - x) < 10:
-                    target = 0 if x > WIDTH // 2 else WIDTH - 1
-                    best_score = 99999
-                    break
-                if (not is_bomb) and score > best_score:
-                    target = x
-                    best_score = score
-            d = self._toward_x(g.basket_x + g.basket_w // 2, target, 2)
-            self._z = abs((g.basket_x + g.basket_w // 2) - target) > 12
-            return
-        elif n == "DODGE" and hasattr(g, "obstacles"):
-            px = int(g.player_x) + 1
-            best_x = px
-            best_score = -99999
-            for cand in range(2, WIDTH - 2, 3):
-                score = -abs(cand - WIDTH // 2)
-                for o in g.obstacles:
-                    ox, oy, ow, oh = int(o[0] + o[4] * 5), int(o[1] + o[5] * 5), int(o[2]), int(o[3])
-                    if oy > PLAY_HEIGHT - 26 and ox - 4 <= cand <= ox + ow + 4:
-                        score -= 1000 + oy
-                if score > best_score:
-                    best_score = score
-                    best_x = cand
-            d = self._toward_x(px, best_x, 1)
-            self._z = abs(px - best_x) > 10
-            return
         elif n == "FLAPPY" and hasattr(g, "pipes"):
             target = PLAY_HEIGHT // 2
             for p in g.pipes:
@@ -10001,12 +9969,12 @@ class DemosGame:
     """
     GAME_DEMOS = (
         "2048", "ARENA", "ARTILL", "ASTRD", "BEJWL", "BOMBER", "BRKOUT", "BTLZON",
-        "BURGER", "CATCH", "CAVEFL", "CENTI", "CGOLG", "CLIMB", "COLMNS", "DEFUSE", "DIGDUG",
-        "DODGE", "DOOMLT", "FLAPPY", "FROGGR", "GALAXY", "GOLF", "INVADR", "JOUST",
+        "CAVEFL", "CENTI", "CGOLG", "CLIMB", "COLMNS", "DEFUSE",
+        "DOOMLT", "FLAPPY", "FROGGR", "GALAXY", "GOLF", "INVADR",
         "KEEN", "LANDER", "LASER", "LOCO", "MAZE", "MINES", "ORBIT", "ORBTAL", "PACMAN",
         "PAIRS", "PINBAL", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE",
-        "SABOTR", "SIMON", "SKYWAR", "SNAKE", "SOCCER", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
-        "STKARC", "UFODEF", "WINGS",
+        "SABOTR", "SIMON", "SNAKE", "SOCCER", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
+        "STKARC", "UFODEF",
     )
     GAME_CLASS_NAMES = {
         "2048": "Game2048",
@@ -10017,23 +9985,18 @@ class DemosGame:
         "BOMBER": "BomberGame",
         "BRKOUT": "BreakoutGame",
         "BTLZON": "BattlezoneGame",
-        "BURGER": "BurgerTimeGame",
-        "CATCH": "CatchGame",
         "CAVEFL": "CaveFlyGame",
         "CENTI": "CentipedeGame",
         "CGOLG": "CgolgGame",
         "CLIMB": "ClimberGame",
         "COLMNS": "ColumnsGame",
         "DEFUSE": "DefuseGame",
-        "DIGDUG": "DigDugGame",
-        "DODGE": "DodgeGame",
         "DOOMLT": "DoomLiteGame",
         "FLAPPY": "FlappyGame",
         "FROGGR": "FroggerGame",
         "GALAXY": "GalaxyGame",
         "GOLF": "GolfGame",
         "INVADR": "InvaderGame",
-        "JOUST": "JoustGame",
         "KEEN": "KeenGame",
         "LANDER": "LunarLanderGame",
         "LASER": "LaserGame",
@@ -10053,7 +10016,6 @@ class DemosGame:
         "RTYPE": "RTypeGame",
         "SABOTR": "SabotrGame",
         "SIMON": "SimonGame",
-        "SKYWAR": "SkyWarGame",
         "SNAKE": "SnakeGame",
         "SOCCER": "SoccerGame",
         "SOKO": "SokobanGame",
@@ -10063,7 +10025,6 @@ class DemosGame:
         "TRON": "TronGame",
         "TWRDEF": "TowerDefenseGame",
         "UFODEF": "UFODefenseGame",
-        "WINGS": "WingsGame",
     }
 
     def __init__(self):
@@ -20431,23 +20392,18 @@ class GameSelect:
         ("BOMBER", BomberGame, 0),
         ("BRKOUT", BreakoutGame, 0),
         ("BTLZON", BattlezoneGame, 0),
-        #("BURGER", BurgerTimeGame, 0),
-        #("CATCH", CatchGame, 0),
         ("CAVEFL", CaveFlyGame, 0),
         ("CENTI", CentipedeGame, 0),
         ("CGOLG", CgolgGame, 0),
         ("CLIMB", ClimberGame, 0),
         ("COLMNS", ColumnsGame, 0),
         ("DEFUSE", DefuseGame, 0),
-        #("DIGDUG", DigDugGame, 0),
-        #("DODGE", DodgeGame, 0),
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
         ("FROGGR", FroggerGame, 0),
         ("GALAXY", GalaxyGame, 0),
         ("GOLF", GolfGame, 0),
         ("INVADR", InvaderGame, 0),
-        #("JOUST", JoustGame, 0),
         ("KEEN", KeenGame, 0),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
         ("LASER", LaserGame, 0),
@@ -20467,7 +20423,6 @@ class GameSelect:
         ("RTYPE", RTypeGame, GAME_FLAG_HEAVY),
         ("SABOTR", SabotrGame, 0),
         ("SIMON", SimonGame, 0),
-        #("SKYWAR", SkyWarGame, 0),
         ("SNAKE", SnakeGame, 0),
         ("SOCCER", SoccerGame, 0),
         ("SOKO", SokobanGame, GAME_FLAG_HEAVY),
@@ -20477,7 +20432,6 @@ class GameSelect:
         ("TRON", TronGame, 0),
         ("TWRDEF", TowerDefenseGame, 0),
         ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
-        #("WINGS", WingsGame, 0),
     )
 
     def __init__(self):
