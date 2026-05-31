@@ -61,12 +61,26 @@ def _shuffle_in_place(seq):
         seq[i], seq[j] = seq[j], seq[i]
 
 # ---------- Runtime detection ----------
+# A single module drives three distinct runtimes. Each platform flag below is
+# mutually exclusive; add a new platform by extending this block and the HAL
+# sections that key off these flags (display/RTC, input, sound, timing).
+#   * "micropython" — RP2040/RP2350 driving a HUB75 matrix (real hardware)
+#   * "web"         — pygbag / WebAssembly (Emscripten) inside a browser
+#   * "desktop"     — CPython + PyGame emulator on a normal computer
 try:
     IS_MICROPYTHON = (sys.implementation.name == "micropython")
 except Exception:
     IS_MICROPYTHON = False
 
 IS_WEB = not IS_MICROPYTHON and getattr(sys, "platform", "") == "emscripten"
+IS_DESKTOP = not IS_MICROPYTHON and not IS_WEB
+
+if IS_MICROPYTHON:
+    PLATFORM_NAME = "micropython"
+elif IS_WEB:
+    PLATFORM_NAME = "web"
+else:
+    PLATFORM_NAME = "desktop"
 
 try:
     import asyncio
@@ -163,7 +177,7 @@ def ticks_ms():
     now = time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
     # Desktop: auto-present at ~60 Hz even if the game loop doesn't sleep
     # after drawing (many loops use ticks_ms/ticks_diff for pacing).
-    if not IS_MICROPYTHON and not IS_WEB:
+    if IS_DESKTOP:
         try:
             last = getattr(ticks_ms, "_last_flush", 0)
             if (now - last) >= 16:
@@ -861,6 +875,35 @@ def direction_to_delta_8way(direction, default_dx=0, default_dy=0):
         return 1, 1
     return default_dx, default_dy
 
+# Neutral analog reading for an idle nunchuck/joystick axis. The threshold
+# logic in _read_direction_from_xy() treats this midpoint as "no input".
+ANALOG_CENTER = const(128)
+ANALOG_MIN = const(0)
+ANALOG_MAX = const(255)
+
+def dpad_to_analog(up, down, left, right):
+    """Synthesize an analog (x, y) pair from four boolean D-pad inputs.
+
+    Every input backend that lacks a real analog stick (the digital "new"
+    nunchuck on hardware, and keyboard/touch on desktop/web) funnels through
+    this single helper so the axis encoding stays identical across platforms:
+      * x: LEFT -> ANALOG_MIN, RIGHT -> ANALOG_MAX, else centered
+      * y: UP   -> ANALOG_MAX, DOWN  -> ANALOG_MIN, else centered (y is
+           inverted because the threshold logic expects "up" to be the high end)
+    Opposing presses cancel out and leave the axis centered.
+    """
+    x = ANALOG_CENTER
+    y = ANALOG_CENTER
+    if left and not right:
+        x = ANALOG_MIN
+    elif right and not left:
+        x = ANALOG_MAX
+    if up and not down:
+        y = ANALOG_MAX
+    elif down and not up:
+        y = ANALOG_MIN
+    return x, y
+
 # ---------- Fonts ----------
 # NOTE: On MicroPython, even defining large dicts at module level can trigger
 # MemoryError during import. We define them inside functions (lazy) to avoid
@@ -1210,6 +1253,14 @@ class RestartProgram(Exception):
 # ---------- Nunchuk / Joystick ----------
 NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
 
+# Axis thresholds for treating a 0-255 analog reading as a directional press.
+# A reading below LOW means "low end" (LEFT / DOWN); above HIGH means "high end"
+# (RIGHT / UP). The dead zone between LOW and HIGH around ANALOG_CENTER prevents
+# jitter from registering as input. Kept as named constants so every axis test
+# shares one tuning point instead of scattering magic numbers.
+AXIS_LOW = const(100)
+AXIS_HIGH = const(150)
+
 def _read_direction_from_xy(x, y, possible_directions):
     """Convert raw joystick axis values (0-255) to a direction constant.
 
@@ -1217,48 +1268,114 @@ def _read_direction_from_xy(x, y, possible_directions):
     cardinal direction.  Returns None when no threshold is exceeded, or when
     the detected direction is not listed in *possible_directions*.
     """
-    if x < 100 and y < 100 and JOYSTICK_DOWN_LEFT in possible_directions:
+    if x < AXIS_LOW and y < AXIS_LOW and JOYSTICK_DOWN_LEFT in possible_directions:
         return JOYSTICK_DOWN_LEFT
-    if x > 150 and y < 100 and JOYSTICK_DOWN_RIGHT in possible_directions:
+    if x > AXIS_HIGH and y < AXIS_LOW and JOYSTICK_DOWN_RIGHT in possible_directions:
         return JOYSTICK_DOWN_RIGHT
-    if x < 100 and y > 150 and JOYSTICK_UP_LEFT in possible_directions:
+    if x < AXIS_LOW and y > AXIS_HIGH and JOYSTICK_UP_LEFT in possible_directions:
         return JOYSTICK_UP_LEFT
-    if x > 150 and y > 150 and JOYSTICK_UP_RIGHT in possible_directions:
+    if x > AXIS_HIGH and y > AXIS_HIGH and JOYSTICK_UP_RIGHT in possible_directions:
         return JOYSTICK_UP_RIGHT
-    if x < 100 and JOYSTICK_LEFT in possible_directions:
+    if x < AXIS_LOW and JOYSTICK_LEFT in possible_directions:
         return JOYSTICK_LEFT
-    if x > 150 and JOYSTICK_RIGHT in possible_directions:
+    if x > AXIS_HIGH and JOYSTICK_RIGHT in possible_directions:
         return JOYSTICK_RIGHT
-    if y < 100 and JOYSTICK_DOWN in possible_directions:
+    if y < AXIS_LOW and JOYSTICK_DOWN in possible_directions:
         return JOYSTICK_DOWN
-    if y > 150 and JOYSTICK_UP in possible_directions:
+    if y > AXIS_HIGH and JOYSTICK_UP in possible_directions:
         return JOYSTICK_UP
     return None
 
+def _primary_release_done(joystick, t0, timeout_ms):
+    """Shared stop condition for the sync/async release-wait loops below.
+
+    Returns True once every button is released, or once *timeout_ms* has
+    elapsed since *t0*. Keeping this in one place means the sync and async
+    waiters can never drift apart in behaviour — only their idle/yield call
+    differs (blocking sleep on hardware vs. cooperative await in the browser).
+    """
+    c, z = joystick.read_buttons()
+    if not z and not c:
+        return True
+    return ticks_diff(ticks_ms(), t0) >= timeout_ms
+
 def _wait_for_primary_release(joystick, timeout_ms=1200):
+    """Block until all buttons are released or the timeout expires (sync)."""
     t0 = ticks_ms()
-    while True:
-        c, z = joystick.read_buttons()
-        if not z and not c:
-            return
-        if ticks_diff(ticks_ms(), t0) >= timeout_ms:
-            return
+    while not _primary_release_done(joystick, t0, timeout_ms):
         sleep_ms(10)
 
 async def _wait_for_primary_release_async(joystick, timeout_ms=1200):
     """Async version: yields to the browser event loop on every iteration."""
     if asyncio is None:
+        # No event loop available (bare MicroPython) — fall back to blocking.
         _wait_for_primary_release(joystick, timeout_ms)
         return
     t0 = ticks_ms()
-    while True:
-        c, z = joystick.read_buttons()
-        if not z and not c:
-            return
-        if ticks_diff(ticks_ms(), t0) >= timeout_ms:
-            return
+    while not _primary_release_done(joystick, t0, timeout_ms):
         await asyncio.sleep(0.010)
 
+class _JoystickBase:
+    """Platform-independent joystick facade.
+
+    Direction debouncing and the public ``read_*`` API live here so every
+    platform shares one implementation. Concrete subclasses only provide the
+    two raw hooks below; this is the single seam to extend when adding a new
+    input backend.
+
+        _read_xy_raw()      -> (x, y) analog pair (0-255), or None if unavailable
+        _read_buttons_raw() -> (c_button, z_button); may raise RestartProgram
+    """
+    _debounce_ms = 70
+
+    def __init__(self):
+        self._last_dir = None
+        self._last_dir_ms = 0
+
+    def _read_xy_raw(self):
+        raise NotImplementedError
+
+    def _read_buttons_raw(self):
+        raise NotImplementedError
+
+    def read_direction(self, possible_directions, debounce=True):
+        xy = self._read_xy_raw()
+        if xy is None:
+            return None
+        d = _read_direction_from_xy(xy[0], xy[1], possible_directions)
+        if not debounce:
+            return d
+        now = ticks_ms()
+        if d is None:
+            self._last_dir = None
+            return None
+        if d == self._last_dir and ticks_diff(now, self._last_dir_ms) < self._debounce_ms:
+            return None
+        self._last_dir = d
+        self._last_dir_ms = now
+        return d
+
+    def read_buttons(self):
+        try:
+            return self._read_buttons_raw()
+        except RestartProgram:
+            raise
+        except Exception:
+            return False, False
+
+    def read_xy(self):
+        xy = self._read_xy_raw()
+        return xy if xy is not None else (ANALOG_CENTER, ANALOG_CENTER)
+
+    def is_pressed(self):
+        _, z = self.read_buttons()
+        return z
+
+
+# Each platform supplies its own raw input source behind the _JoystickBase API:
+#   * MicroPython: real Wii Nunchuk over I2C (analog stick or digital "new" pad)
+#   * Desktop/Web: keyboard events plus optional browser touch buttons
+# Only the two _read_*_raw hooks differ; all higher-level behaviour is shared.
 if IS_MICROPYTHON:
     class Nunchuck:
         def __init__(self, i2c, poll=True, poll_interval=25):
@@ -1345,26 +1462,14 @@ if IS_MICROPYTHON:
             # Synthesize analog-like values from the D-pad so the existing
             # read_direction() threshold logic keeps working.
             up, down, left, right, a_btn, b_btn, start, select = self._new_decode()
-            x = 128
-            y = 128
-            if left and not right:
-                x = 0
-            elif right and not left:
-                x = 255
-            if up and not down:
-                y = 255
-            elif down and not up:
-                y = 0
-            return (x, y)
+            return dpad_to_analog(up, down, left, right)
 
-    class Joystick:
+    class Joystick(_JoystickBase):
         def __init__(self):
+            super().__init__()
             self.i2c = machine.I2C(0, scl=machine.Pin(21), sda=machine.Pin(20))
             self.nunchuck = None
             self._last_reinit = 0
-            self._last_dir = None
-            self._last_dir_ms = 0
-            self._debounce_ms = 70
             self._reinit_nunchuck()
 
         def _reinit_nunchuck(self):
@@ -1381,29 +1486,17 @@ if IS_MICROPYTHON:
                 self._reinit_nunchuck()
             return self.nunchuck is not None
 
-        def read_direction(self, possible_directions, debounce=True):
+        def _read_xy_raw(self):
             if not self._ensure_nunchuck():
                 return None
             try:
-                x, y = self.nunchuck.joystick()
+                return self.nunchuck.joystick()
             except Exception:
                 self.nunchuck = None
                 self._ensure_nunchuck()
                 return None
-            d = _read_direction_from_xy(x, y, possible_directions)
-            if not debounce:
-                return d
-            now = ticks_ms()
-            if d is None:
-                self._last_dir = None
-                return None
-            if d == self._last_dir and ticks_diff(now, self._last_dir_ms) < self._debounce_ms:
-                return None
-            self._last_dir = d
-            self._last_dir_ms = now
-            return d
 
-        def read_buttons(self):
+        def _read_buttons_raw(self):
             if not self._ensure_nunchuck():
                 return False, False
             try:
@@ -1414,19 +1507,6 @@ if IS_MICROPYTHON:
                 self.nunchuck = None
                 self._ensure_nunchuck()
                 return False, False
-
-        def read_xy(self):
-            if not self._ensure_nunchuck():
-                return (128, 128)
-            try:
-                return self.nunchuck.joystick()
-            except Exception:
-                self.nunchuck = None
-                return (128, 128)
-
-        def is_pressed(self):
-            _, z = self.read_buttons()
-            return z
 else:
     _KEY_LATCH_MS = 90
 
@@ -1504,18 +1584,9 @@ else:
             self._held_c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE] or (touch and touch.get("x")))
             self._c = bool(self._held_c or ticks_diff(self._c_until, now) > 0)
 
-            x = 128
-            y = 128
-            if left and not right:
-                x = 0
-            elif right and not left:
-                x = 255
-            if up and not down:
-                y = 255
-            elif down and not up:
-                y = 0
-            self._x = x
-            self._y = y
+            # Keyboard/touch only give us digital direction state; funnel it
+            # through the shared D-pad encoder so desktop matches hardware.
+            self._x, self._y = dpad_to_analog(up, down, left, right)
 
         def buttons(self):
             self._poll()
@@ -1527,42 +1598,16 @@ else:
             self._poll()
             return (self._x, self._y)
 
-    class Joystick:
+    class Joystick(_JoystickBase):
         def __init__(self):
+            super().__init__()
             self.nunchuck = Nunchuck()
-            self._last_dir = None
-            self._last_dir_ms = 0
-            self._debounce_ms = 70
 
-        def read_direction(self, possible_directions, debounce=True):
-            x, y = self.nunchuck.joystick()
-            d = _read_direction_from_xy(x, y, possible_directions)
-            if not debounce:
-                return d
-            now = ticks_ms()
-            if d is None:
-                self._last_dir = None
-                return None
-            if d == self._last_dir and ticks_diff(now, self._last_dir_ms) < self._debounce_ms:
-                return None
-            self._last_dir = d
-            self._last_dir_ms = now
-            return d
-
-        def read_buttons(self):
-            try:
-                return self.nunchuck.buttons()
-            except RestartProgram:
-                raise
-            except Exception:
-                return False, False
-
-        def read_xy(self):
+        def _read_xy_raw(self):
             return self.nunchuck.joystick()
 
-        def is_pressed(self):
-            _, z = self.read_buttons()
-            return z
+        def _read_buttons_raw(self):
+            return self.nunchuck.buttons()
 
 # ---------- Color helper ----------
 def hsb_to_rgb(hue, saturation, brightness):
