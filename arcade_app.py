@@ -10040,7 +10040,8 @@ class DemosGame:
                   "VORTEX", "COMETS",
                   "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE",
                   "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
-                  "BOIDS", "NBODY", "METAB", "GRAV", "CRT", "WINMAZE")
+                  "BOIDS", "NBODY", "METAB", "GRAV", "RIPPLE", "FIRWRK",
+                  "PHYLLO", "LISSAJO", "PENDUL", "ARCADE", "CRT", "WINMAZE")
         )
         effects = tuple(
             name for name in effects
@@ -10182,6 +10183,35 @@ class DemosGame:
         # GRAV: compact particle state integrated around two moving attractors.
         self._grav_particles = []
         self._grav_phase = 0
+
+        # RIPPLE: integer water height-field (two buffers) at half resolution,
+        # rendered as 2x2 blocks. Raindrops perturb the field periodically.
+        self._ripple_w = 32
+        self._ripple_h = 32
+        self._ripple_cur = None
+        self._ripple_prev = None
+
+        # FIRWRK: rising rockets that burst into gravity-bound spark showers.
+        self._fw_rockets = []
+        self._fw_particles = []
+
+        # PHYLLO: golden-angle phyllotaxis spiral (sunflower seed packing).
+        self._phyllo_phase = 0.0
+
+        # LISSAJO: oscilloscope Lissajous curve with drifting frequency ratio.
+        self._liss_phase = 0.0
+
+        # PENDUL: chaotic double pendulum with a fading tip trail.
+        self._pend_a1 = 0.0
+        self._pend_a2 = 0.0
+        self._pend_w1 = 0.0
+        self._pend_w2 = 0.0
+        self._pend_trail = []
+
+        # ARCADE: self-playing Breakout attract demo.
+        self._arc_bricks = None
+        self._arc_ball = None
+        self._arc_paddle = 0.0
 
         # CRT
         self._crt_phase = 0
@@ -11853,6 +11883,393 @@ class DemosGame:
 
         # No minimap here: the original Win95 Maze screensaver was pure fly-through.
 
+    # --- RIPPLE (water height-field) ---
+    def _ripple_init(self):
+        w = self._ripple_w
+        h = self._ripple_h
+        self._ripple_cur = [0] * (w * h)
+        self._ripple_prev = [0] * (w * h)
+        # Seed a couple of drops so the surface is alive from the first frame.
+        for _ in range(3):
+            self._ripple_drop()
+        display.clear()
+
+    def _ripple_drop(self):
+        w = self._ripple_w
+        h = self._ripple_h
+        x = random.randint(2, w - 3)
+        y = random.randint(2, h - 3)
+        self._ripple_cur[y * w + x] = 480
+        self._demo_sound("ping", x + y, 150)
+
+    def _ripple_step(self):
+        w = self._ripple_w
+        h = self._ripple_h
+        cur = self._ripple_cur
+        prev = self._ripple_prev
+
+        # Occasional raindrops keep the pool rippling forever.
+        if random.randint(0, 99) < 7:
+            self._ripple_drop()
+
+        sp = display.set_pixel
+        for y in range(1, h - 1):
+            row = y * w
+            for x in range(1, w - 1):
+                i = row + x
+                # Classic damped wave equation on the integer height-field.
+                v = ((cur[i - 1] + cur[i + 1] + cur[i - w] + cur[i + w]) >> 1) - prev[i]
+                v -= v >> 5
+                prev[i] = v
+
+                # Shade water from deep blue troughs to bright cyan crests.
+                shade = 96 + (v >> 1)
+                if shade < 0:
+                    shade = 0
+                elif shade > 255:
+                    shade = 255
+                r = shade >> 2
+                g = (shade * 5) >> 3
+                px = x << 1
+                py = y << 1
+                sp(px, py, r, g, shade)
+                sp(px + 1, py, r, g, shade)
+                sp(px, py + 1, r, g, shade)
+                sp(px + 1, py + 1, r, g, shade)
+
+        # Swap buffers: the freshly computed field becomes current.
+        self._ripple_cur, self._ripple_prev = prev, cur
+
+    # --- FIRWRK (fireworks) ---
+    def _firwrk_init(self):
+        self._fw_rockets = []
+        self._fw_particles = []
+        display.clear()
+
+    def _firwrk_launch(self):
+        x = float(random.randint(8, WIDTH - 9))
+        vy = -random.uniform(1.4, 2.0)
+        apex = random.randint(8, 26)
+        hue = random.randint(0, 359)
+        # [x, y, vy, target_apex_y, hue]
+        self._fw_rockets.append([x, float(HEIGHT - 1), vy, float(apex), hue])
+
+    def _firwrk_burst(self, x, y, hue):
+        n = 14 if CONFIG_LOW_RAM_MODE else 26
+        for _ in range(n):
+            a = random.randint(0, 359) * 0.0174533
+            speed = random.uniform(0.4, 1.7)
+            phue = (hue + random.randint(-25, 25)) % 360
+            self._fw_particles.append([
+                float(x), float(y),
+                math.cos(a) * speed, math.sin(a) * speed,
+                random.randint(20, 38), phue,
+            ])
+        self._demo_sound("bounce", hue, 80)
+
+    def _firwrk_step(self):
+        display.clear()
+        max_rockets = 2 if CONFIG_LOW_RAM_MODE else 4
+        if len(self._fw_rockets) < max_rockets and random.randint(0, 99) < 14:
+            self._firwrk_launch()
+
+        sp = display.set_pixel
+        rockets = []
+        for rk in self._fw_rockets:
+            rk[1] += rk[2]
+            rk[2] += 0.03  # gravity slows the ascent
+            x = int(rk[0])
+            y = int(rk[1])
+            # Burst at apex (rising stalls) or when the target height is reached.
+            if rk[2] >= -0.2 or rk[1] <= rk[3]:
+                self._firwrk_burst(rk[0], rk[1], rk[4])
+                continue
+            r, g, b = hsb_to_rgb(rk[4], 0.5, 1)
+            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                sp(x, y, r, g, b)
+                ty = y + 1
+                if ty < HEIGHT:
+                    sp(x, ty, r // 3, g // 3, b // 4)
+            rockets.append(rk)
+        self._fw_rockets = rockets
+
+        alive = []
+        for p in self._fw_particles:
+            p[0] += p[2]
+            p[1] += p[3]
+            p[3] += 0.045  # gravity pulls sparks down
+            p[2] *= 0.985   # air drag
+            p[4] -= 1
+            x = int(p[0])
+            y = int(p[1])
+            if p[4] <= 0 or x < 0 or x >= WIDTH or y < 0 or y >= HEIGHT:
+                continue
+            bright = p[4] * 7
+            if bright > 100:
+                bright = 100
+            r, g, b = hsb_to_rgb(p[5], 1, bright / 100.0)
+            sp(x, y, r, g, b)
+            alive.append(p)
+        self._fw_particles = alive
+
+    # --- PHYLLO (phyllotaxis sunflower spiral) ---
+    def _phyllo_init(self):
+        self._phyllo_phase = 0.0
+        display.clear()
+
+    def _phyllo_step(self):
+        display.clear()
+        cx = WIDTH * 0.5 - 0.5
+        cy = HEIGHT * 0.5 - 0.5
+        self._phyllo_phase += 0.05
+        n = 90 if CONFIG_LOW_RAM_MODE else 150
+        # Scale so the outermost seed lands near the matrix edge.
+        c = 30.0 / math.sqrt(n)
+        golden = 2.39996323  # 137.5 degrees, the golden angle
+        base_hue = int(self._frame * 2)
+        sp = display.set_pixel
+        for i in range(n):
+            a = i * golden + self._phyllo_phase
+            r = c * math.sqrt(i)
+            x = int(cx + r * math.cos(a))
+            y = int(cy + r * math.sin(a))
+            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                cr, cg, cb = hsb_to_rgb((i * 4 + base_hue) % 360, 1, 1)
+                sp(x, y, cr, cg, cb)
+
+    # --- LISSAJO (Lissajous oscilloscope curve) ---
+    def _lissajo_init(self):
+        self._liss_phase = 0.0
+        display.clear()
+
+    def _lissajo_step(self):
+        display.clear()
+        cx = WIDTH * 0.5
+        cy = HEIGHT * 0.5
+        amp = (WIDTH - 6) * 0.5
+        self._liss_phase += 0.04
+        delta = self._liss_phase
+        # Slowly morph the frequency ratio so the figure keeps reshaping.
+        a = 3.0 + math.sin(self._frame * 0.0031) * 1.5
+        b = 2.0 + math.cos(self._frame * 0.0023) * 1.5
+        steps = 96 if CONFIG_LOW_RAM_MODE else 170
+        base_hue = int(self._frame * 2)
+        two_pi = 6.2831853
+        sp = display.set_pixel
+        for i in range(steps):
+            t = i * two_pi / steps
+            x = int(cx + amp * math.sin(a * t + delta))
+            y = int(cy + amp * math.sin(b * t))
+            if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                cr, cg, cb = hsb_to_rgb((i * 360 // steps + base_hue) % 360, 1, 1)
+                sp(x, y, cr, cg, cb)
+                # A dim neighbour gives the trace a soft phosphor glow.
+                if x + 1 < WIDTH:
+                    sp(x + 1, y, cr // 3, cg // 3, cb // 3)
+
+    # --- PENDUL (double pendulum) ---
+    _PEND_CX = WIDTH // 2
+    _PEND_CY = 26
+    _PEND_L1 = 13.0
+    _PEND_L2 = 13.0
+
+    def _pendul_init(self):
+        # Start near the top so the system has plenty of energy to go chaotic.
+        self._pend_a1 = 3.14159 * 0.62 + random.uniform(-0.2, 0.2)
+        self._pend_a2 = 3.14159 * 0.55 + random.uniform(-0.2, 0.2)
+        self._pend_w1 = 0.0
+        self._pend_w2 = 0.0
+        self._pend_trail = []
+        display.clear()
+
+    def _pendul_step(self):
+        display.clear()
+        g = 1.2
+        m1 = 1.0
+        m2 = 1.0
+        l1 = self._PEND_L1
+        l2 = self._PEND_L2
+        a1 = self._pend_a1
+        a2 = self._pend_a2
+        w1 = self._pend_w1
+        w2 = self._pend_w2
+
+        # Integrate several small steps per frame for numerical stability.
+        dt = 0.10
+        for _ in range(3):
+            sin = math.sin
+            cos = math.cos
+            da = a1 - a2
+            den = 2 * m1 + m2 - m2 * cos(2 * a1 - 2 * a2)
+            a1_acc = (
+                -g * (2 * m1 + m2) * sin(a1)
+                - m2 * g * sin(a1 - 2 * a2)
+                - 2 * sin(da) * m2 * (w2 * w2 * l2 + w1 * w1 * l1 * cos(da))
+            ) / (l1 * den)
+            a2_acc = (
+                2 * sin(da) * (
+                    w1 * w1 * l1 * (m1 + m2)
+                    + g * (m1 + m2) * cos(a1)
+                    + w2 * w2 * l2 * m2 * cos(da)
+                )
+            ) / (l2 * den)
+            w1 += a1_acc * dt
+            w2 += a2_acc * dt
+            a1 += w1 * dt
+            a2 += w2 * dt
+
+        self._pend_a1 = a1
+        self._pend_a2 = a2
+        self._pend_w1 = w1
+        self._pend_w2 = w2
+
+        cx = self._PEND_CX
+        cy = self._PEND_CY
+        x1 = cx + l1 * math.sin(a1)
+        y1 = cy + l1 * math.cos(a1)
+        x2 = x1 + l2 * math.sin(a2)
+        y2 = y1 + l2 * math.cos(a2)
+
+        # Record the tip path; old points fade out.
+        self._pend_trail.append((x2, y2))
+        if len(self._pend_trail) > 48:
+            self._pend_trail = self._pend_trail[-48:]
+        n = len(self._pend_trail)
+        for i, (tx, ty) in enumerate(self._pend_trail):
+            ix = int(tx)
+            iy = int(ty)
+            if 0 <= ix < WIDTH and 0 <= iy < HEIGHT:
+                tr, tg, tb = hsb_to_rgb((i * 6 + self._frame * 2) % 360, 1, (i + 1) / n)
+                display.set_pixel(ix, iy, tr, tg, tb)
+
+        ix1, iy1 = int(x1), int(y1)
+        ix2, iy2 = int(x2), int(y2)
+        draw_line(cx, cy, ix1, iy1, 150, 150, 160)
+        draw_line(ix1, iy1, ix2, iy2, 200, 200, 210)
+        # Pivot and the two bobs.
+        display.set_pixel(cx, cy, 90, 90, 110)
+        draw_rectangle(ix1 - 1, iy1 - 1, ix1 + 1, iy1 + 1, 80, 180, 255)
+        draw_rectangle(ix2 - 1, iy2 - 1, ix2 + 1, iy2 + 1, 255, 220, 60)
+
+    # --- ARCADE (self-playing Breakout attract demo) ---
+    _ARC_COLS = 8
+    _ARC_ROWS = 5
+    _ARC_BRICK_W = 8
+    _ARC_BRICK_H = 3
+    _ARC_TOP = 7
+    _ARC_PADDLE_W = 11
+    _ARC_PADDLE_Y = 60
+
+    def _arcade_refill(self):
+        self._arc_bricks = bytearray([1] * (self._ARC_COLS * self._ARC_ROWS))
+
+    def _arcade_reset_ball(self):
+        self._arc_ball = [
+            float(WIDTH // 2), 40.0,
+            random.choice((-0.8, 0.8)), -0.9,
+        ]
+
+    def _arcade_init(self):
+        self._arcade_refill()
+        self._arcade_reset_ball()
+        self._arc_paddle = float(WIDTH // 2 - self._ARC_PADDLE_W // 2)
+        display.clear()
+
+    def _arcade_step(self):
+        display.clear()
+        cols = self._ARC_COLS
+        rows = self._ARC_ROWS
+        bw = self._ARC_BRICK_W
+        bh = self._ARC_BRICK_H
+        top = self._ARC_TOP
+        bricks = self._arc_bricks
+        ball = self._arc_ball
+
+        # --- paddle AI: ease toward the ball, capped so motion looks natural ---
+        pad_w = self._ARC_PADDLE_W
+        target = ball[0] - pad_w * 0.5
+        diff = target - self._arc_paddle
+        if diff > 1.6:
+            diff = 1.6
+        elif diff < -1.6:
+            diff = -1.6
+        self._arc_paddle += diff
+        if self._arc_paddle < 0:
+            self._arc_paddle = 0.0
+        elif self._arc_paddle > WIDTH - pad_w:
+            self._arc_paddle = float(WIDTH - pad_w)
+
+        # --- advance ball and resolve collisions ---
+        ball[0] += ball[2]
+        ball[1] += ball[3]
+        if ball[0] < 1:
+            ball[0] = 1.0
+            ball[2] = -ball[2]
+            self._demo_sound("bounce", 1, 60)
+        elif ball[0] > WIDTH - 2:
+            ball[0] = float(WIDTH - 2)
+            ball[2] = -ball[2]
+            self._demo_sound("bounce", 2, 60)
+        if ball[1] < 1:
+            ball[1] = 1.0
+            ball[3] = -ball[3]
+            self._demo_sound("bounce", 3, 60)
+
+        bx = int(ball[0])
+        by = int(ball[1])
+
+        # brick hit test
+        if top <= by < top + rows * bh:
+            c = bx // bw
+            r = (by - top) // bh
+            if 0 <= c < cols and 0 <= r < rows:
+                idx = r * cols + c
+                if bricks[idx]:
+                    bricks[idx] = 0
+                    ball[3] = -ball[3]
+                    self._demo_sound("coin", r, 50)
+
+        # paddle bounce
+        py = self._ARC_PADDLE_Y
+        if ball[3] > 0 and by >= py - 1 and by <= py + 1:
+            if self._arc_paddle - 1 <= ball[0] <= self._arc_paddle + pad_w:
+                ball[3] = -abs(ball[3])
+                # English based on where it strikes the paddle.
+                hit = (ball[0] - (self._arc_paddle + pad_w * 0.5)) / (pad_w * 0.5)
+                ball[2] += hit * 0.5
+                if ball[2] > 1.4:
+                    ball[2] = 1.4
+                elif ball[2] < -1.4:
+                    ball[2] = -1.4
+                self._demo_sound("ping", 5, 60)
+
+        # lost ball -> respawn; cleared field -> refill
+        if by > HEIGHT:
+            self._arcade_reset_ball()
+        if not any(bricks):
+            self._arcade_refill()
+
+        # --- render ---
+        row_colors = (
+            (255, 60, 60), (255, 150, 40), (240, 230, 50),
+            (70, 220, 90), (80, 150, 255),
+        )
+        for r in range(rows):
+            cr, cg, cb = row_colors[r % len(row_colors)]
+            by0 = top + r * bh
+            for c in range(cols):
+                if bricks[r * cols + c]:
+                    bx0 = c * bw
+                    draw_rectangle(bx0, by0, bx0 + bw - 2, by0 + bh - 2, cr, cg, cb)
+
+        pad_x = int(self._arc_paddle)
+        draw_rectangle(pad_x, py, pad_x + pad_w - 1, py + 1, 220, 220, 230)
+        draw_rectangle(bx, by, bx, by, 255, 255, 255)
+        if bx + 1 < WIDTH:
+            display.set_pixel(bx + 1, by, 200, 200, 200)
+        if by + 1 < HEIGHT:
+            display.set_pixel(bx, by + 1, 200, 200, 200)
+
     def _select_prev_next_demo(self, joystick):
         now = ticks_ms()
         if ticks_diff(now, self._last_move) <= self._move_delay:
@@ -12016,6 +12433,18 @@ class DemosGame:
             self._metab_init()
         elif demo == "GRAV":
             self._grav_init()
+        elif demo == "RIPPLE":
+            self._ripple_init()
+        elif demo == "FIRWRK":
+            self._firwrk_init()
+        elif demo == "PHYLLO":
+            self._phyllo_init()
+        elif demo == "LISSAJO":
+            self._lissajo_init()
+        elif demo == "PENDUL":
+            self._pendul_init()
+        elif demo == "ARCADE":
+            self._arcade_init()
         elif demo == "CRT":
             self._crt_init()
         elif demo == "WINMAZE":
@@ -12082,6 +12511,22 @@ class DemosGame:
             self._metab_step()
         elif demo == "GRAV":
             self._grav_step()
+        elif demo == "RIPPLE":
+            if self._ripple_cur is None:
+                self._ripple_init()
+            self._ripple_step()
+        elif demo == "FIRWRK":
+            self._firwrk_step()
+        elif demo == "PHYLLO":
+            self._phyllo_step()
+        elif demo == "LISSAJO":
+            self._lissajo_step()
+        elif demo == "PENDUL":
+            self._pendul_step()
+        elif demo == "ARCADE":
+            if self._arc_bricks is None:
+                self._arcade_init()
+            self._arcade_step()
         elif demo == "CRT":
             self._crt_step()
         elif demo == "WINMAZE":
