@@ -232,8 +232,8 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
 | `BOMBER` | Bomber | Timed bombs, block clearing, and maze enemies |
-| `BRKOUT` | Breakout | Brick breaker with rainbow bricks |
-| `BTLZON` | Battlezone | Atari-style vector tank combat with radar and incoming shells |
+| `BRKOUT` | Breakout | Brick breaker with rainbow bricks and optional powerups |
+| `BTLZON` | Battlezone | Atari-style vector tank combat with radar, rocks, projectile shots, and waves |
 | `CATCH` | Catch | Catch stars, avoid bombs, and keep the basket moving |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
 | `CENTI` | Centipede | Atari-style segmented shooter with mushrooms and waves |
@@ -271,7 +271,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `TETRIS` | Tetris | Falling blocks with line clearing |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
 | `TWRDEF` | Tower Defense | Build towers across rotating road and open-field layouts |
-| `UFODEF` | UFO Defense | Missile Command-style defense (diagonal control) |
+| `UFODEF` | UFO Defense | Missile Command-style defense with turret/base and wave/time settings |
 | `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
 
 Each game tracks high scores with optional initials entry.
@@ -284,8 +284,8 @@ Each game tracks high scores with optional initials entry.
 
 **Menu Navigation**:
 - **Up/Down**: Navigate menu
-- **Z (or Space/Enter)**: Select/Confirm
-- **C (or X/Escape)**: Back/Cancel
+- **Z (or Space/Enter)**: Start/Confirm
+- **C (or X/Escape)**: Open game options when available; otherwise Back/Cancel
 
 **In-Game**:
 - **Directional movement**: Arrow keys / Joystick

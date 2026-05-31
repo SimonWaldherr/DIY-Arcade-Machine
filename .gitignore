@@ -6,5 +6,6 @@ __pycache__
 .pytest_cache
 .venv
 highscores.json
+settings.json
 arcade_app.mpy
 build/
