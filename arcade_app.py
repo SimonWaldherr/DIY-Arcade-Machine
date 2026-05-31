@@ -1660,10 +1660,66 @@ except ImportError:
 
 class HighScores:
     FILE = "highscores.json"
+    MAX_ENTRIES = 10
 
     def __init__(self):
         self.scores = {}
         self.load()
+
+    def _clean_name(self, name):
+        if isinstance(name, str) and name:
+            return name[:3].upper()
+        return "---"
+
+    def _entry_from_value(self, value):
+        try:
+            if isinstance(value, dict):
+                score = int(value.get("score", 0) or 0)
+                name = self._clean_name(value.get("name", "---"))
+            elif isinstance(value, (list, tuple)) and len(value) >= 2:
+                score = int(value[0] or 0)
+                name = self._clean_name(value[1])
+            else:
+                score = int(value or 0)
+                name = "---"
+            if score > 0:
+                return {"score": score, "name": name}
+        except Exception:
+            pass
+        return None
+
+    def _entries_from_value(self, value):
+        if isinstance(value, list):
+            entries = []
+            for item in value:
+                entry = self._entry_from_value(item)
+                if entry:
+                    entries.append(entry)
+        else:
+            entry = self._entry_from_value(value)
+            entries = [entry] if entry else []
+        entries.sort(key=lambda item: int(item.get("score", 0) or 0), reverse=True)
+        return entries[:self.MAX_ENTRIES]
+
+    def _set_entries(self, game, entries):
+        clean = []
+        for entry in entries:
+            item = self._entry_from_value(entry)
+            if item:
+                clean.append(item)
+        clean.sort(key=lambda item: int(item.get("score", 0) or 0), reverse=True)
+        self.scores[game] = clean[:self.MAX_ENTRIES]
+
+    def _normalize_scores(self):
+        for game in list(self.scores.keys()):
+            entries = self._entries_from_value(self.scores.get(game))
+            if entries:
+                self.scores[game] = entries
+            else:
+                try:
+                    del self.scores[game]
+                except Exception:
+                    pass
 
     def _load_compact(self):
         out = {}
@@ -1676,16 +1732,22 @@ class HighScores:
                 score = int(parts[1] or 0)
                 if score <= 0:
                     continue
-                if len(parts) > 2 and parts[2]:
-                    out[game] = {"score": score, "name": parts[2][:3].upper()}
-                else:
-                    out[game] = score
+                name = parts[2][:3].upper() if len(parts) > 2 and parts[2] else "---"
+                entries = out.get(game)
+                if not isinstance(entries, list):
+                    entries = []
+                    out[game] = entries
+                entries.append({"score": score, "name": name})
         self.scores = out
+        self._normalize_scores()
 
     def load(self):
         try:
             with open(self.FILE, "r") as f:
                 self.scores = json.load(f)
+            if not isinstance(self.scores, dict):
+                self.scores = {}
+            self._normalize_scores()
         except Exception:
             try:
                 self._load_compact()
@@ -1693,19 +1755,17 @@ class HighScores:
                 self.scores = {}
 
     def _write_scores(self, f):
+        self._normalize_scores()
         if IS_MICROPYTHON:
-            for game, v in self.scores.items():
-                try:
-                    if isinstance(v, dict):
-                        score = int(v.get("score", 0) or 0)
-                        name = str(v.get("name", "---"))[:3].upper()
-                    else:
-                        score = int(v or 0)
-                        name = ""
-                    if score > 0:
-                        f.write(game + ":" + str(score) + (":" + name if name else "") + "\n")
-                except Exception:
-                    pass
+            for game, entries in self.scores.items():
+                for entry in self._entries_from_value(entries):
+                    try:
+                        score = int(entry.get("score", 0) or 0)
+                        name = self._clean_name(entry.get("name", "---"))
+                        if score > 0:
+                            f.write(game + ":" + str(score) + ":" + name + "\n")
+                    except Exception:
+                        pass
         else:
             json.dump(self.scores, f)
 
@@ -1731,35 +1791,54 @@ class HighScores:
                 pass
 
     def best(self, game):
-        try:
-            v = self.scores.get(game, 0)
-            if isinstance(v, dict):
-                return int(v.get("score", 0) or 0)
-            return int(v or 0)
-        except Exception:
-            return 0
+        entries = self._entries_from_value(self.scores.get(game, []))
+        if entries:
+            return int(entries[0].get("score", 0) or 0)
+        return 0
 
     def best_name(self, game):
-        try:
-            v = self.scores.get(game)
-            if isinstance(v, dict):
-                n = v.get("name")
-                if isinstance(n, str) and n:
-                    return n
-        except Exception:
-            pass
+        entries = self._entries_from_value(self.scores.get(game, []))
+        if entries:
+            return self._clean_name(entries[0].get("name", "---"))
         return "---"
+
+    def entries(self, game=None, limit=None):
+        if isinstance(game, int) and limit is None:
+            limit = game
+            game = None
+        out = []
+        if game is not None:
+            for entry in self._entries_from_value(self.scores.get(game, [])):
+                out.append((game, int(entry.get("score", 0) or 0),
+                            self._clean_name(entry.get("name", "---"))))
+        else:
+            for game_name in self.scores:
+                for entry in self._entries_from_value(self.scores.get(game_name, [])):
+                    out.append((game_name, int(entry.get("score", 0) or 0),
+                                self._clean_name(entry.get("name", "---"))))
+            out.sort(key=lambda item: item[1], reverse=True)
+        if limit is not None:
+            return out[:limit]
+        return out
+
+    def qualifies(self, game, score, limit=None):
+        score = int(score or 0)
+        if score <= 0:
+            return False
+        if limit is None:
+            limit = self.MAX_ENTRIES
+        entries = self._entries_from_value(self.scores.get(game, []))
+        return len(entries) < limit or score > int(entries[-1].get("score", 0) or 0)
 
     def update(self, game, score, name=None):
         score = int(score or 0)
-        if score > self.best(game):
-            if isinstance(name, str) and name:
-                self.scores[game] = {"score": score, "name": name[:3].upper()}
-            else:
-                self.scores[game] = score
-            self.save()
-            return True
-        return False
+        if score <= 0:
+            return False
+        entries = self._entries_from_value(self.scores.get(game, []))
+        entries.append({"score": score, "name": self._clean_name(name)})
+        self._set_entries(game, entries)
+        self.save()
+        return True
 
 
 class GameSettings:
@@ -21206,62 +21285,154 @@ class ColumnsGame:
 
 
 class GameOverMenu:
-    """Simple menu shown after losing; choose retry or return to menu."""
-    def __init__(self, joystick, score, best, best_name="---", title="LOST"):
+    """Unified end-of-run menu with retry, highscore view, and menu return."""
+    def __init__(self, joystick, score, best, best_name="---", title="LOST",
+                 highscores=None, game_name=None):
         self.joystick = joystick
-        self.score = score
-        self.best = best
-        self.best_name = best_name
+        self.score = int(score or 0)
+        self.best = int(best or 0)
+        self.best_name = best_name if isinstance(best_name, str) else "---"
         self.title = title
-        self.opts = ["RETRY", "MENU"]
+        self.highscores = highscores
+        self.game_name = game_name
+        self.opts = ("RETRY", "HISCR", "MENU")
+        self.hs_top = 0
+
+    def _title_color(self):
+        if self.title == "WON":
+            return (50, 255, 80)
+        return (255, 55, 45)
+
+    def _draw_button(self, x, y, label, selected):
+        col = (255, 255, 255) if selected else (95, 95, 95)
+        bg = (28, 70, 34) if selected and self.title == "WON" else (70, 28, 28) if selected else (0, 0, 0)
+        w = len(label) * 6 + 5
+        draw_rectangle(x - 2, y - 2, x + w - 1, y + 7, *bg)
+        draw_rect_outline(x - 2, y - 2, x + w - 1, y + 7, *col)
+        draw_text_small(x, y, label, *col)
+
+    def _draw_menu(self, idx):
+        display.clear()
+        tr, tg, tb = self._title_color()
+        draw_text((WIDTH - len(self.title) * 9) // 2, 2, self.title, tr, tg, tb)
+        draw_text_small(2, 16, "SCORE", 170, 170, 170)
+        draw_text_small(39, 16, str(self.score)[:4], 255, 255, 255)
+        draw_text_small(2, 24, "BEST", 170, 170, 170)
+        best_txt = (str(self.best) + " " + self.best_name)[:8]
+        draw_text_small(32, 24, best_txt, 255, 220, 80)
+        self._draw_button(14, 31, "RETRY", idx == 0)
+        self._draw_button(14, 40, "HISCR", idx == 1)
+        self._draw_button(17, 49, "MENU", idx == 2)
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, "Z OK", 120, 120, 120)
+        draw_text_small(WIDTH - 36, PLAY_HEIGHT, "C MENU", 120, 120, 120)
+        display_flush()
+
+    def _highscore_entries(self):
+        if self.highscores is None:
+            if self.game_name:
+                return [(self.game_name, self.best, self.best_name)] if self.best > 0 else []
+            return []
+        return self.highscores.entries(self.game_name)
+
+    def _draw_highscores(self, top=0):
+        display.clear()
+        rows = self._highscore_entries()
+        title = ("HISCR " + str(self.game_name or ""))[:10]
+        draw_text_small(2, 1, title, 255, 220, 80)
+        if not rows:
+            draw_text_small(8, 25, "NO SCORE", 140, 140, 140)
+        max_top = max(0, len(rows) - 5)
+        top = clamp(top, 0, max_top)
+        for i, row in enumerate(rows[top:top + 5]):
+            game, score, name = row
+            y = 11 + i * 9
+            rank = str(top + i + 1)
+            col = (255, 255, 255)
+            draw_text_small(1, y, rank, *col)
+            name_x = 8 if len(rank) == 1 else 14
+            draw_text_small(name_x, y, str(name or "---")[:3], 120, 180, 255)
+            score_txt = str(score)[-6:]
+            draw_text_small(WIDTH - len(score_txt) * 6 - 1, y, score_txt, *col)
+        draw_menu_scrollbar(top, 5, len(rows))
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, "Z BACK", 120, 120, 120)
+        draw_text_small(WIDTH - 36, PLAY_HEIGHT, "C MENU", 120, 120, 120)
+        display_flush()
 
     def run(self):
+        _wait_for_primary_release(self.joystick, timeout_ms=2000)
         idx = 0
         prev = -1
         last_move = ticks_ms()
-        # Slightly faster than game selector for snappier two-item navigation.
         move_delay = 130
 
         while True:
             now = ticks_ms()
-
             if idx != prev:
                 prev = idx
-                display.clear()
-                tr, tg, tb = (0, 255, 0) if self.title == "WON" else (255, 20, 20)
-                draw_text((WIDTH - len(self.title) * 9) // 2, 8, self.title, tr, tg, tb)
-
-                # score HUD line
-                draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-                draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
-                bn = self.best_name if isinstance(self.best_name, str) else "---"
-                bs = "B" + str(self.best) + " " + bn
-                draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
-
-                for i, o in enumerate(self.opts):
-                    col = (255, 255, 255) if i == idx else (111, 111, 111)
-                    draw_text(8, 28 + i * 15, o, *col)
+                self._draw_menu(idx)
 
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
-                if d == JOYSTICK_UP and idx > 0:
-                    idx -= 1
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
+                if d in (JOYSTICK_UP, JOYSTICK_LEFT):
+                    idx = (idx - 1) % len(self.opts)
                     last_move = now
-                elif d == JOYSTICK_DOWN and idx < len(self.opts) - 1:
-                    idx += 1
+                elif d in (JOYSTICK_DOWN, JOYSTICK_RIGHT):
+                    idx = (idx + 1) % len(self.opts)
                     last_move = now
 
-            _c, z = self.joystick.read_buttons()
-            if z:
+            c_button, z_button = self.joystick.read_buttons()
+            if c_button:
                 _wait_for_primary_release(self.joystick)
-                return self.opts[idx]
+                return "MENU"
+            if z_button:
+                _wait_for_primary_release(self.joystick)
+                selected = self.opts[idx]
+                if selected == "HISCR":
+                    result = self._show_highscores_sync()
+                    if result == "MENU":
+                        return "MENU"
+                    prev = -1
+                else:
+                    return selected
 
-            sleep_ms(16)  # minimum sleep to keep menu smooth without busy looping
+            sleep_ms(16)
+
+    def _show_highscores_sync(self):
+        self.hs_top = 0
+        prev_top = -1
+        last_move = ticks_ms()
+        move_delay = 130
+        while True:
+            if self.hs_top != prev_top:
+                prev_top = self.hs_top
+                self._draw_highscores(self.hs_top)
+            now = ticks_ms()
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
+                rows = self._highscore_entries()
+                max_top = max(0, len(rows) - 5)
+                if d == JOYSTICK_UP and self.hs_top > 0:
+                    self.hs_top -= 1
+                    last_move = now
+                elif d == JOYSTICK_DOWN and self.hs_top < max_top:
+                    self.hs_top += 1
+                    last_move = now
+            c_button, z_button = self.joystick.read_buttons()
+            if c_button:
+                _wait_for_primary_release(self.joystick)
+                return "MENU"
+            if z_button:
+                _wait_for_primary_release(self.joystick)
+                return "BACK"
+            sleep_ms(16)
 
     async def run_async(self):
         """Async version of run() for use in pygbag/browser environments."""
         if asyncio is None:
             return self.run()
+        await _wait_for_primary_release_async(self.joystick, timeout_ms=2000)
         idx = 0
         prev = -1
         last_move = ticks_ms()
@@ -21270,28 +21441,61 @@ class GameOverMenu:
             now = ticks_ms()
             if idx != prev:
                 prev = idx
-                display.clear()
-                tr, tg, tb = (0, 255, 0) if self.title == "WON" else (255, 20, 20)
-                draw_text((WIDTH - len(self.title) * 9) // 2, 8, self.title, tr, tg, tb)
-                draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-                draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
-                bn = self.best_name if isinstance(self.best_name, str) else "---"
-                bs = "B" + str(self.best) + " " + bn
-                draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
-                for i, o in enumerate(self.opts):
-                    col = (255, 255, 255) if i == idx else (111, 111, 111)
-                    draw_text(8, 28 + i * 15, o, *col)
-                display_flush()
+                self._draw_menu(idx)
+
+            if ticks_diff(now, last_move) > move_delay:
+                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
+                if d in (JOYSTICK_UP, JOYSTICK_LEFT):
+                    idx = (idx - 1) % len(self.opts)
+                    last_move = now
+                elif d in (JOYSTICK_DOWN, JOYSTICK_RIGHT):
+                    idx = (idx + 1) % len(self.opts)
+                    last_move = now
+
+            c_button, z_button = self.joystick.read_buttons()
+            if c_button:
+                await _wait_for_primary_release_async(self.joystick)
+                return "MENU"
+            if z_button:
+                await _wait_for_primary_release_async(self.joystick)
+                selected = self.opts[idx]
+                if selected == "HISCR":
+                    result = await self._show_highscores_async()
+                    if result == "MENU":
+                        return "MENU"
+                    prev = -1
+                else:
+                    return selected
+
+            await asyncio.sleep(0.016)
+
+    async def _show_highscores_async(self):
+        self.hs_top = 0
+        prev_top = -1
+        last_move = ticks_ms()
+        move_delay = 130
+        while True:
+            if self.hs_top != prev_top:
+                prev_top = self.hs_top
+                self._draw_highscores(self.hs_top)
+            now = ticks_ms()
             if ticks_diff(now, last_move) > move_delay:
                 d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
-                if d == JOYSTICK_UP and idx > 0:
-                    idx -= 1; last_move = now
-                elif d == JOYSTICK_DOWN and idx < len(self.opts) - 1:
-                    idx += 1; last_move = now
-            _c, z = self.joystick.read_buttons()
-            if z:
+                rows = self._highscore_entries()
+                max_top = max(0, len(rows) - 5)
+                if d == JOYSTICK_UP and self.hs_top > 0:
+                    self.hs_top -= 1
+                    last_move = now
+                elif d == JOYSTICK_DOWN and self.hs_top < max_top:
+                    self.hs_top += 1
+                    last_move = now
+            c_button, z_button = self.joystick.read_buttons()
+            if c_button:
                 await _wait_for_primary_release_async(self.joystick)
-                return self.opts[idx]
+                return "MENU"
+            if z_button:
+                await _wait_for_primary_release_async(self.joystick)
+                return "BACK"
             await asyncio.sleep(0.016)
 
 
@@ -21505,11 +21709,12 @@ class GameSelect:
         # Highscore prompts live here so every game can just set global_score.
         best = self.highscores.best(game_name)
         best_name = self.highscores.best_name(game_name)
-        if global_score > best:
+        if self.highscores.qualifies(game_name, global_score):
+            entry_title = "NEW HS" if global_score > best else "SAVE"
             if asyncio is not None:
-                initials = await InitialsEntryMenu(self.joystick, global_score, best, best_name).run_async()
+                initials = await InitialsEntryMenu(self.joystick, global_score, best, best_name, entry_title).run_async()
             else:
-                initials = InitialsEntryMenu(self.joystick, global_score, best, best_name).run()
+                initials = InitialsEntryMenu(self.joystick, global_score, best, best_name, entry_title).run()
             if initials:
                 self.highscores.update(game_name, global_score, initials)
 
@@ -21517,8 +21722,10 @@ class GameSelect:
         best_name = self.highscores.best_name(game_name)
         title = globals().get("game_result", "LOST")
         if asyncio is not None:
-            return await GameOverMenu(self.joystick, global_score, best, best_name, title).run_async()
-        return GameOverMenu(self.joystick, global_score, best, best_name, title).run()
+            return await GameOverMenu(self.joystick, global_score, best, best_name, title,
+                                      self.highscores, game_name).run_async()
+        return GameOverMenu(self.joystick, global_score, best, best_name, title,
+                            self.highscores, game_name).run()
 
     async def run_game_selector(self):
         # wait for lingering button presses to prevent instant re-entry
