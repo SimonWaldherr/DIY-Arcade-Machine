@@ -241,13 +241,13 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
-| `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites |
+| `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites; also powers the WINMAZE demo renderer |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
 | `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `KEEN` | Keen | Platformer with jumps, gems, keys, enemies, and exit doors |
-| `LANDER` | Lunar Lander | Multi-level landing challenge (increasing difficulty) |
+| `LANDER` | Lunar Lander | Multi-level landing challenge plus optional scrolling v2 route mode with fuel powerups |
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
@@ -256,7 +256,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `PAIRS` | Pairs | Memory card matching on a 4x4 board |
 | `PINBAL` | Pinball | Plunger launch, flippers, bumpers, targets, and multipliers |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
-| `PONG` | Pong | Paddle vs. AI, increasing difficulty |
+| `PONG` | Pong | Paddle vs. AI or optional 2-player paddle duel |
 | `QIX` | Qix | Territory capture, avoid the enemy |
 | `RAYRCR` | Ray Racer | Raytrace-style anti-grav racing with boost, energy gates, and rival hovercars |
 | `REVRS` | Othello/Reversi | Board game with simple CPU opponent |
@@ -269,7 +269,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `SOKO` | Sokoban | Multi-level crate-pushing puzzle campaign |
 | `STACK` | Stacker | Timing game: trim and stack moving blocks |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
-| `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge the enemy cycle |
+| `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge CPU or optional second player |
 | `TWRDEF` | Tower Defense | Build towers across rotating road and open-field layouts |
 | `UFODEF` | UFO Defense | Missile Command-style defense with turret/base and wave/time settings |
 | `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
@@ -299,6 +299,16 @@ Each game tracks high scores with optional initials entry.
 | Move | Arrow Keys |
 | Confirm/Action | `Z`, `Space`, or `Enter` |
 | Back/Cancel | `X` or `Escape` |
+| Player 1 Move in 2P | `W`, `A`, `S`, `D` |
+| Player 1 Action in 2P | `Shift` where used |
+| Player 2 Move in 2P | Arrow Keys |
+| Player 2 Action in 2P | `Z`, `Space`, or `Enter` where used |
+
+### Game Settings Highlights
+
+- `PONG`: `PLAYR` switches between `1P` and `2P`.
+- `TRON`: `PLAYR` switches between CPU opponent and `2P`.
+- `LANDER`: `MODE` switches between classic `V1` and scrolling `V2` with route pads and fuel pickups.
 
 ### MicroPython Controller
 

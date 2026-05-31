@@ -1624,6 +1624,60 @@ else:
         def _read_buttons_raw(self):
             return self.nunchuck.buttons()
 
+
+def read_wasd_direction(possible_directions, debounce=False):
+    """Read WASD as a digital direction source for desktop/web multiplayer."""
+    if IS_MICROPYTHON:
+        return None
+    try:
+        import pygame  # type: ignore
+        pygame.event.pump()
+        keys = pygame.key.get_pressed()
+        up = bool(keys[pygame.K_w])
+        down = bool(keys[pygame.K_s])
+        left = bool(keys[pygame.K_a])
+        right = bool(keys[pygame.K_d])
+        x, y = dpad_to_analog(up, down, left, right)
+        d = _read_direction_from_xy(x, y, possible_directions)
+        if not debounce:
+            return d
+        now = ticks_ms()
+        last_dir = getattr(read_wasd_direction, "_last_dir", None)
+        last_ms = getattr(read_wasd_direction, "_last_ms", 0)
+        if d is None:
+            setattr(read_wasd_direction, "_last_dir", None)
+            return None
+        if d == last_dir and ticks_diff(now, last_ms) < _JoystickBase._debounce_ms:
+            return None
+        setattr(read_wasd_direction, "_last_dir", d)
+        setattr(read_wasd_direction, "_last_ms", now)
+        return d
+    except Exception:
+        return None
+
+
+def read_wasd_buttons():
+    """Return (back, action) for the WASD-side player on desktop/web."""
+    if IS_MICROPYTHON:
+        return False, False
+    try:
+        import pygame  # type: ignore
+        pygame.event.pump()
+        keys = pygame.key.get_pressed()
+        return False, bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
+    except Exception:
+        return False, False
+
+
+def read_player2_direction(possible_directions, debounce=False):
+    """Compatibility alias: player 2 now uses the normal joystick/arrow path."""
+    return None
+
+
+def read_player2_buttons():
+    """Compatibility stub; player 2 uses the normal joystick/arrow buttons."""
+    return False, False
+
 # ---------- Color helper ----------
 def hsb_to_rgb(hue, saturation, brightness):
     hue_normalized = (hue % 360) / 60
@@ -1863,6 +1917,15 @@ class GameSettings:
         "BTLZON": (
             ("difficulty", "DIFF", (("easy", "EASY"), ("normal", "NORM"), ("hard", "HARD")), 1),
             ("obstacles", "ROCKS", ((False, "OFF"), (True, "ON")), 1),
+        ),
+        "LANDER": (
+            ("mode", "MODE", (("classic", "V1"), ("scroll", "V2")), 0),
+        ),
+        "PONG": (
+            ("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),
+        ),
+        "TRON": (
+            ("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),
         ),
         "UFODEF": (
             ("launcher", "GUNS", (("base", "BASE"), ("turrets", "3GUN")), 1),
@@ -2532,7 +2595,8 @@ class PongGame:
       - Up / Down: move paddle
       - C: return to menu
     """
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.players_mode = get_context_setting(ctx, "players", "cpu")
         self.paddle_height = 10
         self.paddle_speed = 3
         self.ai_min_speed = 1
@@ -2546,6 +2610,7 @@ class PongGame:
         self.ball_speed = [1, 1]
         self.ball_position = [WIDTH // 2, PLAY_HEIGHT // 2]
         self.left_score = 0
+        self.right_score = 0
         self.lives = 3
 
     def reset_ball(self):
@@ -2558,6 +2623,7 @@ class PongGame:
         self._prev_left_paddle_y = self.left_paddle_y
         self._prev_right_paddle_y = self.right_paddle_y
         self.left_score = 0
+        self.right_score = 0
         self.lives = 3
         self.reset_ball()
 
@@ -2602,11 +2668,22 @@ class PongGame:
             display.set_pixel(x, y, 255, 255, 255)
 
     def update_paddles(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
+        if self.players_mode == "two":
+            d = read_wasd_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
+        else:
+            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN])
         if d == JOYSTICK_UP:
             self.left_paddle_y = max(self.left_paddle_y - self.paddle_speed, 0)
         elif d == JOYSTICK_DOWN:
             self.left_paddle_y = min(self.left_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+
+        if self.players_mode == "two":
+            p2 = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
+            if p2 == JOYSTICK_UP:
+                self.right_paddle_y = max(self.right_paddle_y - self.paddle_speed, 0)
+            elif p2 == JOYSTICK_DOWN:
+                self.right_paddle_y = min(self.right_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+            return
 
         # Lightweight AI: good enough to rally, imperfect enough to beat.
         by = self.ball_position[1]
@@ -2654,6 +2731,13 @@ class PongGame:
 
         # miss left
         if x <= 0:
+            if self.players_mode == "two":
+                self.right_score += 1
+                if self.right_score >= 5:
+                    set_game_over_score(self.left_score, won=False)
+                    return
+                self.reset_ball()
+                return
             self.lives -= 1
             if self.lives <= 0:
                 set_game_over_score(self.left_score, won=False)
@@ -2666,6 +2750,13 @@ class PongGame:
 
         # miss right -> bonus
         if x >= WIDTH - 1:
+            if self.players_mode == "two":
+                self.left_score += 1
+                if self.left_score >= 5:
+                    set_game_over_score(self.left_score, won=True)
+                    return
+                self.reset_ball()
+                return
             self.left_score += 10
             self.reset_ball()
 
@@ -2685,7 +2776,11 @@ class PongGame:
             self.update_paddles(joystick)
             self.update_ball()
             self.draw_paddles()
-            display_score_and_time(self.left_score)
+            if self.players_mode == "two":
+                draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+                draw_text_small(1, PLAY_HEIGHT, str(self.left_score) + "-" + str(self.right_score), 255, 255, 255)
+            else:
+                display_score_and_time(self.left_score)
             return True
         return step
 
@@ -4627,7 +4722,8 @@ class TronGame:
     DIR_LEFT = 2
     DIR_RIGHT = 3
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.players_mode = get_context_setting(ctx, "players", "cpu")
         self.reset()
 
     def reset(self):
@@ -4668,6 +4764,12 @@ class TronGame:
             self.direction = self._LEFT_TURN[self.direction]
         elif d == JOYSTICK_RIGHT:
             self.direction = self._RIGHT_TURN[self.direction]
+
+    def _turn_enemy(self, d):
+        if d == JOYSTICK_LEFT:
+            self.enemy_dir = self._LEFT_TURN[self.enemy_dir]
+        elif d == JOYSTICK_RIGHT:
+            self.enemy_dir = self._RIGHT_TURN[self.enemy_dir]
 
     def _enemy_lookahead(self, e_dir):
         # How many clear tiles in direction e_dir?
@@ -4730,22 +4832,23 @@ class TronGame:
     def _step(self, turbo):
         # AI step
         if self.enemy_alive:
-            # Check survival ahead
-            fwd_dist = self._enemy_lookahead(self.enemy_dir)
-            if fwd_dist < 4:
-                # Need to turn! Check left and right distances
-                l_dir = self._LEFT_TURN[self.enemy_dir]
-                r_dir = self._RIGHT_TURN[self.enemy_dir]
-                l_dist = self._enemy_lookahead(l_dir)
-                r_dist = self._enemy_lookahead(r_dir)
-                
-                if max(fwd_dist, l_dist, r_dist) == 0:
-                    # Trapped! Just crash next tick.
-                    pass
-                elif l_dist >= r_dist and l_dist > fwd_dist:
-                    self.enemy_dir = l_dir
-                elif r_dist >= l_dist and r_dist > fwd_dist:
-                    self.enemy_dir = r_dir
+            if self.players_mode != "two":
+                # Check survival ahead
+                fwd_dist = self._enemy_lookahead(self.enemy_dir)
+                if fwd_dist < 4:
+                    # Need to turn! Check left and right distances
+                    l_dir = self._LEFT_TURN[self.enemy_dir]
+                    r_dir = self._RIGHT_TURN[self.enemy_dir]
+                    l_dist = self._enemy_lookahead(l_dir)
+                    r_dist = self._enemy_lookahead(r_dir)
+
+                    if max(fwd_dist, l_dist, r_dist) == 0:
+                        # Trapped! Just crash next tick.
+                        pass
+                    elif l_dist >= r_dist and l_dist > fwd_dist:
+                        self.enemy_dir = l_dir
+                    elif r_dist >= l_dist and r_dist > fwd_dist:
+                        self.enemy_dir = r_dir
             
             # Enemy moves 1 step per frame normally
             edx, edy = self._DIR_VECS[self.enemy_dir]
@@ -4800,9 +4903,18 @@ class TronGame:
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-            turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            if self.players_mode == "two":
+                _p1_back, p1_action = read_wasd_buttons()
+                turn = read_wasd_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
+                z_button = p1_action
+            else:
+                turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
             if turn:
                 self._turn(turn)
+            if self.players_mode == "two":
+                p2_turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                if p2_turn:
+                    self._turn_enemy(p2_turn)
             alive = self._step(turbo=z_button)
             global_score = self.score
             display_score_and_time(self.score)
@@ -12289,128 +12401,15 @@ class DemosGame:
     # --- WIN95 MAZE / DOOM RAYCASTER REUSE ---
     def _winmaze_init(self):
         self._winmaze = DoomLiteGame()
-        self._winmaze.enemies = []
-        self._winmaze.level = random.randint(1, len(DoomLiteGame.MAPS))
-        self._winmaze._set_level(self._winmaze.level)
-        self._winmaze.px, self._winmaze.py = self._winmaze._player_start_for_level()
-        self._winmaze_dir = random.randint(0, 3)
-        self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
-        self._winmaze.ang = self._winmaze_target_ang
+        self._winmaze.configure_attract_maze()
         self._winmaze_path_phase = 0
         display.clear()
 
     def _winmaze_step(self):
         if self._winmaze is None:
             self._winmaze_init()
-        dm = self._winmaze
         self._winmaze_path_phase = (self._winmaze_path_phase + 1) & 255
-
-        dir_dx = (1, 0, -1, 0)
-        dir_dy = (0, -1, 0, 1)
-
-        def open_dir(d):
-            mx = int(dm.px) + dir_dx[d]
-            my = int(dm.py) + dir_dy[d]
-            return not dm._is_wall_tile(mx, my)
-
-        def choose_new_dir():
-            cur = self._winmaze_dir
-            left = (cur + 1) & 3
-            right = (cur - 1) & 3
-            back = (cur + 2) & 3
-            side_choices = []
-            if open_dir(left):
-                side_choices.append(left)
-            if open_dir(right):
-                side_choices.append(right)
-            if not open_dir(cur):
-                if side_choices:
-                    return side_choices[random.randint(0, len(side_choices) - 1)]
-                if open_dir(back):
-                    return back
-                return cur
-            if side_choices and random.randint(0, 99) < 28:
-                return side_choices[random.randint(0, len(side_choices) - 1)]
-            return cur
-
-        centered = (
-            abs(dm.px - (int(dm.px) + 0.5)) < 0.045 and
-            abs(dm.py - (int(dm.py) + 0.5)) < 0.045
-        )
-        if centered:
-            dm.px = int(dm.px) + 0.5
-            dm.py = int(dm.py) + 0.5
-            self._winmaze_dir = choose_new_dir()
-            self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
-
-        delta = ((self._winmaze_target_ang - dm.ang + 128) & 255) - 128
-        if delta:
-            step_ang = 8
-            if abs(delta) <= step_ang:
-                dm.ang = self._winmaze_target_ang
-            elif delta > 0:
-                dm.ang = (dm.ang + step_ang) & 255
-            else:
-                dm.ang = (dm.ang - step_ang) & 255
-        else:
-            step = 0.080
-            nx = dm.px + dir_dx[self._winmaze_dir] * step
-            ny = dm.py + dir_dy[self._winmaze_dir] * step
-            if dm._is_wall_pos(nx, ny):
-                dm.px = int(dm.px) + 0.5
-                dm.py = int(dm.py) + 0.5
-                self._winmaze_dir = choose_new_dir()
-                self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
-            else:
-                dm.px = nx
-                dm.py = ny
-
-        if (self._frame & 511) == 0:
-            dm.level = (dm.level % len(DoomLiteGame.MAPS)) + 1
-            dm._set_level(dm.level)
-            dm.px, dm.py = dm._player_start_for_level()
-            self._winmaze_dir = random.randint(0, 3)
-            self._winmaze_target_ang = (self._winmaze_dir * 64) & 255
-            dm.ang = self._winmaze_target_ang
-
-        sp = display.set_pixel
-        angle_step_fp = (dm.FOV << 16) // WIDTH
-        ang_fp = ((dm.ang + dm.HALF_FOV) & 255) << 16
-        theme = (dm.level - 1) & 3
-        for x in range(WIDTH):
-            ray_ang = (ang_fp >> 16) & 255
-            ang_fp -= angle_step_fp
-            dist, side = dm._cast_ray(ray_ang)
-            line_h = int(HEIGHT / (dist + 0.001))
-            if line_h < 1:
-                line_h = 1
-            elif line_h > HEIGHT:
-                line_h = HEIGHT
-            y0 = (HEIGHT - line_h) // 2
-            y1 = y0 + line_h
-            bright = 230 - int(dist * 18)
-            if bright < 28:
-                bright = 28
-            if side:
-                bright = (bright * 3) // 4
-            if theme == 0:
-                wr, wg, wb = bright, bright, bright
-            elif theme == 1:
-                wr, wg, wb = bright // 4, bright // 2, bright
-            elif theme == 2:
-                wr, wg, wb = bright // 3, bright, bright // 3
-            else:
-                wr, wg, wb = bright, bright // 3, bright
-            for y in range(HEIGHT):
-                if y < y0:
-                    sp(x, y, 0, 0, 18 + y // 4)
-                elif y <= y1:
-                    sp(x, y, wr, wg, wb)
-                else:
-                    f = 18 + (HEIGHT - y) // 3
-                    sp(x, y, f, f, f)
-
-        # No minimap here: the original Win95 Maze screensaver was pure fly-through.
+        self._winmaze.step_attract_maze(self._frame)
 
     # --- RIPPLE (water height-field) ---
     def _ripple_init(self):
@@ -13095,7 +13094,8 @@ class LunarLanderGame:
             lut.append((int(math.cos(math.radians(a)) * 256), int(math.sin(math.radians(a)) * 256)))
         cls._LUT = lut
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.mode = get_context_setting(ctx, "mode", "classic")
         self.level = 1
         self.total_score = 0
         self.reset()
@@ -13228,7 +13228,247 @@ class LunarLanderGame:
         if filled > 0:
             draw_rectangle(0, 0, filled - 1, 1, 255, 255, 0)
 
+    def _reset_v2(self):
+        self.level = 1
+        self.total_score = 0
+        self.world_w = 320
+        self.v2_pads = []
+        self.v2_powerups = []
+        self.v2_target = 0
+        self.v2_camera_x = 0
+        self.v2_docked = False
+        self.v2_docked_pad = -1
+        self.v2_terrain = self._make_v2_terrain()
+        self.x = 22.0
+        self.y = 12.0
+        self.vx = 0.0
+        self.vy = 0.0
+        self.angle = 90
+        self.fuel_max = 900
+        self.fuel = self.fuel_max
+        self.g = 0.092
+        self.thrust = 0.44
+        self.points = 500
+        self.last_points_ms = ticks_ms()
+        self.frame = 0
+
+    def _make_v2_terrain(self):
+        t = [PLAY_HEIGHT - 8] * self.world_w
+        pad_specs = ((18, 11, 47), (82, 10, 43), (145, 9, 39), (214, 9, 44), (284, 8, 36))
+        for x in range(self.world_w):
+            base = PLAY_HEIGHT - 10
+            wave = int(math.sin(x * 0.075) * 7 + math.sin(x * 0.021 + 1.7) * 5)
+            t[x] = clamp(base + wave, PLAY_HEIGHT - 25, PLAY_HEIGHT - 4)
+        for _ in range(2):
+            for x in range(1, self.world_w - 1):
+                t[x] = (t[x - 1] + t[x] + t[x + 1]) // 3
+        self.v2_pads = []
+        for px, pw, py in pad_specs:
+            self.v2_pads.append({"x": px, "w": pw, "y": py, "done": False})
+            for x in range(px, min(self.world_w, px + pw)):
+                t[x] = py
+        self.v2_powerups = [
+            {"x": 55, "y": 28, "kind": "FUEL", "on": True},
+            {"x": 124, "y": 24, "kind": "FUEL", "on": True},
+            {"x": 190, "y": 22, "kind": "FUEL", "on": True},
+            {"x": 252, "y": 26, "kind": "FUEL", "on": True},
+        ]
+        return t
+
+    def _v2_screen_x(self, world_x):
+        return int(world_x - self.v2_camera_x)
+
+    def _update_v2_camera(self):
+        target = int(self.x) - WIDTH // 2
+        self.v2_camera_x = clamp(target, 0, max(0, self.world_w - WIDTH))
+
+    def _draw_terrain_v2(self):
+        start = int(self.v2_camera_x)
+        sp = display.set_pixel
+        for sx in range(WIDTH):
+            wx = start + sx
+            if wx < 0 or wx >= self.world_w:
+                continue
+            ty = self.v2_terrain[wx]
+            col = (0, 80, 145)
+            for pad_i, pad in enumerate(self.v2_pads):
+                if pad["x"] <= wx < pad["x"] + pad["w"] and ty == pad["y"]:
+                    if pad_i == self.v2_target:
+                        col = (0, 255, 0)
+                    elif pad.get("done"):
+                        col = (60, 130, 80)
+                    else:
+                        col = (100, 100, 100)
+                    break
+            for y in range(ty, PLAY_HEIGHT):
+                sp(sx, y, col[0] // 2, col[1] // 2, col[2] // 2)
+            sp(sx, ty, *col)
+
+    def _draw_powerups_v2(self):
+        phase = (self.frame // 4) & 1
+        for p in self.v2_powerups:
+            if not p["on"]:
+                continue
+            sx = self._v2_screen_x(p["x"])
+            sy = int(p["y"])
+            if -2 <= sx < WIDTH + 2:
+                col = (255, 230, 40) if phase else (255, 120, 20)
+                draw_rectangle(sx - 1, sy - 1, sx + 1, sy + 1, *col)
+
+    def _draw_ship_v2(self, thrust_on=False):
+        old_x = self.x
+        self.x = self._v2_screen_x(old_x)
+        self._draw_ship(thrust_on)
+        self.x = old_x
+
+    def _collect_powerups_v2(self):
+        for p in self.v2_powerups:
+            if not p["on"]:
+                continue
+            if abs(self.x - p["x"]) <= 3 and abs(self.y - p["y"]) <= 3:
+                p["on"] = False
+                self.fuel = min(self.fuel_max, self.fuel + 260)
+                self.total_score += 75
+
+    def _dock_v2(self, pad_i):
+        pad = self.v2_pads[pad_i]
+        self.v2_docked = True
+        self.v2_docked_pad = pad_i
+        self.x = float(pad["x"] + pad["w"] // 2)
+        self.y = float(pad["y"] - 5)
+        self.vx = 0.0
+        self.vy = 0.0
+        self.angle = 90
+
+    def _v2_landing_result(self):
+        ix = clamp(int(self.x), 0, self.world_w - 1)
+        gy = self.v2_terrain[ix]
+        if self.y < gy - 1:
+            return None
+        soft = abs(self.vx) < 0.70 and abs(self.vy) < 1.25
+        upright = self._angle_diff(self.angle, 90) <= 25
+        landed_pad_i = -1
+        for i, pad in enumerate(self.v2_pads):
+            if pad["x"] <= ix < pad["x"] + pad["w"] and gy == pad["y"]:
+                landed_pad_i = i
+                break
+        if landed_pad_i >= 0 and soft and upright:
+            pad = self.v2_pads[landed_pad_i]
+            if landed_pad_i != self.v2_target:
+                if pad.get("done"):
+                    self._dock_v2(landed_pad_i)
+                    self.fuel = min(self.fuel_max, self.fuel + 80)
+                    return "docked"
+                return "crash"
+            pad["done"] = True
+            self.total_score += self.points + int(self.fuel) + 250
+            self.v2_target += 1
+            if self.v2_target >= len(self.v2_pads):
+                return "won"
+            self.points = 500 + self.v2_target * 80
+            self.fuel = min(self.fuel_max, self.fuel + 180)
+            self._dock_v2(landed_pad_i)
+            return "landed"
+        return "crash"
+
+    def _draw_v2_scene(self, thrust_on=False):
+        self._update_v2_camera()
+        display.clear()
+        self._draw_terrain_v2()
+        self._draw_powerups_v2()
+        self._draw_ship_v2(thrust_on)
+        self._draw_fuel_bar()
+        target = self.v2_pads[min(self.v2_target, len(self.v2_pads) - 1)]
+        tx = self._v2_screen_x(target["x"] + target["w"] // 2)
+        if 0 <= tx < WIDTH:
+            draw_text_small(clamp(tx - 3, 0, WIDTH - 12), 3, "V", 0, 255, 0)
+        display_score_and_time(global_score)
+
+    def _run_v2_frame(self, joystick):
+        global game_over, global_score
+        c_button, z_button = joystick.read_buttons()
+        if c_button:
+            return False
+        now = ticks_ms()
+        self.frame += 1
+        if ticks_diff(now, self.last_points_ms) >= 500:
+            self.last_points_ms = now
+            if self.points > 0:
+                self.points -= 1
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+        if d == JOYSTICK_LEFT:
+            self.angle = (self.angle + 5) % 360
+        elif d == JOYSTICK_RIGHT:
+            self.angle = (self.angle - 5) % 360
+        thrust_on = (z_button or d == JOYSTICK_UP) and self.fuel > 0
+        if self.v2_docked:
+            global_score = self.total_score + self.points
+            if thrust_on:
+                self.v2_docked = False
+                self.v2_docked_pad = -1
+                self.vy = -1.25
+                self.y -= 2.0
+            else:
+                self._draw_v2_scene(False)
+                return True
+        ax = 0.0
+        ay = self.g
+        if thrust_on:
+            c, s = self._cos_sin256(self.angle)
+            ax += (c / 256.0) * self.thrust
+            ay += (-s / 256.0) * self.thrust
+            self.fuel -= 1
+        self.vx = clamp(self.vx + ax, -2.8, 2.8)
+        self.vy = clamp(self.vy + ay, -3.4, 3.0)
+        self.x = clamp(self.x + self.vx, 1.0, self.world_w - 2.0)
+        self.y = max(0.0, self.y + self.vy)
+        self._collect_powerups_v2()
+        result = self._v2_landing_result()
+        if result == "crash":
+            set_game_over_score(self.total_score)
+            return False
+        if result == "won":
+            set_game_over_score(self.total_score, won=True)
+            return False
+        global_score = self.total_score + self.points
+        self._draw_v2_scene(thrust_on)
+        return True
+
+    def _main_loop_v2(self, joystick):
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+        self._reset_v2()
+        frame_ms = 35
+        last_frame = ticks_ms()
+        while not game_over:
+            if ticks_diff(ticks_ms(), last_frame) < frame_ms:
+                sleep_ms(2)
+                continue
+            last_frame = ticks_ms()
+            if not self._run_v2_frame(joystick):
+                return
+
+    async def _main_loop_v2_async(self, joystick):
+        if asyncio is None:
+            return self._main_loop_v2(joystick)
+        global game_over, global_score
+        game_over = False
+        global_score = 0
+        self._reset_v2()
+        frame_ms = 35
+        last_frame = ticks_ms()
+        while not game_over:
+            if ticks_diff(ticks_ms(), last_frame) < frame_ms:
+                await asyncio.sleep(0.002)
+                continue
+            last_frame = ticks_ms()
+            if not self._run_v2_frame(joystick):
+                return
+
     def main_loop(self, joystick):
+        if self.mode == "scroll":
+            return self._main_loop_v2(joystick)
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -13355,6 +13595,8 @@ class LunarLanderGame:
         """Async version for pygbag: yields with asyncio.sleep()."""
         if asyncio is None:
             return self.main_loop(joystick)
+        if self.mode == "scroll":
+            return await self._main_loop_v2_async(joystick)
 
         global game_over, global_score
         game_over = False
@@ -14116,6 +14358,12 @@ class DoomLiteGame:
         self._minimap_prev_player = None
         self._minimap_prev_aim = None
         self._minimap_prev_enemies = []
+        self.render_hud = True
+        self.render_minimap = True
+        self.render_crosshair = True
+        self.render_enemies = True
+        self._attract_dir = 0
+        self._attract_target_ang = 0
         self.reset()
 
     def reset(self):
@@ -14174,6 +14422,95 @@ class DoomLiteGame:
 
     def _is_wall_pos(self, x, y):
         return self._is_wall_tile(int(x), int(y))
+
+    def configure_attract_maze(self):
+        self.enemies = []
+        self.lives = 0
+        self.score = 0
+        self.wave_announce = 0
+        self.hit_flash = 0
+        self.dmg_flash = 0
+        self.render_hud = False
+        self.render_minimap = False
+        self.render_crosshair = False
+        self.render_enemies = False
+        self.level = random.randint(1, len(self.MAPS))
+        self._set_level(self.level)
+        self.px, self.py = self._player_start_for_level()
+        self._attract_dir = random.randint(0, 3)
+        self._attract_target_ang = (self._attract_dir * 64) & 255
+        self.ang = self._attract_target_ang
+
+    def _attract_open_dir(self, d):
+        dir_dx = (1, 0, -1, 0)
+        dir_dy = (0, -1, 0, 1)
+        mx = int(self.px) + dir_dx[d]
+        my = int(self.py) + dir_dy[d]
+        return not self._is_wall_tile(mx, my)
+
+    def _choose_attract_dir(self):
+        cur = self._attract_dir
+        left = (cur + 1) & 3
+        right = (cur - 1) & 3
+        back = (cur + 2) & 3
+        side_choices = []
+        if self._attract_open_dir(left):
+            side_choices.append(left)
+        if self._attract_open_dir(right):
+            side_choices.append(right)
+        if not self._attract_open_dir(cur):
+            if side_choices:
+                return side_choices[random.randint(0, len(side_choices) - 1)]
+            if self._attract_open_dir(back):
+                return back
+            return cur
+        if side_choices and random.randint(0, 99) < 28:
+            return side_choices[random.randint(0, len(side_choices) - 1)]
+        return cur
+
+    def step_attract_maze(self, frame=0):
+        dir_dx = (1, 0, -1, 0)
+        dir_dy = (0, -1, 0, 1)
+        centered = (
+            abs(self.px - (int(self.px) + 0.5)) < 0.045 and
+            abs(self.py - (int(self.py) + 0.5)) < 0.045
+        )
+        if centered:
+            self.px = int(self.px) + 0.5
+            self.py = int(self.py) + 0.5
+            self._attract_dir = self._choose_attract_dir()
+            self._attract_target_ang = (self._attract_dir * 64) & 255
+
+        delta = ((self._attract_target_ang - self.ang + 128) & 255) - 128
+        if delta:
+            step_ang = 8
+            if abs(delta) <= step_ang:
+                self.ang = self._attract_target_ang
+            elif delta > 0:
+                self.ang = (self.ang + step_ang) & 255
+            else:
+                self.ang = (self.ang - step_ang) & 255
+        else:
+            step = 0.080
+            nx = self.px + dir_dx[self._attract_dir] * step
+            ny = self.py + dir_dy[self._attract_dir] * step
+            if self._is_wall_pos(nx, ny):
+                self.px = int(self.px) + 0.5
+                self.py = int(self.py) + 0.5
+                self._attract_dir = self._choose_attract_dir()
+                self._attract_target_ang = (self._attract_dir * 64) & 255
+            else:
+                self.px = nx
+                self.py = ny
+
+        if (frame & 511) == 0:
+            self.level = (self.level % len(self.MAPS)) + 1
+            self._set_level(self.level)
+            self.px, self.py = self._player_start_for_level()
+            self._attract_dir = random.randint(0, 3)
+            self._attract_target_ang = (self._attract_dir * 64) & 255
+            self.ang = self._attract_target_ang
+        self._render()
 
     def _is_enemy_clear_pos(self, x, y):
         # Keep enemies visually away from walls so sprites do not scrape along
@@ -14524,8 +14861,8 @@ class DoomLiteGame:
         # We combine sky, wall, and floor rendering in one pass per column
         # to prevent overwriting pixels multiple times. This dramatically
         # reduces the dirty-pixel mask modifications and saves CPU time.
-        minimap_w = self.MAP_W + 2
-        minimap_h = self.MAP_H + 2
+        minimap_w = self.MAP_W + 2 if self.render_minimap else 0
+        minimap_h = self.MAP_H + 2 if self.render_minimap else 0
         
         # ray angles: fixedpoint, damit FOV/64 sauber läuft
         col_step = 2
@@ -14634,97 +14971,100 @@ class DoomLiteGame:
         # dx/dy stored alongside dist so we don't recalculate below.
         px = self.px
         py = self.py
-        alive = []
-        for e in self.enemies:
-            if e[2] > 0:
-                dx = e[0] - px
-                dy = e[1] - py
-                d = math.sqrt(dx * dx + dy * dy)
-                alive.append((d, e, dx, dy))
-        alive.sort(reverse=True)
-
-        HALF_FOV = self.HALF_FOV
-        FOV = self.FOV
         ang = self.ang
-        for dist, e, dx, dy in alive:
-            a = self._angle_to_units(dx, dy)
-            delta = self._angle_delta(a, ang)
-            if abs(delta) > HALF_FOV:
-                continue
+        if self.render_enemies:
+            alive = []
+            for e in self.enemies:
+                if e[2] > 0:
+                    dx = e[0] - px
+                    dy = e[1] - py
+                    d = math.sqrt(dx * dx + dy * dy)
+                    alive.append((d, e, dx, dy))
+            alive.sort(reverse=True)
 
-            sx = int((HALF_FOV - delta) * WIDTH / FOV)
-            if sx < 0 or sx >= WIDTH:
-                continue
+            HALF_FOV = self.HALF_FOV
+            FOV = self.FOV
+            for dist, e, dx, dy in alive:
+                a = self._angle_to_units(dx, dy)
+                delta = self._angle_delta(a, ang)
+                if abs(delta) > HALF_FOV:
+                    continue
 
-            # sprite size
-            sh = int(PLAY_H / (dist + 1e-6))
-            if sh < 2:
-                sh = 2
-            if sh > PLAY_H:
-                sh = PLAY_H
-            sw = sh // 3
-            if sw < 1:
-                sw = 1
-            if sw > 8:
-                sw = 8
+                sx = int((HALF_FOV - delta) * WIDTH / FOV)
+                if sx < 0 or sx >= WIDTH:
+                    continue
 
-            y0 = (PLAY_H - sh) // 2
-            y1 = y0 + sh - 1
+                # sprite size
+                sh = int(PLAY_H / (dist + 1e-6))
+                if sh < 2:
+                    sh = 2
+                if sh > PLAY_H:
+                    sh = PLAY_H
+                sw = sh // 3
+                if sw < 1:
+                    sw = 1
+                if sw > 8:
+                    sw = 8
 
-            x0 = sx - sw // 2
-            x1 = x0 + sw - 1
+                y0 = (PLAY_H - sh) // 2
+                y1 = y0 + sh - 1
 
-            typ = e[4] if len(e) > 4 else 0
-            anim = e[5] if len(e) > 5 else 0
-            self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim)
+                x0 = sx - sw // 2
+                x1 = x0 + sw - 1
 
-        # minimap overlay: keep the background static and only refresh markers.
-        if not self._minimap_initialized:
-            draw_rectangle(0, 0, self.MAP_W + 1, self.MAP_H + 1, 0, 0, 0)
-            for mx, my in self._minimap_walls:
-                sp(mx, my, 0, 0, 160)
-            self._minimap_initialized = True
-        else:
-            if self._minimap_prev_player is not None:
-                self._restore_minimap_cell(self._minimap_prev_player[0], self._minimap_prev_player[1])
-            if self._minimap_prev_aim is not None:
-                self._restore_minimap_cell(self._minimap_prev_aim[0], self._minimap_prev_aim[1])
-            for ex, ey in self._minimap_prev_enemies:
-                self._restore_minimap_cell(ex, ey)
+                typ = e[4] if len(e) > 4 else 0
+                anim = e[5] if len(e) > 5 else 0
+                self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim)
 
-        player_cell = (int(px), int(py))
-        sp(player_cell[0], player_cell[1], 0, 255, 0)
-        # direction hint
-        dc, ds = self._cos_sin(ang)
-        ax = int(px + dc * 0.7)
-        ay = int(py - ds * 0.7)
-        aim_cell = None
-        if 0 <= ax < self.MAP_W and 0 <= ay < self.MAP_H:
-            sp(ax, ay, 0, 200, 0)
-            aim_cell = (ax, ay)
-        current_enemy_cells = []
-        for e in self.enemies:
-            if e[2] > 0:
-                ex = int(e[0])
-                ey = int(e[1])
-                if 0 <= ex < self.MAP_W and 0 <= ey < self.MAP_H:
-                    current_enemy_cells.append((ex, ey))
-                    typ = e[4] if len(e) > 4 else 0
-                    if typ == 2:
-                        sp(ex, ey, 180, 60, 255)
-                    elif typ == 1:
-                        sp(ex, ey, 255, 130, 0)
-                    else:
-                        sp(ex, ey, 255, 0, 0)
-        self._minimap_prev_player = player_cell
-        self._minimap_prev_aim = aim_cell
-        self._minimap_prev_enemies = current_enemy_cells
+        if self.render_minimap:
+            # minimap overlay: keep the background static and only refresh markers.
+            if not self._minimap_initialized:
+                draw_rectangle(0, 0, self.MAP_W + 1, self.MAP_H + 1, 0, 0, 0)
+                for mx, my in self._minimap_walls:
+                    sp(mx, my, 0, 0, 160)
+                self._minimap_initialized = True
+            else:
+                if self._minimap_prev_player is not None:
+                    self._restore_minimap_cell(self._minimap_prev_player[0], self._minimap_prev_player[1])
+                if self._minimap_prev_aim is not None:
+                    self._restore_minimap_cell(self._minimap_prev_aim[0], self._minimap_prev_aim[1])
+                for ex, ey in self._minimap_prev_enemies:
+                    self._restore_minimap_cell(ex, ey)
 
-        # lives indicator - 2x2 red blocks (oben rechts)
-        for i in range(self.lives):
-            lx = WIDTH - 3 - i * 4
-            ly = 1
-            draw_rectangle(lx, ly, lx + 1, ly + 1, 220, 30, 30)
+            player_cell = (int(px), int(py))
+            sp(player_cell[0], player_cell[1], 0, 255, 0)
+            # direction hint
+            dc, ds = self._cos_sin(ang)
+            ax = int(px + dc * 0.7)
+            ay = int(py - ds * 0.7)
+            aim_cell = None
+            if 0 <= ax < self.MAP_W and 0 <= ay < self.MAP_H:
+                sp(ax, ay, 0, 200, 0)
+                aim_cell = (ax, ay)
+            current_enemy_cells = []
+            for e in self.enemies:
+                if e[2] > 0:
+                    ex = int(e[0])
+                    ey = int(e[1])
+                    if 0 <= ex < self.MAP_W and 0 <= ey < self.MAP_H:
+                        current_enemy_cells.append((ex, ey))
+                        typ = e[4] if len(e) > 4 else 0
+                        if typ == 2:
+                            sp(ex, ey, 180, 60, 255)
+                        elif typ == 1:
+                            sp(ex, ey, 255, 130, 0)
+                        else:
+                            sp(ex, ey, 255, 0, 0)
+            self._minimap_prev_player = player_cell
+            self._minimap_prev_aim = aim_cell
+            self._minimap_prev_enemies = current_enemy_cells
+
+        if self.render_hud:
+            # lives indicator - 2x2 red blocks (oben rechts)
+            for i in range(self.lives):
+                lx = WIDTH - 3 - i * 4
+                ly = 1
+                draw_rectangle(lx, ly, lx + 1, ly + 1, 220, 30, 30)
 
         # wave announcement banner
         if self.wave_announce > 0:
@@ -14734,20 +15074,22 @@ class DoomLiteGame:
             draw_rectangle(wx - 1, wy - 1, wx + len(wlabel) * 6, wy + 5, 0, 0, 0)
             draw_text_small(wx, wy, wlabel, 255, 220, 0)
 
-        # crosshair (+ shape, flashes yellow on hit)
-        cx = WIDTH // 2
-        cy = PLAY_H // 2
-        if self.hit_flash > 0:
-            cr, cg, cb = 255, 255, 0
-        else:
-            cr, cg, cb = 200, 200, 200
-        for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
-            xx = cx + dx
-            yy = cy + dy
-            if 0 <= xx < WIDTH and 0 <= yy < PLAY_H:
-                sp(xx, yy, cr, cg, cb)
+        if self.render_crosshair:
+            # crosshair (+ shape, flashes yellow on hit)
+            cx = WIDTH // 2
+            cy = PLAY_H // 2
+            if self.hit_flash > 0:
+                cr, cg, cb = 255, 255, 0
+            else:
+                cr, cg, cb = 200, 200, 200
+            for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                xx = cx + dx
+                yy = cy + dy
+                if 0 <= xx < WIDTH and 0 <= yy < PLAY_H:
+                    sp(xx, yy, cr, cg, cb)
 
-        display_score_and_time(self.score)
+        if self.render_hud:
+            display_score_and_time(self.score)
 
     def main_loop(self, joystick):
         global game_over, global_score
