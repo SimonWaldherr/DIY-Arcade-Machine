@@ -1911,6 +1911,14 @@ class GameSettings:
             ("gravity", "GRAV", ((False, "OFF"), (True, "ON")), 0),
             ("multi_shot", "MULTI", ((False, "OFF"), (True, "ON")), 0),
         ),
+        "BILLI": (
+            ("rules", "RULE", (("pool", "POOL"), ("snooker", "SNOOK")), 0),
+            ("aim", "AIM", (("short", "SHORT"), ("long", "LONG")), 0),
+        ),
+        "AIRHKY": (
+            ("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),
+            ("goals", "GOALS", ((3, "3"), (5, "5"), (7, "7")), 1),
+        ),
         "BRKOUT": (
             ("powerups", "POWER", ((False, "OFF"), (True, "ON")), 0),
         ),
@@ -2791,6 +2799,313 @@ class PongGame:
         if asyncio is None:
             return self.main_loop(joystick)
         await _run_game_loop_async(45, self._build_step(joystick))
+
+
+class AirHockeyGame:
+    """
+    AIRHKY
+    Controls:
+      - Left / Right / Up / Down: move mallet
+      - C: return to menu
+    Fast puck-and-mallet air hockey with CPU or local 2-player support.
+    """
+    FRAME_MS = 30
+    RINK_LEFT = 3
+    RINK_RIGHT = WIDTH - 4
+    RINK_TOP = 3
+    RINK_BOTTOM = PLAY_HEIGHT - 3
+    GOAL_HALF = 7
+    PUCK_R = 1.1
+    MALLET_R = 3.3
+    MALLET_SPEED = 1.55
+    CPU_SPEED = 1.35
+    PUCK_MAX_SPEED = 4.3
+
+    def __init__(self, ctx=None):
+        self.players_mode = get_context_setting(ctx, "players", "cpu")
+        self.target_goals = int(get_context_setting(ctx, "goals", 5) or 5)
+        self.reset()
+
+    def reset(self):
+        self.left_score = 0
+        self.right_score = 0
+        self.frame = 0
+        self.flash = 0
+        self.last_z = False
+        self.left_x = 12.0
+        self.left_y = PLAY_HEIGHT / 2
+        self.right_x = WIDTH - 13.0
+        self.right_y = PLAY_HEIGHT / 2
+        self.prev_left_x = self.left_x
+        self.prev_left_y = self.left_y
+        self.prev_right_x = self.right_x
+        self.prev_right_y = self.right_y
+        self.puck_x = WIDTH / 2
+        self.puck_y = PLAY_HEIGHT / 2
+        self.puck_vx = 1.65
+        self.puck_vy = random.choice((-0.9, -0.45, 0.45, 0.9))
+
+    def _puck_speed(self):
+        return math.sqrt(self.puck_vx * self.puck_vx + self.puck_vy * self.puck_vy)
+
+    def _serve(self, direction=1):
+        self.puck_x = WIDTH / 2
+        self.puck_y = PLAY_HEIGHT / 2
+        self.puck_vx = direction * (1.25 + random.random() * 0.55)
+        self.puck_vy = random.choice((-0.95, -0.55, 0.55, 0.95))
+        self.flash = 8
+
+    def _keep_left(self, x, y):
+        return clamp(x, self.RINK_LEFT + 4, WIDTH / 2 - 6), clamp(y, self.RINK_TOP + 4, self.RINK_BOTTOM - 4)
+
+    def _keep_right(self, x, y):
+        return clamp(x, WIDTH / 2 + 6, self.RINK_RIGHT - 4), clamp(y, self.RINK_TOP + 4, self.RINK_BOTTOM - 4)
+
+    def _move_left(self, direction):
+        if direction is None:
+            self.prev_left_x = self.left_x
+            self.prev_left_y = self.left_y
+            return
+        dx, dy = direction_to_delta_8way(direction)
+        self.prev_left_x = self.left_x
+        self.prev_left_y = self.left_y
+        self.left_x, self.left_y = self._keep_left(self.left_x + dx * self.MALLET_SPEED, self.left_y + dy * self.MALLET_SPEED)
+
+    def _move_right(self, direction):
+        if direction is None:
+            self.prev_right_x = self.right_x
+            self.prev_right_y = self.right_y
+            return
+        dx, dy = direction_to_delta_8way(direction)
+        self.prev_right_x = self.right_x
+        self.prev_right_y = self.right_y
+        self.right_x, self.right_y = self._keep_right(self.right_x + dx * self.MALLET_SPEED, self.right_y + dy * self.MALLET_SPEED)
+
+    def _predict_puck_y(self, target_x):
+        x = self.puck_x
+        y = self.puck_y
+        vx = self.puck_vx
+        vy = self.puck_vy
+        if abs(vx) < 0.08:
+            return y
+        for _ in range(96):
+            if vx > 0 and x >= target_x:
+                break
+            if vx < 0 and x <= target_x:
+                break
+            x += vx
+            y += vy
+            vx *= 0.995
+            vy *= 0.995
+            if y <= self.RINK_TOP + self.PUCK_R:
+                y = self.RINK_TOP + self.PUCK_R
+                vy = abs(vy)
+            elif y >= self.RINK_BOTTOM - self.PUCK_R:
+                y = self.RINK_BOTTOM - self.PUCK_R
+                vy = -abs(vy)
+        return clamp(y, self.RINK_TOP + 3, self.RINK_BOTTOM - 3)
+
+    def _cpu_direction(self):
+        defend = self.puck_vx > 0.04 or self.puck_x > WIDTH * 0.58
+        if defend:
+            target_x = self.RINK_RIGHT - 8.0
+            target_y = self._predict_puck_y(target_x)
+            target_y += clamp(self.puck_vy * 2.4, -2.2, 2.2)
+            if self.puck_x > WIDTH * 0.78:
+                target_y += clamp((self.puck_y - PLAY_HEIGHT / 2) * 0.16, -1.5, 1.5)
+        else:
+            target_x = WIDTH - 13.0
+            target_y = PLAY_HEIGHT / 2 + clamp((self.puck_y - PLAY_HEIGHT / 2) * 0.28, -3.5, 3.5)
+        dx = target_x - self.right_x
+        dy = target_y - self.right_y
+        if abs(dx) < 0.8 and abs(dy) < 0.8:
+            return None
+        dirs = []
+        if dy < -1:
+            dirs.append(JOYSTICK_UP)
+        elif dy > 1:
+            dirs.append(JOYSTICK_DOWN)
+        if dx < -1:
+            dirs.append(JOYSTICK_LEFT)
+        elif dx > 1:
+            dirs.append(JOYSTICK_RIGHT)
+        if len(dirs) == 2:
+            pair = tuple(sorted(dirs))
+            if pair == (JOYSTICK_LEFT, JOYSTICK_UP):
+                return JOYSTICK_UP_LEFT
+            if pair == (JOYSTICK_RIGHT, JOYSTICK_UP):
+                return JOYSTICK_UP_RIGHT
+            if pair == (JOYSTICK_LEFT, JOYSTICK_DOWN):
+                return JOYSTICK_DOWN_LEFT
+            if pair == (JOYSTICK_DOWN, JOYSTICK_RIGHT):
+                return JOYSTICK_DOWN_RIGHT
+        return dirs[0] if dirs else None
+
+    def _bounce_puck_off_mallet(self, mx, my, prev_mx, prev_my):
+        dx = self.puck_x - mx
+        dy = self.puck_y - my
+        min_d = self.MALLET_R + self.PUCK_R
+        d2 = dx * dx + dy * dy
+        if d2 <= 0.0001 or d2 >= min_d * min_d:
+            return False
+        dist = math.sqrt(d2)
+        nx = dx / dist
+        ny = dy / dist
+        overlap = min_d - dist
+        self.puck_x += nx * overlap
+        self.puck_y += ny * overlap
+        rel_vx = self.puck_vx - (mx - prev_mx) * 0.6
+        rel_vy = self.puck_vy - (my - prev_my) * 0.6
+        vel_n = rel_vx * nx + rel_vy * ny
+        if vel_n > 0:
+            vel_n = -vel_n * 0.5
+        self.puck_vx -= 1.9 * vel_n * nx
+        self.puck_vy -= 1.9 * vel_n * ny
+        self.puck_vx += (mx - prev_mx) * 0.45
+        self.puck_vy += (my - prev_my) * 0.45
+        speed = self._puck_speed()
+        if speed > self.PUCK_MAX_SPEED:
+            scale = self.PUCK_MAX_SPEED / speed
+            self.puck_vx *= scale
+            self.puck_vy *= scale
+        self.flash = 4
+        return True
+
+    def _goal(self, left_side):
+        if left_side:
+            self.right_score += 1
+            self._serve(1)
+        else:
+            self.left_score += 1
+            self._serve(-1)
+        global global_score
+        global_score = max(self.left_score, self.right_score)
+        if self.left_score >= self.target_goals or self.right_score >= self.target_goals:
+            won = self.left_score > self.right_score
+            if self.players_mode == "two":
+                won = self.left_score > self.right_score
+            set_game_over_score(max(self.left_score, self.right_score), won=won)
+            return True
+        return False
+
+    def _advance_puck(self):
+        self.puck_x += self.puck_vx
+        self.puck_y += self.puck_vy
+        self.puck_vx *= 0.995
+        self.puck_vy *= 0.995
+        if self._puck_speed() < 0.03:
+            self.puck_vx = 0.0
+            self.puck_vy = 0.0
+
+        if self.puck_y <= self.RINK_TOP + self.PUCK_R:
+            self.puck_y = self.RINK_TOP + self.PUCK_R
+            self.puck_vy = abs(self.puck_vy)
+        elif self.puck_y >= self.RINK_BOTTOM - self.PUCK_R:
+            self.puck_y = self.RINK_BOTTOM - self.PUCK_R
+            self.puck_vy = -abs(self.puck_vy)
+
+        goal_y = PLAY_HEIGHT / 2
+        if self.puck_x <= self.RINK_LEFT + self.PUCK_R:
+            if abs(self.puck_y - goal_y) <= self.GOAL_HALF:
+                if self._goal(left_side=True):
+                    return False
+                return True
+            self.puck_x = self.RINK_LEFT + self.PUCK_R
+            self.puck_vx = abs(self.puck_vx)
+        elif self.puck_x >= self.RINK_RIGHT - self.PUCK_R:
+            if abs(self.puck_y - goal_y) <= self.GOAL_HALF:
+                if self._goal(left_side=False):
+                    return False
+                return True
+            self.puck_x = self.RINK_RIGHT - self.PUCK_R
+            self.puck_vx = -abs(self.puck_vx)
+
+        self._bounce_puck_off_mallet(self.left_x, self.left_y, self.prev_left_x, self.prev_left_y)
+        self._bounce_puck_off_mallet(self.right_x, self.right_y, self.prev_right_x, self.prev_right_y)
+        return True
+
+    def _draw_rink(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 14, 90, 70)
+        draw_rectangle(self.RINK_LEFT, self.RINK_TOP, self.RINK_RIGHT, self.RINK_BOTTOM, 8, 120, 92)
+        draw_rect_outline(self.RINK_LEFT, self.RINK_TOP, self.RINK_RIGHT, self.RINK_BOTTOM, 220, 220, 220)
+        draw_line(WIDTH // 2, self.RINK_TOP + 1, WIDTH // 2, self.RINK_BOTTOM - 1, 220, 220, 220)
+        for y in range(self.RINK_TOP + 4, self.RINK_BOTTOM - 3, 8):
+            draw_line(WIDTH // 2 - 1, y, WIDTH // 2 + 1, y + 1, 220, 220, 220)
+        goal_y1 = int(PLAY_HEIGHT / 2 - self.GOAL_HALF)
+        goal_y2 = int(PLAY_HEIGHT / 2 + self.GOAL_HALF)
+        draw_rectangle(self.RINK_LEFT, goal_y1, self.RINK_LEFT + 1, goal_y2, 0, 0, 0)
+        draw_rectangle(self.RINK_RIGHT - 1, goal_y1, self.RINK_RIGHT, goal_y2, 0, 0, 0)
+
+    def _draw_player(self, x, y, color):
+        draw_rectangle(int(x) - 2, int(y) - 2, int(x) + 2, int(y) + 2, *color)
+        draw_rect_outline(int(x) - 2, int(y) - 2, int(x) + 2, int(y) + 2, 255, 255, 255)
+
+    def _draw_hud(self):
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, str(self.left_score), 70, 170, 255)
+        draw_text_small(11, PLAY_HEIGHT, "-", 255, 255, 255)
+        draw_text_small(18, PLAY_HEIGHT, str(self.right_score), 255, 90, 90)
+        draw_text_small(31, PLAY_HEIGHT, "T" + str(self.target_goals), 200, 200, 200)
+        mode = "2P" if self.players_mode == "two" else "CPU"
+        draw_text_small(44, PLAY_HEIGHT, mode, 160, 160, 160)
+
+    def _draw(self):
+        self._draw_rink()
+        self._draw_player(self.left_x, self.left_y, (70, 170, 255))
+        self._draw_player(self.right_x, self.right_y, (255, 90, 90))
+        if self.flash:
+            self.flash -= 1
+        draw_rectangle(int(self.puck_x) - 1, int(self.puck_y) - 1, int(self.puck_x) + 1, int(self.puck_y) + 1, 255, 255, 255)
+        self._draw_hud()
+        global global_score
+        global_score = max(self.left_score, self.right_score)
+        display_flush()
+
+    def _build_step(self, joystick):
+        self.reset()
+        begin_game(0)
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self.frame += 1
+            if self.players_mode == "two":
+                left_dir = read_wasd_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                     JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT],
+                    debounce=True
+                )
+                right_dir = joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                     JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT],
+                    debounce=True
+                )
+            else:
+                left_dir = joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                     JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT],
+                    debounce=True
+                )
+                right_dir = self._cpu_direction()
+            self._move_left(left_dir)
+            self._move_right(right_dir)
+            if not self._advance_puck():
+                self._draw()
+                return False
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
 
 # ---------- Breakout ----------
 PADDLE_WIDTH = const(12)
@@ -10565,7 +10880,7 @@ class DemosGame:
         "KEEN", "LANDER", "LASER", "LOCO", "MAZE", "MINES", "ORBIT", "ORBTAL", "PACMAN",
         "PAIRS", "PINBAL", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE",
         "SABOTR", "SIMON", "SNAKE", "SOCCER", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
-        "STKARC", "UFODEF",
+        "STKARC", "UFODEF", "AIRHKY",
     )
     GAME_CLASS_NAMES = {
         "2048": "Game2048",
@@ -10601,6 +10916,7 @@ class DemosGame:
         "PINBAL": "PinballGame",
         "PITFAL": "PitfallGame",
         "PONG": "PongGame",
+        "AIRHKY": "AirHockeyGame",
         "QIX": "QixGame",
         "RAYRCR": "RayRacerGame",
         "REVRS": "OthelloGame",
@@ -16636,6 +16952,373 @@ class DefuseGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
+class BilliardsGame:
+    """
+    BILLI
+    Controls:
+      - Left / Right: aim
+      - Up / Down: set power
+      - Z: strike cue ball
+      - C: return to menu
+    Compact billiards with Pool/Snooker setups, pockets, rails, and ball physics.
+    """
+    FRAME_MS = 34
+    LEFT = 4
+    RIGHT = WIDTH - 5
+    TOP = 4
+    BOTTOM = PLAY_HEIGHT - 4
+    BALL_R = 1.45
+    FRICTION = 0.982
+    RESTITUTION = 0.92
+
+    def __init__(self, ctx=None):
+        self.rules = get_context_setting(ctx, "rules", "pool")
+        self.long_aim = get_context_setting(ctx, "aim", "short") == "long"
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+        self.strokes = 0
+        self.angle = 0
+        self.power = 5
+        self.last_z = False
+        self.aim_hold_dir = None
+        self.aim_hold_count = 0
+        self.power_hold_dir = None
+        self.power_hold_count = 0
+        self.foul_flash = 0
+        self.win_pending = False
+        self._rack()
+
+    def _ball(self, x, y, color, value, active=True):
+        return [float(x), float(y), 0.0, 0.0, color, int(value), bool(active)]
+
+    def _rack(self):
+        self.balls = []
+        self.balls.append(self._ball(16, (self.TOP + self.BOTTOM) // 2, (245, 245, 245), 0))
+        if self.rules == "snooker":
+            reds = ((43, 25), (46, 23), (46, 27), (49, 21), (49, 25), (49, 29))
+            for x, y in reds:
+                self.balls.append(self._ball(x, y, (220, 35, 35), 1))
+            colors = (
+                (39, 18, (255, 230, 40), 2),
+                (39, 36, (60, 220, 80), 3),
+                (51, 25, (40, 80, 255), 5),
+                (53, 20, (255, 80, 220), 6),
+                (53, 31, (20, 20, 20), 7),
+            )
+            for x, y, col, val in colors:
+                self.balls.append(self._ball(x, y, col, val))
+        else:
+            rack = (
+                (43, 29, (255, 210, 35), 1),
+                (46, 27, (35, 80, 255), 2),
+                (46, 31, (255, 50, 50), 3),
+                (49, 25, (150, 70, 255), 4),
+                (49, 29, (255, 135, 35), 5),
+                (49, 33, (40, 210, 90), 6),
+                (52, 29, (20, 20, 20), 8),
+            )
+            for x, y, col, val in rack:
+                self.balls.append(self._ball(x, y, col, val))
+
+    def _pockets(self):
+        mid_x = WIDTH // 2
+        return (
+            (self.LEFT, self.TOP), (mid_x, self.TOP), (self.RIGHT, self.TOP),
+            (self.LEFT, self.BOTTOM), (mid_x, self.BOTTOM), (self.RIGHT, self.BOTTOM),
+        )
+
+    def _moving(self):
+        for b in self.balls:
+            if b[6] and (abs(b[2]) > 0.035 or abs(b[3]) > 0.035):
+                return True
+        return False
+
+    def _draw_disc(self, cx, cy, radius, color):
+        r2 = radius * radius
+        for yy in range(int(cy - radius), int(cy + radius) + 1):
+            for xx in range(int(cx - radius), int(cx + radius) + 1):
+                dx = xx - cx
+                dy = yy - cy
+                if dx * dx + dy * dy <= r2:
+                    set_pixel_clipped(xx, yy, color[0], color[1], color[2])
+
+    def _reset_cue(self):
+        cue = self.balls[0]
+        cue[0] = 16.0
+        cue[1] = float((self.TOP + self.BOTTOM) // 2)
+        cue[2] = 0.0
+        cue[3] = 0.0
+        cue[6] = True
+        for _ in range(16):
+            ok = True
+            for b in self.balls[1:]:
+                if not b[6]:
+                    continue
+                dx = b[0] - cue[0]
+                dy = b[1] - cue[1]
+                if dx * dx + dy * dy < 18:
+                    ok = False
+                    break
+            if ok:
+                return
+            cue[1] += 2.0
+            if cue[1] > self.BOTTOM - 5:
+                cue[1] = self.TOP + 5
+
+    def _object_balls_left(self):
+        for b in self.balls[1:]:
+            if b[6]:
+                return True
+        return False
+
+    def _strike(self):
+        cue = self.balls[0]
+        if not cue[6] or self._moving():
+            return
+        rad = math.radians(self.angle)
+        cue[2] = math.cos(rad) * self.power * 0.47
+        cue[3] = math.sin(rad) * self.power * 0.47
+        self.strokes += 1
+
+    def _aim_step_for_hold(self):
+        if self.aim_hold_count <= 5:
+            return 1
+        return 4
+
+    def _power_step_for_hold(self):
+        if self.power_hold_count <= 4:
+            return 1
+        return 2
+
+    def _handle_input(self, joystick, z_button):
+        if self._moving():
+            self.last_z = z_button
+            self.aim_hold_dir = None
+            self.aim_hold_count = 0
+            self.power_hold_dir = None
+            self.power_hold_count = 0
+            return
+        # Aim needs raw per-frame hold detection. The default debounce would
+        # drop repeated held directions and prevent the fast-step mode from
+        # ever kicking in reliably.
+        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
+        if d == JOYSTICK_LEFT:
+            if self.aim_hold_dir == d:
+                self.aim_hold_count += 1
+            else:
+                self.aim_hold_dir = d
+                self.aim_hold_count = 1
+            step = self._aim_step_for_hold()
+            self.angle = (self.angle - step) % 360
+            self.power_hold_dir = None
+            self.power_hold_count = 0
+        elif d == JOYSTICK_RIGHT:
+            if self.aim_hold_dir == d:
+                self.aim_hold_count += 1
+            else:
+                self.aim_hold_dir = d
+                self.aim_hold_count = 1
+            step = self._aim_step_for_hold()
+            self.angle = (self.angle + step) % 360
+            self.power_hold_dir = None
+            self.power_hold_count = 0
+        elif d == JOYSTICK_UP:
+            self.aim_hold_dir = None
+            self.aim_hold_count = 0
+            if self.power_hold_dir == d:
+                self.power_hold_count += 1
+            else:
+                self.power_hold_dir = d
+                self.power_hold_count = 1
+            self.power = min(10, self.power + self._power_step_for_hold())
+        elif d == JOYSTICK_DOWN:
+            self.aim_hold_dir = None
+            self.aim_hold_count = 0
+            if self.power_hold_dir == d:
+                self.power_hold_count += 1
+            else:
+                self.power_hold_dir = d
+                self.power_hold_count = 1
+            self.power = max(1, self.power - self._power_step_for_hold())
+        else:
+            self.aim_hold_dir = None
+            self.aim_hold_count = 0
+            self.power_hold_dir = None
+            self.power_hold_count = 0
+        if z_button and not self.last_z:
+            self._strike()
+        self.last_z = z_button
+
+    def _pocket_ball(self, idx):
+        ball = self.balls[idx]
+        ball[2] = 0.0
+        ball[3] = 0.0
+        ball[6] = False
+        if idx == 0:
+            self.score = max(0, self.score - 20)
+            self.foul_flash = 18
+            return
+        mult = 18 if self.rules == "snooker" else 30
+        self.score += ball[5] * mult
+
+    def _wall_bounce(self, b):
+        if b[0] <= self.LEFT + self.BALL_R:
+            b[0] = self.LEFT + self.BALL_R
+            b[2] = abs(b[2]) * self.RESTITUTION
+        elif b[0] >= self.RIGHT - self.BALL_R:
+            b[0] = self.RIGHT - self.BALL_R
+            b[2] = -abs(b[2]) * self.RESTITUTION
+        if b[1] <= self.TOP + self.BALL_R:
+            b[1] = self.TOP + self.BALL_R
+            b[3] = abs(b[3]) * self.RESTITUTION
+        elif b[1] >= self.BOTTOM - self.BALL_R:
+            b[1] = self.BOTTOM - self.BALL_R
+            b[3] = -abs(b[3]) * self.RESTITUTION
+
+    def _collide_pair(self, a, b):
+        if not a[6] or not b[6]:
+            return
+        dx = b[0] - a[0]
+        dy = b[1] - a[1]
+        min_d = self.BALL_R * 2.0
+        d2 = dx * dx + dy * dy
+        if d2 <= 0.0001 or d2 >= min_d * min_d:
+            return
+        dist = math.sqrt(d2)
+        nx = dx / dist
+        ny = dy / dist
+        overlap = (min_d - dist) * 0.5
+        a[0] -= nx * overlap
+        a[1] -= ny * overlap
+        b[0] += nx * overlap
+        b[1] += ny * overlap
+        rvx = b[2] - a[2]
+        rvy = b[3] - a[3]
+        vel_n = rvx * nx + rvy * ny
+        if vel_n > 0:
+            return
+        impulse = -(1.0 + self.RESTITUTION) * vel_n * 0.5
+        ix = impulse * nx
+        iy = impulse * ny
+        a[2] -= ix
+        a[3] -= iy
+        b[2] += ix
+        b[3] += iy
+
+    def _advance(self):
+        if self.foul_flash > 0:
+            self.foul_flash -= 1
+        for _ in range(2):
+            for idx, b in enumerate(self.balls):
+                if not b[6]:
+                    continue
+                b[0] += b[2] * 0.5
+                b[1] += b[3] * 0.5
+                for px, py in self._pockets():
+                    dx = b[0] - px
+                    dy = b[1] - py
+                    if dx * dx + dy * dy <= 10.5:
+                        self._pocket_ball(idx)
+                        break
+                if not b[6]:
+                    continue
+                self._wall_bounce(b)
+            for i in range(len(self.balls)):
+                for j in range(i + 1, len(self.balls)):
+                    self._collide_pair(self.balls[i], self.balls[j])
+            for b in self.balls:
+                if not b[6]:
+                    continue
+                b[2] *= self.FRICTION
+                b[3] *= self.FRICTION
+                if abs(b[2]) < 0.025:
+                    b[2] = 0.0
+                if abs(b[3]) < 0.025:
+                    b[3] = 0.0
+        if not self._moving() and not self.balls[0][6]:
+            self._reset_cue()
+        if not self._object_balls_left():
+            bonus = max(0, 260 - self.strokes * 8)
+            set_game_over_score(self.score + bonus, won=True)
+            return False
+        return True
+
+    def _draw_table(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 44, 24, 10)
+        draw_rectangle(self.LEFT, self.TOP, self.RIGHT, self.BOTTOM, 8, 95, 36)
+        draw_rect_outline(self.LEFT, self.TOP, self.RIGHT, self.BOTTOM, 95, 58, 24)
+        draw_rect_outline(self.LEFT - 1, self.TOP - 1, self.RIGHT + 1, self.BOTTOM + 1, 130, 78, 32)
+        for px, py in self._pockets():
+            self._draw_disc(px, py, 3.0, (0, 0, 0))
+
+    def _draw_aim(self):
+        if self._moving() or not self.balls[0][6]:
+            return
+        cue = self.balls[0]
+        rad = math.radians(self.angle)
+        length = 26 if self.long_aim else 14
+        x0 = int(cue[0])
+        y0 = int(cue[1])
+        x1 = int(cue[0] + math.cos(rad) * length)
+        y1 = int(cue[1] + math.sin(rad) * length)
+        draw_line(x0, y0, x1, y1, 255, 255, 160)
+        bx = int(cue[0] - math.cos(rad) * 5)
+        by = int(cue[1] - math.sin(rad) * 5)
+        draw_line(bx, by, x0, y0, 170, 105, 45)
+
+    def _draw_balls(self):
+        for idx, b in enumerate(self.balls):
+            if not b[6]:
+                continue
+            self._draw_disc(b[0], b[1], self.BALL_R + 0.5, (0, 0, 0))
+            self._draw_disc(b[0], b[1], self.BALL_R, b[4])
+            if idx != 0 and b[5] >= 8:
+                set_pixel_clipped(int(b[0]), int(b[1]), 255, 255, 255)
+
+    def _draw_hud(self):
+        label = "SNO" if self.rules == "snooker" else "POOL"
+        draw_text_small(1, 1, label, 230, 230, 230)
+        if not self._moving():
+            draw_text_small(21, 1, "A" + str(int(self.angle) % 360), 210, 210, 210)
+            draw_rectangle(WIDTH - 13, 1, WIDTH - 3, 3, 35, 35, 35)
+            draw_rectangle(WIDTH - 13, 1, WIDTH - 14 + self.power, 3, 255, 220, 50)
+        if self.foul_flash:
+            draw_text_small(21, 1, "FOUL", 255, 70, 45)
+
+    def _draw(self):
+        self._draw_table()
+        self._draw_aim()
+        self._draw_balls()
+        self._draw_hud()
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        self.reset()
+        begin_game(0)
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self._handle_input(joystick, z_button)
+            if not self._advance():
+                return False
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
 class GolfGame:
     """
     GOLF
@@ -21950,10 +22633,12 @@ class GameSelect:
     GAME_REGISTRY = (
         ("DEMOS", DemosGame, 0),
         ("2048", Game2048, GAME_FLAG_HEAVY),
+        ("AIRHKY", AirHockeyGame, 0),
         ("ARENA", ArenaGame, 0),
         ("ARTILL", ArtilleryGame, 0),
         ("ASTRD", AsteroidGame, GAME_FLAG_HEAVY),
         ("BEJWL", BejeweledGame, GAME_FLAG_HEAVY),
+        ("BILLI", BilliardsGame, 0),
         ("BOMBER", BomberGame, 0),
         ("BRKOUT", BreakoutGame, 0),
         ("BTLZON", BattlezoneGame, 0),
