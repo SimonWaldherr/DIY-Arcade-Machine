@@ -17,7 +17,8 @@ except ImportError:
     import os as _os
 try:
     _os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-    _os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    if getattr(sys, "platform", "") == "emscripten":
+        _os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 except Exception:
     pass
 
@@ -857,6 +858,164 @@ def play_web_sound(kind, tone=0):
             fn(kind, int(tone or 0))
     except Exception:
         pass
+
+_PYGAME_SOUND_CACHE = {}
+_PYGAME_SOUND_FAILED = False
+_DESKTOP_SOUND_CACHE = {}
+_DESKTOP_SOUND_FAILED = False
+
+def _pygame_sound_bytes(kind, tone, sample_rate=22050):
+    """Generate a small chiptune-style PCM cue; no asset file required."""
+    if kind == "coin":
+        duration = 0.095
+    elif kind == "start":
+        duration = 0.105
+    elif kind == "zap":
+        duration = 0.070
+    else:
+        duration = 0.055
+
+    count = int(sample_rate * duration)
+    data = bytearray(count * 2)
+    tone = int(tone or 0)
+    base = 180 + (tone % 11) * 18
+    seed = (tone * 1103515245 + len(str(kind)) * 97) & 0x7fffffff
+
+    # The mixer buffer is signed 16-bit for broad PyGame compatibility, but the
+    # waveform is deliberately quantized and square/noise based for an 8-bit feel.
+    for i in range(count):
+        t = i / sample_rate
+        env = 1.0 - (i / count)
+        if kind == "coin":
+            freq = 660 if i < count // 2 else 940
+            wave = 1.0 if math.sin(2.0 * math.pi * freq * t) >= 0 else -1.0
+        elif kind == "start":
+            step = (i * 3) // count
+            freq = 220 + (tone % 4) * 35 + step * 110
+            wave = 1.0 if math.sin(2.0 * math.pi * freq * t) >= 0 else -1.0
+        elif kind == "bounce":
+            freq = 260 + (tone % 5) * 44
+            wave = 1.0 if math.sin(2.0 * math.pi * freq * t) >= 0 else -1.0
+        elif kind == "ping":
+            freq = base + 520
+            tri = 2.0 * abs(2.0 * ((freq * t) - int(freq * t + 0.5))) - 1.0
+            wave = tri
+        elif kind == "zap":
+            freq = 220.0 - 120.0 * (i / count)
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff
+            noise = ((seed >> 16) & 255) / 127.5 - 1.0
+            pulse = 1.0 if math.sin(2.0 * math.pi * freq * t) >= 0 else -1.0
+            wave = pulse * 0.65 + noise * 0.35
+        else:
+            freq = 360
+            wave = 1.0 if math.sin(2.0 * math.pi * freq * t) >= 0 else -1.0
+
+        quantized = int(max(-1.0, min(1.0, wave * env)) * 7) / 7.0
+        sample = int(quantized * 9500)
+        if sample < 0:
+            sample += 65536
+        j = i * 2
+        data[j] = sample & 255
+        data[j + 1] = (sample >> 8) & 255
+    return bytes(data)
+
+def _pygame_mixer_module():
+    """Return pygame.mixer only when the optional mixer module exists."""
+    try:
+        if importlib.util.find_spec("pygame.mixer") is None:
+            return None
+        import pygame  # type: ignore
+        return getattr(pygame, "mixer", None)
+    except Exception:
+        return None
+
+def play_pygame_sound(kind, tone=0):
+    """Play a procedurally generated cue on desktop PyGame."""
+    global _PYGAME_SOUND_FAILED
+    if not IS_DESKTOP or _PYGAME_SOUND_FAILED:
+        return False
+    try:
+        mixer = _pygame_mixer_module()
+        if mixer is None:
+            _PYGAME_SOUND_FAILED = True
+            return False
+        if not mixer.get_init():
+            mixer.init(frequency=22050, size=-16, channels=1, buffer=256)
+        key = (str(kind), int(tone or 0))
+        snd = _PYGAME_SOUND_CACHE.get(key)
+        if snd is None:
+            snd = mixer.Sound(buffer=_pygame_sound_bytes(key[0], key[1]))
+            _PYGAME_SOUND_CACHE[key] = snd
+        snd.play()
+        return True
+    except Exception:
+        _PYGAME_SOUND_FAILED = True
+        return False
+
+def _desktop_sound_wav_path(kind, tone):
+    """Create/cache a temporary WAV for native desktop fallback players."""
+    key = (str(kind), int(tone or 0))
+    path = _DESKTOP_SOUND_CACHE.get(key)
+    if path:
+        return path
+    try:
+        import tempfile
+        import wave
+        base = _os.path.join(tempfile.gettempdir(), "diy_arcade_sfx")
+        try:
+            _os.makedirs(base)
+        except Exception:
+            pass
+        path = _os.path.join(base, "sfx_%s_%d.wav" % (key[0], key[1]))
+        if not _os.path.exists(path):
+            with wave.open(path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(22050)
+                wf.writeframes(_pygame_sound_bytes(key[0], key[1]))
+        _DESKTOP_SOUND_CACHE[key] = path
+        return path
+    except Exception:
+        return None
+
+def play_native_desktop_sound(kind, tone=0):
+    """Fallback when pygame.mixer is unavailable; stores temp WAVs outside repo."""
+    global _DESKTOP_SOUND_FAILED
+    if not IS_DESKTOP or _DESKTOP_SOUND_FAILED:
+        return False
+    try:
+        import shutil
+        import subprocess
+        path = _desktop_sound_wav_path(kind, tone)
+        if not path:
+            _DESKTOP_SOUND_FAILED = True
+            return False
+        if sys.platform == "darwin":
+            cmd = ["afplay", path]
+        elif sys.platform.startswith("linux"):
+            player = shutil.which("paplay") or shutil.which("aplay")
+            if not player:
+                _DESKTOP_SOUND_FAILED = True
+                return False
+            cmd = [player, path]
+        elif sys.platform.startswith("win"):
+            import winsound
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            return True
+        else:
+            _DESKTOP_SOUND_FAILED = True
+            return False
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        _DESKTOP_SOUND_FAILED = True
+        return False
+
+def play_sound(kind, tone=0):
+    """Cross-runtime sound hook: WebAudio in pygbag, procedural PyGame on desktop."""
+    play_web_sound(kind, tone)
+    if IS_DESKTOP and not play_pygame_sound(kind, tone):
+        play_native_desktop_sound(kind, tone)
 
 def direction_to_delta(direction, default_dx=0, default_dy=0):
     """Map 4-way joystick direction constants to (dx, dy), else return provided defaults."""
@@ -3268,7 +3427,7 @@ class BreakoutGame:
                     self.clear_paddle()
                     self.paddle_w = min(20, PADDLE_WIDTH + 6)
                     self.paddle_x = min(self.paddle_x, WIDTH - self.paddle_w)
-                    play_web_sound("coin", 4)
+                    play_sound("coin", 4)
                     continue
             if p[1] < PLAY_HEIGHT:
                 keep.append(p)
@@ -11511,7 +11670,7 @@ class DemosGame:
         if ticks_diff(now, self._last_sound_ms) < min_gap_ms:
             return
         self._last_sound_ms = now
-        play_web_sound(kind, tone)
+        play_sound(kind, tone)
 
     def _life_step(self, w, h, cur, nxt):
         for y in range(h):
@@ -15475,6 +15634,18 @@ class DoomLiteGame:
     HALF_FOV = FOV // 2
     MAX_STEPS = 36
     MAX_DIST = 32.0
+    NOISE_RADIUS2 = 56.25         # 7.5 tiles squared
+    SHOT_MIN_DIST2 = 0.01
+    ENEMY_MIN_SHOOT_DIST2 = 0.25
+    CONTACT_DAMAGE_DIST2 = 0.20
+    ENEMY_SHOOT_RANGE2 = (49.0, 67.24, 88.36)
+
+    # These thresholds are stored as squared distances because the hot paths
+    # only compare ranges. Keeping them squared avoids sqrt on every enemy.
+    # Avoid the Quake fast inverse square root trick here. On CPython/Pygame,
+    # MicroPython, and pygbag, Python-level float bit hacks are usually slower
+    # and less portable than C/VM math. The faster cross-target win is to keep
+    # distances squared and avoid sqrt entirely until projection needs it.
 
     # LUT für sin/cos (256 Steps, Scale 1024)
     # Lazy init to avoid large import-time allocations on MicroPython.
@@ -16019,9 +16190,9 @@ class DoomLiteGame:
         self.wave_announce = 60  # show wave banner for ~2 s
 
     def _alert_enemies_to_noise(self, wx, wy):
-        radius = 7.5
-        radius2 = radius * radius
+        radius2 = self.NOISE_RADIUS2
         for e in self.enemies:
+            # Older save/attract states may still have the pre-alert enemy shape.
             while len(e) < 9:
                 e.append(0)
             if e[2] <= 0:
@@ -16030,6 +16201,8 @@ class DoomLiteGame:
             dy = wy - e[1]
             d2 = dx * dx + dy * dy
             if d2 <= radius2:
+                # Store the noise source, not the current player reference. That
+                # makes enemies investigate where the shot happened.
                 e[6] = wx
                 e[7] = wy
                 e[8] = 90 + int((radius2 - d2) * 0.8)
@@ -16041,11 +16214,14 @@ class DoomLiteGame:
             return
         self.muzzle_flash = 6
         self.weapon_recoil = 5
+        play_sound("zap", self.wave)
         self._alert_enemies_to_noise(self.px, self.py)
         wall_dist, _ = self._cast_ray(self.ang)
 
         best_i = -1
         best_d2 = 999.0
+        # The ray gives a true wall distance; convert the accepted range to a
+        # squared value so every enemy can be tested without sqrt.
         wall_limit = wall_dist + 0.2
         wall_limit2 = wall_limit * wall_limit
 
@@ -16055,7 +16231,7 @@ class DoomLiteGame:
             dx = e[0] - self.px
             dy = e[1] - self.py
             dist2 = dx * dx + dy * dy
-            if dist2 <= 0.01:
+            if dist2 <= self.SHOT_MIN_DIST2:
                 continue
 
             if dist2 >= wall_limit2:
@@ -16102,8 +16278,8 @@ class DoomLiteGame:
             dy = self.py - e[1]
             dist2 = dx * dx + dy * dy
 
-            # Contact damage
-            if dist2 < 0.20:
+            # Contact damage uses squared distance like the rest of the AI.
+            if dist2 < self.CONTACT_DAMAGE_DIST2:
                 self.lives -= 1
                 self.dmg_flash = 12
                 if self.lives <= 0:
@@ -16119,9 +16295,9 @@ class DoomLiteGame:
 
             # Enemies might shoot back occasionally if wave > 2
             if self.wave > 2 and e[3] <= 0:
-                # Basic LOS check (can see player directly?)
-                shoot_range = 7.0 + typ * 1.2
-                if dist2 > 0.25 and dist2 < shoot_range * shoot_range:
+                # First do cheap squared range checks. Only visible candidates
+                # pay for sqrt, because the ray result is a true distance.
+                if dist2 > self.ENEMY_MIN_SHOOT_DIST2 and dist2 < self.ENEMY_SHOOT_RANGE2[typ]:
                     dist = math.sqrt(dist2)
                     a = self._angle_to_units(dx, dy)
                     ray_dist, _ = self._cast_ray(a)
@@ -16152,6 +16328,8 @@ class DoomLiteGame:
                 e[8] -= 1
                 alert_dx = e[6] - e[0]
                 alert_dy = e[7] - e[1]
+                # Stop using the alert once the enemy reaches roughly the tile
+                # where the shot was fired.
                 if alert_dx * alert_dx + alert_dy * alert_dy > 0.18:
                     move_dx = alert_dx
                     move_dy = alert_dy
@@ -16314,6 +16492,8 @@ class DoomLiteGame:
 
             dist, side = self._cast_ray(ray_ang)
             zbuf[x] = dist
+            # The renderer draws two screen columns per ray. Mirror the depth so
+            # sprite clipping still works at native screen-column granularity.
             x2 = x + 1
             zbuf[x2] = dist
 
@@ -16408,6 +16588,8 @@ class DoomLiteGame:
             # low contrast so lighting remains the main depth cue.
             wall_u = hit_y if side == 0 else hit_x
             pattern_base = int(wall_u * 8)
+            # The minimap owns the top-left overlay. Starting below it avoids a
+            # branch for every pixel in the inner loops.
             skip_top = minimap_h if x < minimap_w else 0
 
             # Inline single-column draw (avoids draw_rectangle call overhead).
@@ -16449,6 +16631,8 @@ class DoomLiteGame:
                 if e[2] > 0:
                     dx = e[0] - px
                     dy = e[1] - py
+                    # Sort by squared distance; ordering is identical to real
+                    # distance and saves sqrt for off-screen enemies.
                     d2 = dx * dx + dy * dy
                     alive.append((d2, e, dx, dy))
             alive.sort(reverse=True)

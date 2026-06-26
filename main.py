@@ -17,7 +17,8 @@ import sys
 import importlib.util
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+if getattr(sys, "platform", "") == "emscripten":
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 def _logo_candidates():
     paths = []
