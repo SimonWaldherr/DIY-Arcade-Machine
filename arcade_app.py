@@ -15532,6 +15532,7 @@ class DoomLiteGame:
         self._minimap_prev_player = None
         self._minimap_prev_aim = None
         self._minimap_prev_enemies = []
+        self.lamps = []
         self.render_hud = True
         self.render_minimap = True
         self.render_crosshair = True
@@ -15552,6 +15553,7 @@ class DoomLiteGame:
         self.wave = 1
 
         self.shot_cd = 0
+        self.muzzle_flash = 0
         self.wave_announce = 0  # frames left to show wave banner
         self.hit_flash = 0      # frames left to flash crosshair on hit
         self.dmg_flash = 0      # frames left to flash screen red when damaged
@@ -15578,6 +15580,31 @@ class DoomLiteGame:
         self._minimap_prev_player = None
         self._minimap_prev_aim = None
         self._minimap_prev_enemies = []
+        self.lamps = self._make_lamps(idx)
+
+    def _make_lamps(self, map_idx):
+        lamps = []
+        # Deterministic lamp placement per level: open cells near corridor bends
+        # get most of the lights, with a fallback so every map has visible pools.
+        for my in range(1, self.MAP_H - 1):
+            for mx in range(1, self.MAP_W - 1):
+                if self.MAP[my][mx] == 35:
+                    continue
+                wall_near = (
+                    self.MAP[my - 1][mx] == 35 or self.MAP[my + 1][mx] == 35 or
+                    self.MAP[my][mx - 1] == 35 or self.MAP[my][mx + 1] == 35
+                )
+                if wall_near and ((mx * 7 + my * 11 + map_idx * 5) % 19) == 0:
+                    lamps.append((mx + 0.5, my + 0.5, 150))
+                    if len(lamps) >= 5:
+                        return lamps
+        for my in (2, 5, 8, 12):
+            for mx in (2, 6, 10, 13):
+                if len(lamps) >= 5:
+                    return lamps
+                if self.MAP[my][mx] != 35:
+                    lamps.append((mx + 0.5, my + 0.5, 135))
+        return lamps
 
     def _restore_minimap_cell(self, mx, my):
         if 0 <= mx < self.MAP_W and 0 <= my < self.MAP_H:
@@ -15835,6 +15862,7 @@ class DoomLiteGame:
 
     def _shoot(self):
         # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
+        self.muzzle_flash = 6
         wall_dist, _ = self._cast_ray(self.ang)
 
         best_i = -1
@@ -15971,7 +15999,7 @@ class DoomLiteGame:
             return (255, 45, 180, 255, 220, 40)
         return (230, 35, 35, 255, 230, 40)
 
-    def _draw_enemy_sprite(self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim):
+    def _draw_enemy_sprite(self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim, light=255):
         body_r, body_g, body_b, eye_r, eye_g, eye_b = self._enemy_palette(typ, hp)
         h = y1 - y0 + 1
         w = x1 - x0 + 1
@@ -16022,6 +16050,10 @@ class DoomLiteGame:
                         continue
                     rr, gg, bb = body_r // 2, body_g // 2, body_b // 2
 
+                if light < 255:
+                    rr = (rr * light) // 255
+                    gg = (gg * light) // 255
+                    bb = (bb * light) // 255
                 sp(xx, yy, rr, gg, bb)
 
     def _render(self):
@@ -16031,6 +16063,14 @@ class DoomLiteGame:
         sp = display.set_pixel
         PLAY_H = self.PLAY_H
         zbuf = self.zbuf
+        COS = self._COS
+        SIN = self._SIN
+        low_ram_trig = CONFIG_LOW_RAM_MODE
+        px = self.px
+        py = self.py
+        lamps = self.lamps
+        muzzle_flash = self.muzzle_flash
+        lamp_phase = self.frame >> 2
 
         # We combine sky, wall, and floor rendering in one pass per column
         # to prevent overwriting pixels multiple times. This dramatically
@@ -16054,6 +16094,27 @@ class DoomLiteGame:
             if col_step == 2 and x + 1 < WIDTH:
                 zbuf[x + 1] = dist
 
+            ray_dx = COS[ray_ang]
+            ray_dy = -SIN[ray_ang]
+            if low_ram_trig:
+                ray_dx = ray_dx / 1024.0
+                ray_dy = ray_dy / 1024.0
+            hit_x = px + ray_dx * dist
+            hit_y = py + ray_dy * dist
+
+            light = 42
+            for li, (lx, ly, strength) in enumerate(lamps):
+                ldx = hit_x - lx
+                ldy = hit_y - ly
+                d2 = ldx * ldx + ldy * ldy
+                flicker = ((lamp_phase + li * 5) & 7) - 3
+                light += int((strength + flicker * 4) / (1.0 + d2 * 1.35))
+            if muzzle_flash > 0:
+                # Local player flash: nearby walls and floor bloom briefly.
+                light += muzzle_flash * 18 + max(0, 45 - int(dist * 9))
+            if light > 255:
+                light = 255
+
             line_h = int(PLAY_H / (dist + 1e-6))
             if line_h < 1:
                 line_h = 1
@@ -16067,9 +16128,11 @@ class DoomLiteGame:
 
             # Level color variation based on wave
             theme = (self.wave - 1) % 4
-            b = 220 - int(dist * 18)
-            if b < 40:
-                b = 40
+            b = light - int(dist * 7)
+            if b < 18:
+                b = 18
+            if b > 255:
+                b = 255
             
             wr = b if side == 0 else (b * 3) // 4
             
@@ -16091,17 +16154,17 @@ class DoomLiteGame:
                 
             # Base sky and floor colors depending on theme
             if theme == 0:
-                sky_r, sky_g, sky_b = 0, 0, 25
-                fl_r, fl_g, fl_b = 18, 10, 0
+                sky_r, sky_g, sky_b = 0, 0, 14 + muzzle_flash * 4
+                fl_r, fl_g, fl_b = 8 + light // 10, 5 + light // 14, 0
             elif theme == 1:
-                sky_r, sky_g, sky_b = 20, 0, 0
-                fl_r, fl_g, fl_b = 0, 10, 18
+                sky_r, sky_g, sky_b = 10 + muzzle_flash * 3, 0, 0
+                fl_r, fl_g, fl_b = 0, 5 + light // 16, 8 + light // 10
             elif theme == 2:
-                sky_r, sky_g, sky_b = 25, 10, 0
-                fl_r, fl_g, fl_b = 0, 18, 0
+                sky_r, sky_g, sky_b = 12 + muzzle_flash * 3, 5 + muzzle_flash * 2, 0
+                fl_r, fl_g, fl_b = 0, 8 + light // 10, 0
             else:
-                sky_r, sky_g, sky_b = 0, 20, 10
-                fl_r, fl_g, fl_b = 18, 0, 18
+                sky_r, sky_g, sky_b = 0, 8 + muzzle_flash * 3, 5 + muzzle_flash
+                fl_r, fl_g, fl_b = 7 + light // 14, 0, 7 + light // 10
 
             # apply damage flash overeverything in this column
             if self.dmg_flash > 0:
@@ -16110,6 +16173,11 @@ class DoomLiteGame:
                 sky_r, sky_g, sky_b = flash_r, 0, 0
                 wr, wg, wb = flash_r, 0, 0
                 fl_r, fl_g, fl_b = flash_r, 0, 0
+
+            # Very small wall texture: subtle mortar/stone variation. Keep it
+            # low contrast so lighting remains the main depth cue.
+            wall_u = hit_y if side == 0 else hit_x
+            pattern_base = int(wall_u * 8)
 
             # Inline single-column draw (avoids draw_rectangle call overhead).
             # Draw sky, wall, and floor in order!
@@ -16125,11 +16193,18 @@ class DoomLiteGame:
             for y in range(start, end + 1):
                 if x < minimap_w and y < minimap_h:
                     continue
-                sp(x, y, wr, wg, wb)
+                pattern = (pattern_base + ((y - start) >> 1)) & 15
+                if pattern == 0:
+                    pr, pg, pb = min(255, wr + 12), min(255, wg + 12), min(255, wb + 12)
+                elif pattern == 8:
+                    pr, pg, pb = (wr * 7) // 8, (wg * 7) // 8, (wb * 7) // 8
+                else:
+                    pr, pg, pb = wr, wg, wb
+                sp(x, y, pr, pg, pb)
                 if col_step == 2 and x + 1 < WIDTH:
                     if x + 1 < minimap_w and y < minimap_h:
                         continue
-                    sp(x + 1, y, wr, wg, wb)
+                    sp(x + 1, y, pr, pg, pb)
                     
             for y in range(end + 1, PLAY_H):
                 if x < minimap_w and y < minimap_h:
@@ -16188,7 +16263,18 @@ class DoomLiteGame:
 
                 typ = e[4] if len(e) > 4 else 0
                 anim = e[5] if len(e) > 5 else 0
-                self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim)
+                sprite_light = 62
+                for li, (lx, ly, strength) in enumerate(lamps):
+                    ldx = e[0] - lx
+                    ldy = e[1] - ly
+                    d2 = ldx * ldx + ldy * ldy
+                    flicker = ((lamp_phase + li * 5) & 7) - 3
+                    sprite_light += int((strength + flicker * 4) / (1.0 + d2 * 1.20))
+                if muzzle_flash > 0:
+                    sprite_light += max(0, muzzle_flash * 20 - int(dist * 12))
+                if sprite_light > 255:
+                    sprite_light = 255
+                self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim, sprite_light)
 
         if self.render_minimap:
             # minimap overlay: keep the background static and only refresh markers.
@@ -16289,6 +16375,8 @@ class DoomLiteGame:
                     self.wave_announce -= 1
                 if self.hit_flash > 0:
                     self.hit_flash -= 1
+                if self.muzzle_flash > 0:
+                    self.muzzle_flash -= 1
                 if self.dmg_flash > 0:
                     self.dmg_flash -= 1
 
@@ -16391,6 +16479,8 @@ class DoomLiteGame:
                     self.wave_announce -= 1
                 if self.hit_flash > 0:
                     self.hit_flash -= 1
+                if self.muzzle_flash > 0:
+                    self.muzzle_flash -= 1
                 if self.dmg_flash > 0:
                     self.dmg_flash -= 1
 
