@@ -15361,7 +15361,7 @@ class DoomLiteGame:
     # Playfield ohne Score-Leiste
     PLAY_H = HEIGHT - 6
 
-    # Maps: 16x16, '#' = wall, '.' = floor, 'D' = door, 'K' = key, 'X' = exit
+    # Maps: 16x16, '#' = wall, '.' = floor, 'D' = door, 'K' = key, 'Q' = quad, 'X' = exit
     MAP_W = 16
     MAP_H = 16
     MAPS = ((
@@ -15378,7 +15378,7 @@ class DoomLiteGame:
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
-        b"#............X.#",
+        b"#.Q..........X.#",
         b"#....######....#",
         b"################",
     ), (
@@ -15536,6 +15536,8 @@ class DoomLiteGame:
         self.closed_doors = set()
         self.key_pos = None
         self.key_taken = False
+        self.quad_pos = None
+        self.quad_taken = False
         self.exit_pos = None
         self.render_hud = True
         self.render_minimap = True
@@ -15558,6 +15560,9 @@ class DoomLiteGame:
 
         self.shot_cd = 0
         self.muzzle_flash = 0
+        self.weapon_recoil = 0
+        self.bob_phase = 0
+        self.quad_timer = 0
         self.wave_announce = 0  # frames left to show wave banner
         self.hit_flash = 0      # frames left to flash crosshair on hit
         self.dmg_flash = 0      # frames left to flash screen red when damaged
@@ -15588,6 +15593,8 @@ class DoomLiteGame:
         self.closed_doors = set()
         self.key_pos = None
         self.key_taken = False
+        self.quad_pos = None
+        self.quad_taken = False
         self.exit_pos = None
         fallback_open = []
         start = self._player_start_for_level()
@@ -15612,12 +15619,25 @@ class DoomLiteGame:
                     self.closed_doors.add((mx, my))
                 elif ch == 75:  # 'K'
                     self.key_pos = (mx, my)
+                elif ch == 81:  # 'Q'
+                    self.quad_pos = (mx, my)
                 elif ch == 88:  # 'X'
                     self.exit_pos = (mx, my)
         if self.key_pos is None:
             self.key_pos = best_key
         if self.exit_pos is None:
             self.exit_pos = best_exit
+        if self.quad_pos is None and fallback_open:
+            qstart = (idx * 11 + len(fallback_open) // 3) % len(fallback_open)
+            for n in range(len(fallback_open)):
+                qx, qy = fallback_open[(qstart + n) % len(fallback_open)]
+                if (
+                    (qx, qy) != self.key_pos and
+                    (qx, qy) != self.exit_pos and
+                    (qx, qy) not in self.closed_doors
+                ):
+                    self.quad_pos = (qx, qy)
+                    break
         if not self.closed_doors and fallback_open:
             dx, dy = fallback_open[(idx * 7 + len(fallback_open) // 2) % len(fallback_open)]
             if (dx, dy) != self.key_pos and (dx, dy) != self.exit_pos:
@@ -15656,6 +15676,8 @@ class DoomLiteGame:
                 display.set_pixel(mx, my, 190, 120, 20)
             elif self.key_pos == (mx, my) and not self.key_taken:
                 display.set_pixel(mx, my, 255, 230, 40)
+            elif self.quad_pos == (mx, my) and not self.quad_taken and self.quad_timer <= 0:
+                display.set_pixel(mx, my, 150, 70, 255)
             elif self.exit_pos == (mx, my):
                 display.set_pixel(mx, my, 0, 180, 90 if self.key_taken else 40)
             else:
@@ -15798,12 +15820,21 @@ class DoomLiteGame:
                 self.key_flash = 45
                 self.score += 100
                 self._minimap_initialized = False
+        if self.quad_pos is not None and not self.quad_taken and self.quad_timer <= 0:
+            qx, qy = self.quad_pos
+            if int(self.px) == qx and int(self.py) == qy:
+                self.quad_taken = True
+                self.quad_timer = 420
+                self.hit_flash = 12
+                self.score += 125
+                self._minimap_initialized = False
         if self.exit_pos is not None:
             ex, ey = self.exit_pos
             if int(self.px) == ex and int(self.py) == ey:
                 if self.key_taken:
                     self.score += 250 + self.lives * 50
                     self.wave += 1
+                    self._set_level(self.level + 1)
                     self._spawn_wave(self.wave)
                     self.px, self.py = self._player_start_for_level()
                     self.ang = 0
@@ -15834,6 +15865,12 @@ class DoomLiteGame:
             draw_rectangle(sx - 1, y - size, sx + 1, y - size + 1, 255, 230, 40)
             set_pixel_clipped(sx + 2, y - size + 1, 255, 180, 30)
             set_pixel_clipped(sx + 3, y - size + 1, 255, 180, 30)
+        elif kind == "quad":
+            q = size if size > 2 else 2
+            draw_rectangle(sx - 1, y - q, sx + 1, y - q + 2, 120, 70, 255)
+            set_pixel_clipped(sx, y - q - 1, 210, 160, 255)
+            set_pixel_clipped(sx - 2, y - q + 1, 80, 170, 255)
+            set_pixel_clipped(sx + 2, y - q + 1, 80, 170, 255)
         else:
             col = (60, 255, 140) if self.key_taken else (40, 110, 70)
             draw_rect_outline(sx - size, y - size * 2, sx + size, y, *col)
@@ -15972,16 +16009,38 @@ class DoomLiteGame:
             hp = 1 + typ
             if wave >= 8 and typ > 0:
                 hp += 1
-            # x, y, hp, cooldown, type, animation phase
-            self.enemies.append([spawn[0], spawn[1], hp, random.randint(20, 90), typ, random.randint(0, 31)])
+            # x, y, hp, cooldown, type, animation phase, alert x/y/timer
+            self.enemies.append([
+                spawn[0], spawn[1], hp, random.randint(20, 90), typ,
+                random.randint(0, 31), 0.0, 0.0, 0
+            ])
             
         self.wave_announce = 60  # show wave banner for ~2 s
+
+    def _alert_enemies_to_noise(self, wx, wy):
+        radius = 7.5
+        radius2 = radius * radius
+        for e in self.enemies:
+            while len(e) < 9:
+                e.append(0)
+            if e[2] <= 0:
+                continue
+            dx = wx - e[0]
+            dy = wy - e[1]
+            d2 = dx * dx + dy * dy
+            if d2 <= radius2:
+                e[6] = wx
+                e[7] = wy
+                e[8] = 90 + int((radius2 - d2) * 0.8)
 
     def _shoot(self):
         # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
         if self._try_use_door():
+            self.weapon_recoil = 2
             return
         self.muzzle_flash = 6
+        self.weapon_recoil = 5
+        self._alert_enemies_to_noise(self.px, self.py)
         wall_dist, _ = self._cast_ray(self.ang)
 
         best_i = -1
@@ -16011,13 +16070,14 @@ class DoomLiteGame:
                 best_i = i
 
         if best_i >= 0:
-            self.enemies[best_i][2] -= 1
+            damage = 4 if self.quad_timer > 0 else 1
+            self.enemies[best_i][2] -= damage
             self.hit_flash = 8  # flash crosshair on hit
             if self.enemies[best_i][2] <= 0:
                 typ = self.enemies[best_i][4] if len(self.enemies[best_i]) > 4 else 0
-                self.score += 50 + typ * 25
+                self.score += 50 + typ * 25 + (25 if self.quad_timer > 0 else 0)
             else:
-                self.score += 15
+                self.score += 15 + (10 if self.quad_timer > 0 else 0)
 
     def _update_enemies(self):
         global game_over, global_score
@@ -16029,7 +16089,7 @@ class DoomLiteGame:
         for e in self.enemies:
             if len(e) < 4:
                 e.append(0)  # upgrade legacy states to support cooldowns
-            while len(e) < 6:
+            while len(e) < 9:
                 e.append(0)
                 
             if e[2] <= 0:
@@ -16082,29 +16142,42 @@ class DoomLiteGame:
             elif e[3] > 0:
                 e[3] -= 1
 
-            # Move toward player
+            # Move toward the last nearby shot noise first, then resume chasing.
+            move_dx = dx
+            move_dy = dy
+            if e[8] > 0:
+                e[8] -= 1
+                alert_dx = e[6] - e[0]
+                alert_dy = e[7] - e[1]
+                if alert_dx * alert_dx + alert_dy * alert_dy > 0.18:
+                    move_dx = alert_dx
+                    move_dy = alert_dy
+                else:
+                    e[8] = 0
+
+            # Move toward target
             step = 0.05 + (self.wave * 0.002) + typ * 0.006
             if step > 0.09:
                 step = 0.09
 
             # axis-priority move
-            if abs(dx) > abs(dy):
-                sx = step if dx > 0 else -step
+            if abs(move_dx) > abs(move_dy):
+                sx = step if move_dx > 0 else -step
                 nx = e[0] + sx
                 if self._is_enemy_clear_pos(nx, e[1]):
                     e[0] = nx
                 else:
-                    sy = step if dy > 0 else -step
+                    sy = step if move_dy > 0 else -step
                     ny = e[1] + sy
                     if self._is_enemy_clear_pos(e[0], ny):
                         e[1] = ny
             else:
-                sy = step if dy > 0 else -step
+                sy = step if move_dy > 0 else -step
                 ny = e[1] + sy
                 if self._is_enemy_clear_pos(e[0], ny):
                     e[1] = ny
                 else:
-                    sx = step if dx > 0 else -step
+                    sx = step if move_dx > 0 else -step
                     nx = e[0] + sx
                     if self._is_enemy_clear_pos(nx, e[1]):
                         e[0] = nx
@@ -16174,6 +16247,32 @@ class DoomLiteGame:
                     gg = (gg * light) // 255
                     bb = (bb * light) // 255
                 sp(xx, yy, rr, gg, bb)
+
+    def _draw_weapon(self, sp):
+        bob = 1 if (self.bob_phase & 8) else 0
+        recoil = self.weapon_recoil if self.weapon_recoil < 4 else 4
+        cx = WIDTH // 2
+        base_y = self.PLAY_H - 8 + bob + recoil
+        if base_y > self.PLAY_H - 6:
+            base_y = self.PLAY_H - 6
+
+        # Low-pixel weapon silhouette: center barrel, side grip, and muzzle flash.
+        draw_rectangle(cx - 7, base_y + 5, cx - 4, self.PLAY_H - 1, 55, 42, 38)
+        draw_rectangle(cx + 4, base_y + 5, cx + 7, self.PLAY_H - 1, 55, 42, 38)
+        draw_rectangle(cx - 4, base_y + 3, cx + 4, self.PLAY_H - 1, 42, 42, 50)
+        draw_rectangle(cx - 2, base_y, cx + 2, base_y + 5, 115, 115, 125)
+        set_pixel_clipped(cx - 1, base_y - 1, 170, 170, 180)
+        set_pixel_clipped(cx, base_y - 2, 190, 190, 200)
+        set_pixel_clipped(cx + 1, base_y - 1, 170, 170, 180)
+        if self.quad_timer > 0:
+            set_pixel_clipped(cx - 3, base_y + 2, 120, 70, 255)
+            set_pixel_clipped(cx + 3, base_y + 2, 120, 70, 255)
+        if self.muzzle_flash > 0:
+            flash_y = base_y - 4
+            set_pixel_clipped(cx, flash_y, 255, 255, 120)
+            set_pixel_clipped(cx - 1, flash_y + 1, 255, 150, 40)
+            set_pixel_clipped(cx + 1, flash_y + 1, 255, 150, 40)
+            set_pixel_clipped(cx, flash_y + 2, 255, 90, 20)
 
     def _render(self):
         # Hoist frequently-accessed attributes to locals once.
@@ -16408,6 +16507,8 @@ class DoomLiteGame:
 
         if self.key_pos is not None and not self.key_taken:
             self._draw_world_marker(sp, self.key_pos[0] + 0.5, self.key_pos[1] + 0.5, "key", zbuf)
+        if self.quad_pos is not None and not self.quad_taken and self.quad_timer <= 0:
+            self._draw_world_marker(sp, self.quad_pos[0] + 0.5, self.quad_pos[1] + 0.5, "quad", zbuf)
         if self.exit_pos is not None:
             self._draw_world_marker(sp, self.exit_pos[0] + 0.5, self.exit_pos[1] + 0.5, "exit", zbuf)
 
@@ -16421,6 +16522,8 @@ class DoomLiteGame:
                     sp(mx, my, 190, 120, 20)
                 if self.key_pos is not None and not self.key_taken:
                     sp(self.key_pos[0], self.key_pos[1], 255, 230, 40)
+                if self.quad_pos is not None and not self.quad_taken and self.quad_timer <= 0:
+                    sp(self.quad_pos[0], self.quad_pos[1], 150, 70, 255)
                 if self.exit_pos is not None:
                     sp(self.exit_pos[0], self.exit_pos[1], 0, 180, 90 if self.key_taken else 40)
                 self._minimap_initialized = True
@@ -16470,6 +16573,8 @@ class DoomLiteGame:
                 draw_text_small(WIDTH - 22, 4, "KEY", 255, 230, 40)
             elif self.key_flash > 0:
                 draw_text_small(WIDTH - 22, 4, "KEY", 255, 70, 40)
+            if self.quad_timer > 0:
+                draw_text_small(20, 1, "Q", 160, 90, 255)
 
         # wave announcement banner
         if self.wave_announce > 0:
@@ -16480,6 +16585,7 @@ class DoomLiteGame:
             draw_text_small(wx, wy, wlabel, 255, 220, 0)
 
         if self.render_crosshair:
+            self._draw_weapon(sp)
             # crosshair (+ shape, flashes yellow on hit)
             cx = WIDTH // 2
             cy = PLAY_H // 2
@@ -16522,6 +16628,10 @@ class DoomLiteGame:
                     self.hit_flash -= 1
                 if self.muzzle_flash > 0:
                     self.muzzle_flash -= 1
+                if self.weapon_recoil > 0:
+                    self.weapon_recoil -= 1
+                if self.quad_timer > 0:
+                    self.quad_timer -= 1
                 if self.key_flash > 0:
                     self.key_flash -= 1
                 if self.dmg_flash > 0:
@@ -16551,6 +16661,7 @@ class DoomLiteGame:
                     move = -0.10
 
                 if move != 0.0:
+                    self.bob_phase = (self.bob_phase + 2) & 31
                     c, s = self._cos_sin(self.ang)
                     dx = c * move
                     dy = -s * move
@@ -16631,6 +16742,10 @@ class DoomLiteGame:
                     self.hit_flash -= 1
                 if self.muzzle_flash > 0:
                     self.muzzle_flash -= 1
+                if self.weapon_recoil > 0:
+                    self.weapon_recoil -= 1
+                if self.quad_timer > 0:
+                    self.quad_timer -= 1
                 if self.key_flash > 0:
                     self.key_flash -= 1
                 if self.dmg_flash > 0:
@@ -16660,6 +16775,7 @@ class DoomLiteGame:
                     move = -0.10
 
                 if move != 0.0:
+                    self.bob_phase = (self.bob_phase + 2) & 31
                     c, s = self._cos_sin(self.ang)
                     dx = c * move
                     dy = -s * move
