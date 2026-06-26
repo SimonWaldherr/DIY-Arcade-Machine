@@ -15845,14 +15845,15 @@ class DoomLiteGame:
     def _draw_world_marker(self, sp, wx, wy, kind, zbuf):
         dx = wx - self.px
         dy = wy - self.py
-        dist = math.sqrt(dx * dx + dy * dy)
-        if dist < 0.15:
+        d2 = dx * dx + dy * dy
+        if d2 < 0.0225:
             return
         a = self._angle_to_units(dx, dy)
         delta = self._angle_delta(a, self.ang)
         if abs(delta) > self.HALF_FOV:
             return
         sx = int((self.HALF_FOV - delta) * WIDTH / self.FOV)
+        dist = math.sqrt(d2)
         if sx < 0 or sx >= WIDTH or dist >= zbuf[sx] - 0.15:
             return
         size = int(self.PLAY_H / (dist * 4.0 + 1.0))
@@ -16044,18 +16045,20 @@ class DoomLiteGame:
         wall_dist, _ = self._cast_ray(self.ang)
 
         best_i = -1
-        best_d = 999.0
+        best_d2 = 999.0
+        wall_limit = wall_dist + 0.2
+        wall_limit2 = wall_limit * wall_limit
 
         for i, e in enumerate(self.enemies):
             if e[2] <= 0:
                 continue
             dx = e[0] - self.px
             dy = e[1] - self.py
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist <= 0.1:
+            dist2 = dx * dx + dy * dy
+            if dist2 <= 0.01:
                 continue
 
-            if dist >= wall_dist + 0.2:
+            if dist2 >= wall_limit2:
                 continue
 
             a = self._angle_to_units(dx, dy)
@@ -16065,8 +16068,8 @@ class DoomLiteGame:
             if abs(delta) > 4:
                 continue
 
-            if dist < best_d:
-                best_d = dist
+            if dist2 < best_d2:
+                best_d2 = dist2
                 best_i = i
 
         if best_i >= 0:
@@ -16098,7 +16101,6 @@ class DoomLiteGame:
             dx = self.px - e[0]
             dy = self.py - e[1]
             dist2 = dx * dx + dy * dy
-            dist = math.sqrt(dist2)
 
             # Contact damage
             if dist2 < 0.20:
@@ -16119,7 +16121,8 @@ class DoomLiteGame:
             if self.wave > 2 and e[3] <= 0:
                 # Basic LOS check (can see player directly?)
                 shoot_range = 7.0 + typ * 1.2
-                if dist > 0.5 and dist < shoot_range:
+                if dist2 > 0.25 and dist2 < shoot_range * shoot_range:
+                    dist = math.sqrt(dist2)
                     a = self._angle_to_units(dx, dy)
                     ray_dist, _ = self._cast_ray(a)
                     if ray_dist > dist - 0.2:
@@ -16289,6 +16292,8 @@ class DoomLiteGame:
         lamps = self.lamps
         muzzle_flash = self.muzzle_flash
         lamp_phase = self.frame >> 2
+        dmg_flash = self.dmg_flash
+        theme = (self.wave - 1) % 4
 
         # We combine sky, wall, and floor rendering in one pass per column
         # to prevent overwriting pixels multiple times. This dramatically
@@ -16309,8 +16314,8 @@ class DoomLiteGame:
 
             dist, side = self._cast_ray(ray_ang)
             zbuf[x] = dist
-            if col_step == 2 and x + 1 < WIDTH:
-                zbuf[x + 1] = dist
+            x2 = x + 1
+            zbuf[x2] = dist
 
             ray_dx = COS[ray_ang]
             ray_dy = -SIN[ray_ang]
@@ -16351,8 +16356,6 @@ class DoomLiteGame:
             if start < 0: start = 0
             if end >= PLAY_H: end = PLAY_H - 1
 
-            # Level color variation based on wave
-            theme = (self.wave - 1) % 4
             b = light - int(dist * 7)
             if b < 18:
                 b = 18
@@ -16394,8 +16397,8 @@ class DoomLiteGame:
                 fl_r, fl_g, fl_b = 7 + light // 14, 0, 7 + light // 10
 
             # apply damage flash overeverything in this column
-            if self.dmg_flash > 0:
-                flash_r = 150 + self.dmg_flash * 6
+            if dmg_flash > 0:
+                flash_r = 150 + dmg_flash * 6
                 if flash_r > 255: flash_r = 255
                 sky_r, sky_g, sky_b = flash_r, 0, 0
                 wr, wg, wb = flash_r, 0, 0
@@ -16405,21 +16408,16 @@ class DoomLiteGame:
             # low contrast so lighting remains the main depth cue.
             wall_u = hit_y if side == 0 else hit_x
             pattern_base = int(wall_u * 8)
+            skip_top = minimap_h if x < minimap_w else 0
 
             # Inline single-column draw (avoids draw_rectangle call overhead).
             # Draw sky, wall, and floor in order!
-            for y in range(0, start):
-                if x < minimap_w and y < minimap_h:
-                    continue
+            for y in range(skip_top, start):
                 sp(x, y, sky_r, sky_g, sky_b)
-                if col_step == 2 and x + 1 < WIDTH:
-                    if x + 1 < minimap_w and y < minimap_h:
-                        continue
-                    sp(x + 1, y, sky_r, sky_g, sky_b)
+                sp(x2, y, sky_r, sky_g, sky_b)
             
-            for y in range(start, end + 1):
-                if x < minimap_w and y < minimap_h:
-                    continue
+            wall_start = start if start > skip_top else skip_top
+            for y in range(wall_start, end + 1):
                 pattern = (pattern_base + ((y - start) >> 1)) & 15
                 if is_door and ((pattern_base + y) & 3) == 0:
                     pr, pg, pb = min(255, wr + 18), min(255, wg + 12), wb
@@ -16430,19 +16428,14 @@ class DoomLiteGame:
                 else:
                     pr, pg, pb = wr, wg, wb
                 sp(x, y, pr, pg, pb)
-                if col_step == 2 and x + 1 < WIDTH:
-                    if x + 1 < minimap_w and y < minimap_h:
-                        continue
-                    sp(x + 1, y, pr, pg, pb)
+                sp(x2, y, pr, pg, pb)
                     
-            for y in range(end + 1, PLAY_H):
-                if x < minimap_w and y < minimap_h:
-                    continue
+            floor_start = end + 1
+            if floor_start < skip_top:
+                floor_start = skip_top
+            for y in range(floor_start, PLAY_H):
                 sp(x, y, fl_r, fl_g, fl_b)
-                if col_step == 2 and x + 1 < WIDTH:
-                    if x + 1 < minimap_w and y < minimap_h:
-                        continue
-                    sp(x + 1, y, fl_r, fl_g, fl_b)
+                sp(x2, y, fl_r, fl_g, fl_b)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -16456,13 +16449,13 @@ class DoomLiteGame:
                 if e[2] > 0:
                     dx = e[0] - px
                     dy = e[1] - py
-                    d = math.sqrt(dx * dx + dy * dy)
-                    alive.append((d, e, dx, dy))
+                    d2 = dx * dx + dy * dy
+                    alive.append((d2, e, dx, dy))
             alive.sort(reverse=True)
 
             HALF_FOV = self.HALF_FOV
             FOV = self.FOV
-            for dist, e, dx, dy in alive:
+            for d2, e, dx, dy in alive:
                 a = self._angle_to_units(dx, dy)
                 delta = self._angle_delta(a, ang)
                 if abs(delta) > HALF_FOV:
@@ -16472,6 +16465,7 @@ class DoomLiteGame:
                 if sx < 0 or sx >= WIDTH:
                     continue
 
+                dist = math.sqrt(d2)
                 # sprite size
                 sh = int(PLAY_H / (dist + 1e-6))
                 if sh < 2:
