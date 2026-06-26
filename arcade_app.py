@@ -15361,24 +15361,24 @@ class DoomLiteGame:
     # Playfield ohne Score-Leiste
     PLAY_H = HEIGHT - 6
 
-    # Maps: 16x16, '#' = Wand, '.' = frei
+    # Maps: 16x16, '#' = wall, '.' = floor, 'D' = door, 'K' = key, 'X' = exit
     MAP_W = 16
     MAP_H = 16
     MAPS = ((
         b"################",
-        b"#..............#",
+        b"#.....K........#",
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
-        b"#..............#",
+        b"#......D.......#",
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
         b"#..####..####..#",
-        b"#..............#",
+        b"#............X.#",
         b"#....######....#",
         b"################",
     ), (
@@ -15533,6 +15533,10 @@ class DoomLiteGame:
         self._minimap_prev_aim = None
         self._minimap_prev_enemies = []
         self.lamps = []
+        self.closed_doors = set()
+        self.key_pos = None
+        self.key_taken = False
+        self.exit_pos = None
         self.render_hud = True
         self.render_minimap = True
         self.render_crosshair = True
@@ -15557,6 +15561,7 @@ class DoomLiteGame:
         self.wave_announce = 0  # frames left to show wave banner
         self.hit_flash = 0      # frames left to flash crosshair on hit
         self.dmg_flash = 0      # frames left to flash screen red when damaged
+        self.key_flash = 0
 
         self.enemies = []
         self._spawn_wave(self.wave)
@@ -15580,6 +15585,43 @@ class DoomLiteGame:
         self._minimap_prev_player = None
         self._minimap_prev_aim = None
         self._minimap_prev_enemies = []
+        self.closed_doors = set()
+        self.key_pos = None
+        self.key_taken = False
+        self.exit_pos = None
+        fallback_open = []
+        start = self._player_start_for_level()
+        best_key = None
+        best_exit = None
+        best_key_score = 999999
+        best_exit_score = -1
+        for my in range(1, self.MAP_H - 1):
+            for mx in range(1, self.MAP_W - 1):
+                ch = self.MAP[my][mx]
+                if ch == 35:
+                    continue
+                fallback_open.append((mx, my))
+                dist_score = abs(mx + 0.5 - start[0]) + abs(my + 0.5 - start[1])
+                if dist_score < best_key_score and dist_score >= 3:
+                    best_key = (mx, my)
+                    best_key_score = dist_score
+                if dist_score > best_exit_score:
+                    best_exit = (mx, my)
+                    best_exit_score = dist_score
+                if ch == 68:  # 'D'
+                    self.closed_doors.add((mx, my))
+                elif ch == 75:  # 'K'
+                    self.key_pos = (mx, my)
+                elif ch == 88:  # 'X'
+                    self.exit_pos = (mx, my)
+        if self.key_pos is None:
+            self.key_pos = best_key
+        if self.exit_pos is None:
+            self.exit_pos = best_exit
+        if not self.closed_doors and fallback_open:
+            dx, dy = fallback_open[(idx * 7 + len(fallback_open) // 2) % len(fallback_open)]
+            if (dx, dy) != self.key_pos and (dx, dy) != self.exit_pos:
+                self.closed_doors.add((dx, dy))
         self.lamps = self._make_lamps(idx)
 
     def _make_lamps(self, map_idx):
@@ -15610,6 +15652,12 @@ class DoomLiteGame:
         if 0 <= mx < self.MAP_W and 0 <= my < self.MAP_H:
             if self.MAP[my][mx] == 35:
                 display.set_pixel(mx, my, 0, 0, 160)
+            elif (mx, my) in self.closed_doors:
+                display.set_pixel(mx, my, 190, 120, 20)
+            elif self.key_pos == (mx, my) and not self.key_taken:
+                display.set_pixel(mx, my, 255, 230, 40)
+            elif self.exit_pos == (mx, my):
+                display.set_pixel(mx, my, 0, 180, 90 if self.key_taken else 40)
             else:
                 display.set_pixel(mx, my, 0, 0, 0)
 
@@ -15619,7 +15667,7 @@ class DoomLiteGame:
     def _is_wall_tile(self, mx, my):
         if mx < 0 or mx >= self.MAP_W or my < 0 or my >= self.MAP_H:
             return True
-        return self.MAP[my][mx] == 35  # '#'
+        return self.MAP[my][mx] == 35 or (mx, my) in self.closed_doors
 
     def _is_wall_pos(self, x, y):
         return self._is_wall_tile(int(x), int(y))
@@ -15726,6 +15774,71 @@ class DoomLiteGame:
             not self._is_wall_pos(x, y + margin)
         )
 
+    def _front_tile(self, reach=1.05):
+        c, s = self._cos_sin(self.ang)
+        return int(self.px + c * reach), int(self.py - s * reach)
+
+    def _try_use_door(self):
+        # Check a few distances so the player can open doors without exact pixel
+        # alignment at corridor junctions.
+        for reach in (0.55, 0.85, 1.15):
+            tx, ty = self._front_tile(reach)
+            if (tx, ty) in self.closed_doors:
+                self.closed_doors.remove((tx, ty))
+                self.score += 10
+                self._minimap_initialized = False
+                return True
+        return False
+
+    def _update_pickups_and_exit(self):
+        if self.key_pos is not None and not self.key_taken:
+            kx, ky = self.key_pos
+            if int(self.px) == kx and int(self.py) == ky:
+                self.key_taken = True
+                self.key_flash = 45
+                self.score += 100
+                self._minimap_initialized = False
+        if self.exit_pos is not None:
+            ex, ey = self.exit_pos
+            if int(self.px) == ex and int(self.py) == ey:
+                if self.key_taken:
+                    self.score += 250 + self.lives * 50
+                    self.wave += 1
+                    self._spawn_wave(self.wave)
+                    self.px, self.py = self._player_start_for_level()
+                    self.ang = 0
+                    return True
+                self.key_flash = 20
+        return False
+
+    def _draw_world_marker(self, sp, wx, wy, kind, zbuf):
+        dx = wx - self.px
+        dy = wy - self.py
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist < 0.15:
+            return
+        a = self._angle_to_units(dx, dy)
+        delta = self._angle_delta(a, self.ang)
+        if abs(delta) > self.HALF_FOV:
+            return
+        sx = int((self.HALF_FOV - delta) * WIDTH / self.FOV)
+        if sx < 0 or sx >= WIDTH or dist >= zbuf[sx] - 0.15:
+            return
+        size = int(self.PLAY_H / (dist * 4.0 + 1.0))
+        if size < 2:
+            size = 2
+        if size > 7:
+            size = 7
+        y = self.PLAY_H // 2 + size
+        if kind == "key":
+            draw_rectangle(sx - 1, y - size, sx + 1, y - size + 1, 255, 230, 40)
+            set_pixel_clipped(sx + 2, y - size + 1, 255, 180, 30)
+            set_pixel_clipped(sx + 3, y - size + 1, 255, 180, 30)
+        else:
+            col = (60, 255, 140) if self.key_taken else (40, 110, 70)
+            draw_rect_outline(sx - size, y - size * 2, sx + size, y, *col)
+            set_pixel_clipped(sx, y - size, 200, 255, 220 if self.key_taken else 90)
+
     def _cos_sin(self, a):
         a &= 255
         c = self._COS[a]
@@ -15758,6 +15871,7 @@ class DoomLiteGame:
         MAP_W = self.MAP_W
         MAP_H = self.MAP_H
         MAX_DIST = self.MAX_DIST
+        closed_doors = self.closed_doors
         px = self.px
         py = self.py
 
@@ -15807,7 +15921,10 @@ class DoomLiteGame:
                 side = 1
 
             # Inline _is_wall_tile to avoid per-step method call overhead.
-            if map_x < 0 or map_x >= MAP_W or map_y < 0 or map_y >= MAP_H or MAP[map_y][map_x] == 35:
+            if (
+                map_x < 0 or map_x >= MAP_W or map_y < 0 or map_y >= MAP_H or
+                MAP[map_y][map_x] == 35 or (map_x, map_y) in closed_doors
+            ):
                 if side == 0:
                     dist = side_x - delta_x
                 else:
@@ -15862,6 +15979,8 @@ class DoomLiteGame:
 
     def _shoot(self):
         # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
+        if self._try_use_door():
+            return
         self.muzzle_flash = 6
         wall_dist, _ = self._cast_ray(self.ang)
 
@@ -16101,6 +16220,13 @@ class DoomLiteGame:
                 ray_dy = ray_dy / 1024.0
             hit_x = px + ray_dx * dist
             hit_y = py + ray_dy * dist
+            hit_mx = int(hit_x)
+            hit_my = int(hit_y)
+            if side == 0:
+                hit_mx = int(hit_x + (-0.001 if ray_dx < 0 else 0.001))
+            else:
+                hit_my = int(hit_y + (-0.001 if ray_dy < 0 else 0.001))
+            is_door = (hit_mx, hit_my) in self.closed_doors
 
             light = 42
             for li, (lx, ly, strength) in enumerate(lamps):
@@ -16151,6 +16277,8 @@ class DoomLiteGame:
             else:            # Purple
                 wb = wr
                 wg = wr // 4
+            if is_door:
+                wr, wg, wb = min(255, b + 20), (b * 3) // 4, max(15, b // 5)
                 
             # Base sky and floor colors depending on theme
             if theme == 0:
@@ -16194,7 +16322,9 @@ class DoomLiteGame:
                 if x < minimap_w and y < minimap_h:
                     continue
                 pattern = (pattern_base + ((y - start) >> 1)) & 15
-                if pattern == 0:
+                if is_door and ((pattern_base + y) & 3) == 0:
+                    pr, pg, pb = min(255, wr + 18), min(255, wg + 12), wb
+                elif pattern == 0:
                     pr, pg, pb = min(255, wr + 12), min(255, wg + 12), min(255, wb + 12)
                 elif pattern == 8:
                     pr, pg, pb = (wr * 7) // 8, (wg * 7) // 8, (wb * 7) // 8
@@ -16276,12 +16406,23 @@ class DoomLiteGame:
                     sprite_light = 255
                 self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim, sprite_light)
 
+        if self.key_pos is not None and not self.key_taken:
+            self._draw_world_marker(sp, self.key_pos[0] + 0.5, self.key_pos[1] + 0.5, "key", zbuf)
+        if self.exit_pos is not None:
+            self._draw_world_marker(sp, self.exit_pos[0] + 0.5, self.exit_pos[1] + 0.5, "exit", zbuf)
+
         if self.render_minimap:
             # minimap overlay: keep the background static and only refresh markers.
             if not self._minimap_initialized:
                 draw_rectangle(0, 0, self.MAP_W + 1, self.MAP_H + 1, 0, 0, 0)
                 for mx, my in self._minimap_walls:
                     sp(mx, my, 0, 0, 160)
+                for mx, my in self.closed_doors:
+                    sp(mx, my, 190, 120, 20)
+                if self.key_pos is not None and not self.key_taken:
+                    sp(self.key_pos[0], self.key_pos[1], 255, 230, 40)
+                if self.exit_pos is not None:
+                    sp(self.exit_pos[0], self.exit_pos[1], 0, 180, 90 if self.key_taken else 40)
                 self._minimap_initialized = True
             else:
                 if self._minimap_prev_player is not None:
@@ -16325,6 +16466,10 @@ class DoomLiteGame:
                 lx = WIDTH - 3 - i * 4
                 ly = 1
                 draw_rectangle(lx, ly, lx + 1, ly + 1, 220, 30, 30)
+            if self.key_taken:
+                draw_text_small(WIDTH - 22, 4, "KEY", 255, 230, 40)
+            elif self.key_flash > 0:
+                draw_text_small(WIDTH - 22, 4, "KEY", 255, 70, 40)
 
         # wave announcement banner
         if self.wave_announce > 0:
@@ -16377,6 +16522,8 @@ class DoomLiteGame:
                     self.hit_flash -= 1
                 if self.muzzle_flash > 0:
                     self.muzzle_flash -= 1
+                if self.key_flash > 0:
+                    self.key_flash -= 1
                 if self.dmg_flash > 0:
                     self.dmg_flash -= 1
 
@@ -16416,6 +16563,9 @@ class DoomLiteGame:
                         self.px = nx
                     if not self._is_wall_pos(self.px, ny):
                         self.py = ny
+                    if self._update_pickups_and_exit():
+                        self._render()
+                        continue
 
                 # shoot
                 if self.shot_cd > 0:
@@ -16481,6 +16631,8 @@ class DoomLiteGame:
                     self.hit_flash -= 1
                 if self.muzzle_flash > 0:
                     self.muzzle_flash -= 1
+                if self.key_flash > 0:
+                    self.key_flash -= 1
                 if self.dmg_flash > 0:
                     self.dmg_flash -= 1
 
@@ -16520,6 +16672,9 @@ class DoomLiteGame:
                         self.px = nx
                     if not self._is_wall_pos(self.px, ny):
                         self.py = ny
+                    if self._update_pickups_and_exit():
+                        self._render()
+                        continue
 
                 # shoot
                 if self.shot_cd > 0:
