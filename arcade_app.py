@@ -1898,6 +1898,10 @@ class HighScores:
 class GameSettings:
     """Shared per-game option state for selector menus and game instances."""
     FILE = "settings.json"
+    # Definition shape:
+    #   game_id: ((key, short_label, ((stored_value, menu_label), ...), default_index), ...)
+    # The selector uses this declarative data to draw settings screens; games read
+    # the stored values from the context passed by GameSelect._make_game_instance().
     DEFINITIONS = {
         "DEMOS": (
             ("slide_ms", "SLIDE", ((30000, "30S"), (60000, "60S"), (90000, "90S"), (120000, "120S")), 1),
@@ -1910,6 +1914,10 @@ class GameSettings:
         "ORBTAL": (
             ("gravity", "GRAV", ((False, "OFF"), (True, "ON")), 0),
             ("multi_shot", "MULTI", ((False, "OFF"), (True, "ON")), 0),
+        ),
+        "RACING": (
+            ("laps", "LAPS", ((2, "2"), (3, "3"), (5, "5")), 1),
+            ("traffic", "TRAF", ((True, "ON"), (False, "OFF")), 0),
         ),
         "BILLI": (
             ("rules", "RULE", (("pool", "POOL"), ("snooker", "SNOOK")), 0),
@@ -1926,14 +1934,26 @@ class GameSettings:
             ("difficulty", "DIFF", (("easy", "EASY"), ("normal", "NORM"), ("hard", "HARD")), 1),
             ("obstacles", "ROCKS", ((False, "OFF"), (True, "ON")), 1),
         ),
+        "CITY": (
+            ("jobs", "JOBS", ((3, "3"), (5, "5")), 0),
+            ("traffic", "TRAF", ((True, "ON"), (False, "OFF")), 0),
+        ),
         "LANDER": (
             ("mode", "MODE", (("classic", "V1"), ("scroll", "V2")), 0),
+        ),
+        "KERBAL": (
+            ("mission", "MISN", (("orbit", "ORB"), ("return", "RET")), 0),
+            ("assist", "ASST", ((True, "ON"), (False, "OFF")), 0),
         ),
         "PONG": (
             ("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),
         ),
         "TRON": (
             ("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),
+        ),
+        "WORMS": (
+            ("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),
+            ("worms", "TEAM", ((2, "2"), (3, "3")), 0),
         ),
         "UFODEF": (
             ("launcher", "GUNS", (("base", "BASE"), ("turrets", "3GUN")), 1),
@@ -1959,6 +1979,7 @@ class GameSettings:
     def save(self):
         tmp_file = self.FILE + ".tmp"
         try:
+            # Write-and-rename keeps settings resilient if power is lost while saving.
             with open(tmp_file, "w") as f:
                 json.dump(self.values, f)
             try:
@@ -6837,6 +6858,295 @@ class ArtilleryGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
+class WormsGame:
+    """
+    WORMS
+    Controls:
+      - Left / Right: move active worm, or adjust power while holding Z
+      - Up / Down: aim
+      - Z: fire
+      - C: return to menu
+    Tiny turn-based worms/artillery game with teams and destructible terrain.
+    """
+    FRAME_MS = 45
+    GRAVITY = 0.080
+
+    def __init__(self, ctx=None):
+        self.players_mode = get_context_setting(ctx, "players", "cpu")
+        self.team_size = int(get_context_setting(ctx, "worms", 2) or 2)
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+        self.turn_team = 0
+        self.active = [0, 0]
+        self.angle = 45
+        self.power = 16
+        self.wind = 0.0
+        self.shell = None
+        self.explosion = None
+        self.last_fire = [False, False]
+        self.cpu_wait = 26
+        self.turns = 0
+        self._new_match()
+
+    def _new_match(self):
+        self.terrain = []
+        base = 42
+        for x in range(WIDTH):
+            y = base + int(math.sin(x * 0.19) * 5) + int(math.sin(x * 0.055 + 1.4) * 4)
+            self.terrain.append(clamp(y, 27, PLAY_HEIGHT - 2))
+        self.worms = [[], []]
+        left_slots = (8, 18, 28)
+        right_slots = (55, 45, 35)
+        for i in range(self.team_size):
+            lx = left_slots[i]
+            rx = right_slots[i]
+            self.worms[0].append({"x": float(lx), "y": float(self._ground_y(lx) - 2), "hp": 2})
+            self.worms[1].append({"x": float(rx), "y": float(self._ground_y(rx) - 2), "hp": 2})
+        self._settle_all()
+        self.turn_team = 0
+        self.active = [0, 0]
+        self._select_alive(0)
+        self._select_alive(1)
+
+    def _ground_y(self, x):
+        return self.terrain[clamp(int(x), 0, WIDTH - 1)]
+
+    def _active_worm(self):
+        return self.worms[self.turn_team][self.active[self.turn_team]]
+
+    def _select_alive(self, team):
+        worms = self.worms[team]
+        start = self.active[team] % len(worms)
+        for off in range(len(worms)):
+            idx = (start + off) % len(worms)
+            if worms[idx]["hp"] > 0:
+                self.active[team] = idx
+                return True
+        return False
+
+    def _team_alive(self, team):
+        for w in self.worms[team]:
+            if w["hp"] > 0:
+                return True
+        return False
+
+    def _settle_all(self):
+        for team in range(2):
+            for w in self.worms[team]:
+                if w["hp"] <= 0:
+                    continue
+                ix = clamp(int(w["x"]), 0, WIDTH - 1)
+                w["y"] = float(self._ground_y(ix) - 2)
+
+    def _crater(self, cx, cy, radius=5):
+        self.explosion = [int(cx), int(cy), 8]
+        icx = int(cx)
+        for x in range(max(0, icx - radius), min(WIDTH, icx + radius + 1)):
+            d = abs(x - icx)
+            cut = max(1, radius - d)
+            self.terrain[x] = clamp(self.terrain[x] + cut, 22, PLAY_HEIGHT - 1)
+        self._damage_worms(cx, cy, radius + 2)
+        self._settle_all()
+
+    def _damage_worms(self, cx, cy, radius):
+        r2 = radius * radius
+        for team in range(2):
+            for w in self.worms[team]:
+                if w["hp"] <= 0:
+                    continue
+                dx = w["x"] - cx
+                dy = w["y"] - cy
+                if dx * dx + dy * dy <= r2:
+                    w["hp"] -= 1
+                    if team == 1:
+                        self.score += 45
+
+    def _next_turn(self):
+        if not self._team_alive(0):
+            set_game_over_score(self.score)
+            return False
+        if not self._team_alive(1):
+            set_game_over_score(self.score + 250, won=True)
+            return False
+        self.turn_team = 1 - self.turn_team
+        self.active[self.turn_team] = (self.active[self.turn_team] + 1) % len(self.worms[self.turn_team])
+        self._select_alive(self.turn_team)
+        self.wind = random.choice((-1, 1)) * random.randint(0, 5) * 0.006
+        self.shell = None
+        self.cpu_wait = 26
+        self.turns += 1
+        if self.turn_team == 0:
+            self.angle = 45
+            self.power = 16
+        return True
+
+    def _fire(self, team, angle, power):
+        if self.shell:
+            return
+        w = self._active_worm()
+        sign = 1 if team == 0 else -1
+        rad = math.radians(angle)
+        speed = power * 0.12
+        self.shell = [w["x"], w["y"] - 3, math.cos(rad) * speed * sign, -math.sin(rad) * speed, team]
+
+    def _move_active(self, d):
+        w = self._active_worm()
+        if d == JOYSTICK_LEFT:
+            nx = max(1.0, w["x"] - 1.0)
+        elif d == JOYSTICK_RIGHT:
+            nx = min(float(WIDTH - 2), w["x"] + 1.0)
+        else:
+            return
+        gy = self._ground_y(nx)
+        if abs((gy - 2) - w["y"]) <= 4:
+            w["x"] = nx
+            w["y"] = float(gy - 2)
+
+    def _cpu_turn(self):
+        if self.turn_team != 1 or self.shell:
+            return
+        self.cpu_wait -= 1
+        if self.cpu_wait > 0:
+            return
+        enemy = self.worms[0][self.active[0]]
+        me = self._active_worm()
+        dx = abs(enemy["x"] - me["x"])
+        angle = clamp(36 + random.randint(-5, 10) - int(self.wind * 180), 25, 72)
+        power = clamp(int(dx / 4.0) + random.randint(4, 9), 9, 28)
+        self._fire(1, angle, power)
+
+    def _advance_shell(self):
+        if not self.shell:
+            return True
+        for _ in range(2):
+            self.shell[2] += self.wind
+            self.shell[3] += self.GRAVITY
+            self.shell[0] += self.shell[2]
+            self.shell[1] += self.shell[3]
+            x, y, _vx, _vy, _owner = self.shell
+            if x < 0 or x >= WIDTH or y >= PLAY_HEIGHT:
+                self.shell = None
+                return self._next_turn()
+            if y >= self._ground_y(x):
+                self._crater(x, y)
+                self.shell = None
+                return self._next_turn()
+            for team in range(2):
+                for w in self.worms[team]:
+                    if w["hp"] <= 0:
+                        continue
+                    dx = w["x"] - x
+                    dy = w["y"] - y
+                    if dx * dx + dy * dy <= 5:
+                        self._crater(x, y)
+                        self.shell = None
+                        return self._next_turn()
+        return True
+
+    def _draw_worm(self, w, team, selected):
+        if w["hp"] <= 0:
+            return
+        x = int(w["x"])
+        y = int(w["y"])
+        col = (80, 210, 255) if team == 0 else (255, 95, 75)
+        draw_rectangle(x - 1, y - 1, x + 1, y + 1, *col)
+        if selected:
+            display.set_pixel(x, y - 3, 255, 255, 255)
+        if w["hp"] > 1:
+            display.set_pixel(x + 2, y, 255, 255, 255)
+
+    def _draw_aim(self):
+        w = self._active_worm()
+        sign = 1 if self.turn_team == 0 else -1
+        rad = math.radians(self.angle)
+        x0 = int(w["x"])
+        y0 = int(w["y"] - 2)
+        x1 = x0 + int(math.cos(rad) * 7 * sign)
+        y1 = y0 - int(math.sin(rad) * 7)
+        draw_line(x0, y0, x1, y1, 255, 255, 120)
+
+    def _draw(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 10, 24)
+        for x, y in enumerate(self.terrain):
+            draw_line(x, y, x, PLAY_HEIGHT - 1, 60, 92, 45)
+            display.set_pixel(x, y, 120, 150, 70)
+        for team in range(2):
+            for i, w in enumerate(self.worms[team]):
+                self._draw_worm(w, team, team == self.turn_team and i == self.active[team])
+        if not self.shell and (self.turn_team == 0 or self.players_mode == "two"):
+            self._draw_aim()
+        if self.shell:
+            display.set_pixel(int(self.shell[0]), int(self.shell[1]), 255, 255, 180)
+        if self.explosion:
+            x, y, t = self.explosion
+            col = (255, 220, 40) if t & 1 else (255, 70, 30)
+            draw_rect_outline(x - 2, y - 2, x + 2, y + 2, *col)
+            self.explosion[2] -= 1
+            if self.explosion[2] <= 0:
+                self.explosion = None
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, "A" + str(self.angle), 210, 210, 210)
+        draw_text_small(19, PLAY_HEIGHT, "P" + str(self.power), 210, 210, 210)
+        draw_text_small(43, PLAY_HEIGHT, "W" + str(int(self.wind * 100)), 180, 180, 180)
+        display_flush()
+
+    def _read_turn_input(self, joystick, joystick_fire):
+        if self.players_mode == "two" and self.turn_team == 0:
+            d = read_wasd_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
+            _back, fire = read_wasd_buttons()
+            return d, fire
+        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        return d, joystick_fire
+
+    def _handle_player_turn(self, joystick, joystick_fire):
+        if self.shell:
+            return
+        d, fire = self._read_turn_input(joystick, joystick_fire)
+        if d == JOYSTICK_UP:
+            self.angle = min(82, self.angle + 2)
+        elif d == JOYSTICK_DOWN:
+            self.angle = max(15, self.angle - 2)
+        elif d in (JOYSTICK_LEFT, JOYSTICK_RIGHT):
+            if fire:
+                delta = 1 if d == JOYSTICK_RIGHT else -1
+                self.power = clamp(self.power + delta, 6, 30)
+            else:
+                self._move_active(d)
+        if fire and not self.last_fire[self.turn_team] and d not in (JOYSTICK_LEFT, JOYSTICK_RIGHT):
+            self._fire(self.turn_team, self.angle, self.power)
+        self.last_fire[self.turn_team] = fire
+
+    def _build_step(self, joystick):
+        self.reset()
+        begin_game(0)
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            if self.turn_team == 0 or self.players_mode == "two":
+                self._handle_player_turn(joystick, z_button)
+            else:
+                self._cpu_turn()
+                self.last_fire[1] = False
+            if not self._advance_shell():
+                return False
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
 class BattlezoneGame:
     """
     BTLZON
@@ -10948,13 +11258,14 @@ class DemosGame:
         # _reset_demo_state(), and dispatch init/step below. The low-RAM subset
         # avoids larger buffers and dense per-pixel math.
         effects = (
-            ("SNAKE", "LIFE", "CUBE", "VORTEX", "COMETS", "SPARK", "RINGS", "GRAV")
+            ("SNAKE", "LIFE", "CUBE", "VORTEX", "COMETS", "SPARK", "RINGS", "GRAV", "SPRING", "CRADLE")
             if CONFIG_LOW_RAM_MODE
             else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE",
                   "VORTEX", "COMETS",
                   "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE",
                   "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
                   "BOIDS", "NBODY", "METAB", "GRAV", "RIPPLE", "FIRWRK",
+                  "SPRING", "CRADLE",
                   "PHYLLO", "LISSAJO", "PENDUL", "ARCADE", "CRT", "WINMAZE")
         )
         effects = tuple(
@@ -11002,6 +11313,23 @@ class DemosGame:
         x = WIDTH - len(txt) * 6 - 1
         draw_rectangle(x - 1, 0, WIDTH - 1, 6, 0, 0, 0)
         draw_text_small(x, 1, txt, 230, 230, 230)
+
+    def _demo_disc(self, cx, cy, radius, color):
+        r2 = radius * radius
+        x0 = int(cx - radius)
+        x1 = int(cx + radius)
+        y0 = int(cy - radius)
+        y1 = int(cy + radius)
+        for yy in range(y0, y1 + 1):
+            if yy < 0 or yy >= HEIGHT:
+                continue
+            dy = yy - cy
+            for xx in range(x0, x1 + 1):
+                if xx < 0 or xx >= WIDTH:
+                    continue
+                dx = xx - cx
+                if dx * dx + dy * dy <= r2:
+                    set_pixel_clipped(xx, yy, color[0], color[1], color[2])
 
     def _reset_demo_state(self):
         # shared
@@ -11123,6 +11451,16 @@ class DemosGame:
         # GRAV: compact particle state integrated around two moving attractors.
         self._grav_particles = []
         self._grav_phase = 0
+
+        # SPRING: a dangling spring-mass chain with gravity and damping.
+        self._spring_nodes = []
+        self._spring_phase = 0
+        self._spring_rest = 0.0
+
+        # CRADLE: Newton's cradle with string constraints and elastic transfer.
+        self._cradle_bobs = []
+        self._cradle_phase = 0
+        self._cradle_length = 0.0
 
         # RIPPLE: integer water height-field (two buffers) at half resolution,
         # rendered as 2x2 blocks. Raindrops perturb the field periodically.
@@ -12682,6 +13020,213 @@ class DemosGame:
                 display.set_pixel(tx, ty, r // 4, g // 4, bb // 4)
             display.set_pixel(int(p[0]), int(p[1]), r, g, bb)
 
+    # --- SPRING MASS CHAIN ---
+    def _spring_init(self):
+        self._spring_phase = random.randint(0, 255)
+        self._spring_rest = 6.0
+        self._spring_nodes = []
+        count = 5 if CONFIG_LOW_RAM_MODE else 7
+        cx = WIDTH / 2.0
+        cy = 8.0
+        for i in range(count):
+            self._spring_nodes.append([
+                cx + random.uniform(-0.8, 0.8),
+                cy + (i + 1) * self._spring_rest,
+                random.uniform(-0.15, 0.15),
+                random.uniform(-0.15, 0.15),
+                1.0 + i * 0.18,
+                (i * 360) // count,
+            ])
+        display.clear()
+
+    def _spring_pull(self, ax, ay, node, rest, k):
+        dx = node[0] - ax
+        dy = node[1] - ay
+        d2 = dx * dx + dy * dy
+        if d2 <= 0.0001:
+            return
+        d = math.sqrt(d2)
+        nx = dx / d
+        ny = dy / d
+        stretch = d - rest
+        fx = nx * stretch * k
+        fy = ny * stretch * k
+        node[2] -= fx / node[4]
+        node[3] -= fy / node[4]
+
+    def _spring_step(self):
+        display.clear()
+        self._spring_phase = (self._spring_phase + 2) & 255
+        anchor_x = WIDTH / 2.0 + math.sin(self._spring_phase * 0.05) * 7.0
+        anchor_y = 6.0
+        nodes = self._spring_nodes
+        if not nodes:
+            self._spring_init()
+            nodes = self._spring_nodes
+
+        for node in nodes:
+            node[3] += 0.12
+            node[0] += node[2]
+            node[1] += node[3]
+            node[2] *= 0.992
+            node[3] *= 0.992
+
+        for _ in range(3):
+            self._spring_pull(anchor_x, anchor_y, nodes[0], self._spring_rest, 0.12)
+            for i in range(len(nodes) - 1):
+                self._spring_pull(nodes[i][0], nodes[i][1], nodes[i + 1], self._spring_rest, 0.09)
+
+            dx = nodes[0][0] - anchor_x
+            dy = nodes[0][1] - anchor_y
+            d2 = dx * dx + dy * dy
+            if d2 > 0.0001:
+                d = math.sqrt(d2)
+                nx = dx / d
+                ny = dy / d
+                nodes[0][0] = anchor_x + nx * self._spring_rest
+                nodes[0][1] = anchor_y + ny * self._spring_rest
+                rv = nodes[0][2] * nx + nodes[0][3] * ny
+                nodes[0][2] -= rv * nx
+                nodes[0][3] -= rv * ny
+
+            for i in range(1, len(nodes)):
+                a = nodes[i - 1]
+                b = nodes[i]
+                dx = b[0] - a[0]
+                dy = b[1] - a[1]
+                d2 = dx * dx + dy * dy
+                if d2 <= 0.0001:
+                    continue
+                d = math.sqrt(d2)
+                nx = dx / d
+                ny = dy / d
+                b[0] = a[0] + nx * self._spring_rest
+                b[1] = a[1] + ny * self._spring_rest
+                rv = (b[2] - a[2]) * nx + (b[3] - a[3]) * ny
+                if rv > 0:
+                    rv = 0.0
+                a[2] += rv * nx * 0.5
+                a[3] += rv * ny * 0.5
+                b[2] -= rv * nx * 0.5
+                b[3] -= rv * ny * 0.5
+
+        for i, node in enumerate(nodes):
+            radius = 2 if i < len(nodes) - 1 else 3
+            if node[0] < radius + 1:
+                node[0] = radius + 1
+                node[2] = abs(node[2]) * 0.65
+            elif node[0] > WIDTH - radius - 2:
+                node[0] = WIDTH - radius - 2
+                node[2] = -abs(node[2]) * 0.65
+            if node[1] < 4 + radius:
+                node[1] = 4 + radius
+                node[3] = abs(node[3]) * 0.65
+            elif node[1] > HEIGHT - radius - 2:
+                node[1] = HEIGHT - radius - 2
+                node[3] = -abs(node[3]) * 0.65
+
+        draw_rectangle(int(anchor_x) - 2, int(anchor_y) - 1, int(anchor_x) + 2, int(anchor_y), 255, 255, 255)
+        px, py = anchor_x, anchor_y
+        for i, node in enumerate(nodes):
+            hue = (self._frame * 3 + i * 40) % 360
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            draw_line(int(px), int(py), int(node[0]), int(node[1]), r // 2, g // 2, b // 2)
+            self._demo_disc(int(node[0]), int(node[1]), 2 if i < len(nodes) - 1 else 3, (r, g, b))
+            px, py = node[0], node[1]
+
+    # --- CRADLE (Newton's cradle) ---
+    def _cradle_init(self):
+        self._cradle_phase = 0
+        self._cradle_length = 13.0
+        self._cradle_bobs = []
+        count = 5
+        span = 7.0
+        top_y = 8.0
+        base_x = WIDTH / 2.0 - span * (count - 1) * 0.5
+        for i in range(count):
+            anchor_x = base_x + i * span
+            anchor_y = top_y
+            angle = -0.78 if i == 0 else 0.0
+            x = anchor_x + math.sin(angle) * self._cradle_length
+            y = anchor_y + math.cos(angle) * self._cradle_length
+            vx = 0.9 if i == 0 else 0.0
+            vy = 0.0
+            self._cradle_bobs.append([x, y, vx, vy, anchor_x, anchor_y, self._cradle_length, (i * 56) % 360])
+        display.clear()
+
+    def _cradle_constrain(self, bob):
+        dx = bob[0] - bob[4]
+        dy = bob[1] - bob[5]
+        d2 = dx * dx + dy * dy
+        if d2 <= 0.0001:
+            return
+        d = math.sqrt(d2)
+        nx = dx / d
+        ny = dy / d
+        bob[0] = bob[4] + nx * bob[6]
+        bob[1] = bob[5] + ny * bob[6]
+        radial = bob[2] * nx + bob[3] * ny
+        bob[2] -= radial * nx
+        bob[3] -= radial * ny
+
+    def _cradle_step(self):
+        display.clear()
+        self._cradle_phase = (self._cradle_phase + 1) & 255
+        bobs = self._cradle_bobs
+        if not bobs:
+            self._cradle_init()
+            bobs = self._cradle_bobs
+
+        for bob in bobs:
+            bob[3] += 0.11
+            bob[0] += bob[2]
+            bob[1] += bob[3]
+            bob[2] *= 0.994
+            bob[3] *= 0.994
+
+        for _ in range(2):
+            for bob in bobs:
+                self._cradle_constrain(bob)
+
+            for i in range(len(bobs)):
+                for j in range(i + 1, len(bobs)):
+                    a = bobs[i]
+                    b = bobs[j]
+                    dx = b[0] - a[0]
+                    dy = b[1] - a[1]
+                    min_d = 4.4
+                    d2 = dx * dx + dy * dy
+                    if d2 <= 0.0001 or d2 >= min_d * min_d:
+                        continue
+                    d = math.sqrt(d2)
+                    nx = dx / d
+                    ny = dy / d
+                    overlap = (min_d - d) * 0.5
+                    a[0] -= nx * overlap
+                    a[1] -= ny * overlap
+                    b[0] += nx * overlap
+                    b[1] += ny * overlap
+                    rvx = b[2] - a[2]
+                    rvy = b[3] - a[3]
+                    vel_n = rvx * nx + rvy * ny
+                    if vel_n > 0:
+                        continue
+                    impulse = -(1.0 + 0.98) * vel_n * 0.5
+                    a[2] -= impulse * nx
+                    a[3] -= impulse * ny
+                    b[2] += impulse * nx
+                    b[3] += impulse * ny
+
+        for bob in bobs:
+            self._cradle_constrain(bob)
+
+        draw_rectangle(10, 6, WIDTH - 11, 6, 180, 180, 190)
+        for bob in bobs:
+            hue = (bob[7] + self._frame * 2) % 360
+            r, g, b = hsb_to_rgb(hue, 1, 1)
+            draw_line(int(bob[4]), int(bob[5]), int(bob[0]), int(bob[1]), 130, 130, 140)
+            self._demo_disc(int(bob[0]), int(bob[1]), 2, (r, g, b))
+
     # --- CRT TEST PATTERN ---
     def _crt_init(self):
         self._crt_phase = 0
@@ -13203,6 +13748,10 @@ class DemosGame:
             self._metab_init()
         elif demo == "GRAV":
             self._grav_init()
+        elif demo == "SPRING":
+            self._spring_init()
+        elif demo == "CRADLE":
+            self._cradle_init()
         elif demo == "RIPPLE":
             self._ripple_init()
         elif demo == "FIRWRK":
@@ -13281,6 +13830,10 @@ class DemosGame:
             self._metab_step()
         elif demo == "GRAV":
             self._grav_step()
+        elif demo == "SPRING":
+            self._spring_step()
+        elif demo == "CRADLE":
+            self._cradle_step()
         elif demo == "RIPPLE":
             if self._ripple_cur is None:
                 self._ripple_init()
@@ -14038,6 +14591,311 @@ class LunarLanderGame:
 
             except RestartProgram:
                 return
+
+
+class KerbalGame:
+    """
+    KERBAL
+    Controls:
+      - Left / Right: rotate rocket
+      - Z or Up: thrust
+      - C: return to menu
+    Arcade orbital flight: launch, circularize, optionally return and land.
+    """
+    FRAME_MS = 35
+    PLANET_R = 18.0
+    MU = 34.0
+    SCALE = 1.28
+
+    def __init__(self, ctx=None):
+        self.mission = get_context_setting(ctx, "mission", "orbit")
+        self.assist = bool(get_context_setting(ctx, "assist", True))
+        self.reset()
+
+    def reset(self):
+        self.cx = 0.0
+        self.cy = 0.0
+        self.x = 0.0
+        self.y = -self.PLANET_R - 2.0
+        self.vx = 0.0
+        self.vy = 0.0
+        self.angle = 90
+        self.fuel_max = 860
+        self.fuel = self.fuel_max
+        self.thrust = 0.090
+        self.score = 0
+        self.orbit_hold = 0
+        self.return_ready = False
+        self.landed = False
+        self.frame = 0
+        self.prelaunch = True
+        self.launch_grace = 0
+        self.trail = []
+        self.max_trail = 54
+        self.last_score_ms = ticks_ms()
+
+    def _cos_sin(self, angle_deg):
+        a = math.radians(angle_deg % 360)
+        return math.cos(a), math.sin(a)
+
+    def _radius(self):
+        return math.sqrt(self.x * self.x + self.y * self.y) + 1e-6
+
+    def _surface_alt(self):
+        return self._radius() - self.PLANET_R
+
+    def _radial_tangent_speed(self):
+        r = self._radius()
+        ux = self.x / r
+        uy = self.y / r
+        radial = self.vx * ux + self.vy * uy
+        tangent = self.vx * (-uy) + self.vy * ux
+        return radial, tangent
+
+    def _orbit_quality(self):
+        alt = self._surface_alt()
+        radial, tangent = self._radial_tangent_speed()
+        target = math.sqrt(self.MU / max(8.0, self._radius()))
+        alt_ok = 8.0 <= alt <= 24.0
+        speed_ok = abs(abs(tangent) - target) < (0.20 if self.assist else 0.14)
+        radial_ok = abs(radial) < (0.18 if self.assist else 0.10)
+        return alt_ok and speed_ok and radial_ok, alt, target, radial, tangent
+
+    def _screen(self, wx, wy):
+        return int(WIDTH // 2 + wx * self.SCALE), int(PLAY_HEIGHT // 2 + wy * self.SCALE)
+
+    def _draw_planet(self):
+        px, py = self._screen(0, 0)
+        r = int(self.PLANET_R * self.SCALE)
+        for deg in range(0, 360, 10):
+            a = math.radians(deg)
+            x = px + int(math.cos(a) * r)
+            y = py + int(math.sin(a) * r)
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                display.set_pixel(x, y, 40, 120, 255)
+        for deg in range(0, 360, 30):
+            a = math.radians(deg)
+            x = px + int(math.cos(a) * (r - 2))
+            y = py + int(math.sin(a) * (r - 2))
+            if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                display.set_pixel(x, y, 20, 80, 160)
+
+    def _draw_orbit_band(self):
+        px, py = self._screen(0, 0)
+        for rr, col in ((int((self.PLANET_R + 8.0) * self.SCALE), (25, 70, 25)),
+                        (int((self.PLANET_R + 24.0) * self.SCALE), (25, 70, 25))):
+            for deg in range(0, 360, 18):
+                a = math.radians(deg)
+                x = px + int(math.cos(a) * rr)
+                y = py + int(math.sin(a) * rr)
+                if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
+                    display.set_pixel(x, y, *col)
+
+    def _record_trail(self):
+        if (self.frame & 1) != 0:
+            return
+        self.trail.append((self.x, self.y))
+        if len(self.trail) > self.max_trail:
+            self.trail.pop(0)
+
+    def _draw_trail(self):
+        n = len(self.trail)
+        if n < 2:
+            return
+        for i, (tx, ty) in enumerate(self.trail):
+            sx, sy = self._screen(tx, ty)
+            if 0 <= sx < WIDTH and 0 <= sy < PLAY_HEIGHT:
+                level = 45 + int(130 * (i + 1) / n)
+                display.set_pixel(sx, sy, 20, level, 170)
+
+    def _draw_flight_cues(self):
+        sx, sy = self._screen(self.x, self.y)
+        speed = math.sqrt(self.vx * self.vx + self.vy * self.vy)
+        if speed > 0.08:
+            vx = self.vx / speed
+            vy = self.vy / speed
+            px = sx + int(vx * 6)
+            py = sy + int(vy * 6)
+            set_pixel_clipped(px, py, 80, 255, 255)
+            if self.return_ready:
+                rx = sx - int(vx * 6)
+                ry = sy - int(vy * 6)
+                set_pixel_clipped(rx, ry, 255, 130, 40)
+        if self.assist:
+            c, s = self._cos_sin(self.angle)
+            ax = sx + int(c * 7)
+            ay = sy - int(s * 7)
+            set_pixel_clipped(ax, ay, 255, 255, 70)
+
+    def _draw_ship(self, thrust_on):
+        sx, sy = self._screen(self.x, self.y)
+        c, s = self._cos_sin(self.angle)
+        nose = (sx + int(c * 4), sy - int(s * 4))
+        left = (sx + int(math.cos(math.radians(self.angle + 140)) * 3),
+                sy - int(math.sin(math.radians(self.angle + 140)) * 3))
+        right = (sx + int(math.cos(math.radians(self.angle - 140)) * 3),
+                 sy - int(math.sin(math.radians(self.angle - 140)) * 3))
+        draw_line(nose[0], nose[1], left[0], left[1], 255, 255, 255)
+        draw_line(nose[0], nose[1], right[0], right[1], 255, 255, 255)
+        draw_line(left[0], left[1], right[0], right[1], 255, 255, 255)
+        if thrust_on:
+            fx = sx - int(c * 5)
+            fy = sy + int(s * 5)
+            draw_line(sx, sy, fx, fy, 255, 100, 0)
+
+    def _draw_hud(self, alt, target_speed, radial, tangent):
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        fuel_w = int(20 * max(0, self.fuel) / self.fuel_max)
+        draw_rectangle(1, PLAY_HEIGHT + 1, 20, PLAY_HEIGHT + 2, 45, 45, 45)
+        if fuel_w > 0:
+            draw_rectangle(1, PLAY_HEIGHT + 1, fuel_w, PLAY_HEIGHT + 2, 255, 210, 30)
+        draw_text_small(24, PLAY_HEIGHT, "A" + str(max(0, int(alt))), 180, 220, 255)
+        if self.prelaunch:
+            draw_text_small(43, PLAY_HEIGHT, "GO", 255, 255, 90)
+        elif self.return_ready:
+            label = "LND" if alt < 7 else "RET"
+            draw_text_small(43, PLAY_HEIGHT, label, 120, 255, 120)
+        else:
+            diff = int(abs(abs(tangent) - target_speed) * 10)
+            draw_text_small(46, PLAY_HEIGHT, "D" + str(min(9, diff)), 180, 180, 180)
+            hold_w = int(17 * min(110, self.orbit_hold) / 110)
+            draw_rectangle(25, PLAY_HEIGHT + 4, 42, PLAY_HEIGHT + 4, 28, 28, 28)
+            if hold_w > 0:
+                draw_rectangle(25, PLAY_HEIGHT + 4, 24 + hold_w, PLAY_HEIGHT + 4, 80, 255, 120)
+
+    def _draw(self, thrust_on, alt, target_speed, radial, tangent):
+        display.clear()
+        self._draw_orbit_band()
+        self._draw_trail()
+        self._draw_planet()
+        self._draw_flight_cues()
+        self._draw_ship(thrust_on)
+        ok, _alt, _target, _radial, _tangent = self._orbit_quality()
+        if ok:
+            draw_text_small(25, 2, "ORB", 80, 255, 120)
+        self._draw_hud(alt, target_speed, radial, tangent)
+        display_flush()
+
+    def _step(self, joystick):
+        global game_over, global_score
+        c_button, z_button = joystick.read_buttons()
+        if c_button:
+            return False
+        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP], debounce=False)
+        if d == JOYSTICK_LEFT:
+            self.angle = (self.angle + 4) % 360
+        elif d == JOYSTICK_RIGHT:
+            self.angle = (self.angle - 4) % 360
+        thrust_on = (z_button or d == JOYSTICK_UP) and self.fuel > 0
+
+        if self.prelaunch:
+            if thrust_on:
+                self.prelaunch = False
+                self.launch_grace = 80
+                self.vx = 0.08
+                self.vy = -0.10
+                self.trail = []
+            else:
+                ok, alt, target_speed, radial, tangent = self._orbit_quality()
+                global_score = 0
+                self._draw(False, alt, target_speed, radial, tangent)
+                return True
+
+        r = self._radius()
+        gx = -self.MU * self.x / (r * r * r)
+        gy = -self.MU * self.y / (r * r * r)
+        ax = gx
+        ay = gy
+        if thrust_on:
+            c, s = self._cos_sin(self.angle)
+            ax += c * self.thrust
+            ay += -s * self.thrust
+            self.fuel -= 1
+        if self.assist and self._surface_alt() < 5 and self.vy > 0:
+            self.vy *= 0.995
+        if self.assist and self.launch_grace > 0 and self._surface_alt() < 7:
+            self.vy *= 0.970
+
+        self.vx = clamp(self.vx + ax, -1.55, 1.55)
+        self.vy = clamp(self.vy + ay, -1.55, 1.55)
+        if self.assist and not self.return_ready:
+            alt_now = self._surface_alt()
+            if self.launch_grace > 0 or alt_now < 28:
+                r = self._radius()
+                ux = self.x / r
+                uy = self.y / r
+                radial = self.vx * ux + self.vy * uy
+                cap = 0.72 if self.launch_grace > 0 else 0.95
+                if radial > cap:
+                    excess = radial - cap
+                    self.vx -= excess * ux
+                    self.vy -= excess * uy
+        self.x += self.vx
+        self.y += self.vy
+        self.frame += 1
+        if self.launch_grace > 0:
+            self.launch_grace -= 1
+        self._record_trail()
+
+        ok, alt, target_speed, radial, tangent = self._orbit_quality()
+        if ok:
+            self.orbit_hold += 1
+            self.score += 2
+        else:
+            self.orbit_hold = max(0, self.orbit_hold - 2)
+
+        if self.orbit_hold >= 110:
+            if self.mission == "orbit":
+                set_game_over_score(self.score + int(self.fuel), won=True)
+                return False
+            self.return_ready = True
+
+        if self._radius() <= self.PLANET_R + 1.0:
+            speed = math.sqrt(self.vx * self.vx + self.vy * self.vy)
+            upright = abs(((self.angle - 90 + 180) % 360) - 180) < 32
+            if self.return_ready and speed < 0.75 and upright:
+                set_game_over_score(self.score + int(self.fuel) + 500, won=True)
+            elif self.launch_grace > 0:
+                r = self._radius()
+                ux = self.x / r
+                uy = self.y / r
+                self.x = ux * (self.PLANET_R + 1.4)
+                self.y = uy * (self.PLANET_R + 1.4)
+                inward = self.vx * ux + self.vy * uy
+                if inward < 0:
+                    self.vx -= inward * ux
+                    self.vy -= inward * uy
+                self.vx *= 0.72
+                self.vy *= 0.72
+                global_score = self.score
+                self._draw(thrust_on, alt, target_speed, radial, tangent)
+                return True
+            else:
+                set_game_over_score(self.score)
+            return False
+
+        if self._radius() > 58 or self.fuel <= 0 and self._surface_alt() > 32 and not ok:
+            set_game_over_score(self.score)
+            return False
+
+        global_score = self.score + int(max(0, alt))
+        self._draw(thrust_on, alt, target_speed, radial, tangent)
+        return True
+
+    def _build_step(self, joystick):
+        self.reset()
+        begin_game(0)
+        def step():
+            return self._step(joystick)
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class UFODefenseGame:
@@ -15606,6 +16464,627 @@ class DoomLiteGame:
 
             except RestartProgram:
                 return
+
+
+class CityChaseGame:
+    """
+    CITY
+    Controls:
+      - Up / Down: accelerate / brake
+      - Left / Right: steer
+      - Z: boost
+      - C: return to menu
+    Top-down city chase inspired by early overhead open-world crime games.
+    """
+    FRAME_MS = 38
+    WORLD = 256
+    BLOCK = 32
+    ROAD_W = 10
+    MAX_SPEED = 2.45
+
+    def __init__(self, ctx=None):
+        self.target_jobs = int(get_context_setting(ctx, "jobs", 3) or 3)
+        self.traffic_enabled = bool(get_context_setting(ctx, "traffic", True))
+        self.reset()
+
+    def reset(self):
+        self.x = 128.0
+        self.y = 128.0
+        self.angle = -90.0
+        self.speed = 0.0
+        self.condition = 100.0
+        self.heat = 0.0
+        self.energy = 100.0
+        self.score = 0
+        self.frame = 0
+        self.jobs_done = 0
+        self.phase = "pickup"
+        self.bump_flash = 0
+        self.boost_flash = 0
+        self.hit_cooldown = 0
+        self.entities = []
+        self.pickup = self._random_road_point(46)
+        self.dropoff = self._random_road_point(76)
+        self._spawn_traffic(8 if self.traffic_enabled else 0)
+
+    def _road_axis(self, value):
+        m = int(value) % self.BLOCK
+        return m < self.ROAD_W or m >= self.BLOCK - self.ROAD_W
+
+    def _is_road(self, x, y):
+        x = x % self.WORLD
+        y = y % self.WORLD
+        return self._road_axis(x) or self._road_axis(y)
+
+    def _is_intersection(self, x, y):
+        return self._road_axis(x) and self._road_axis(y)
+
+    def _wrap_dist(self, a, b):
+        d = abs(a - b)
+        return min(d, self.WORLD - d)
+
+    def _dist2_to_player(self, x, y):
+        dx = self._wrap_dist(x, self.x)
+        dy = self._wrap_dist(y, self.y)
+        return dx * dx + dy * dy
+
+    def _wrapped_delta_to_player(self, x, y):
+        dx = (x - self.x + self.WORLD / 2) % self.WORLD - self.WORLD / 2
+        dy = (y - self.y + self.WORLD / 2) % self.WORLD - self.WORLD / 2
+        return dx, dy
+
+    def _target_distance(self):
+        tx, ty = self._target()
+        dx, dy = self._wrapped_delta_to_player(tx, ty)
+        return math.sqrt(dx * dx + dy * dy)
+
+    def _random_road_point(self, min_dist=32):
+        for _ in range(90):
+            gx = random.randint(0, self.WORLD - 1)
+            gy = random.randint(0, self.WORLD - 1)
+            if not self._is_road(gx, gy):
+                continue
+            if self._dist2_to_player(gx, gy) >= min_dist * min_dist:
+                return [float(gx), float(gy)]
+        return [float((int(self.x) + min_dist) % self.WORLD), float(self.y)]
+
+    def _dir_vec(self, d):
+        if d == 0:
+            return 1, 0
+        if d == 1:
+            return 0, 1
+        if d == 2:
+            return -1, 0
+        return 0, -1
+
+    def _valid_dirs(self, x, y):
+        out = []
+        for d in range(4):
+            dx, dy = self._dir_vec(d)
+            if self._is_road(x + dx * 5, y + dy * 5):
+                out.append(d)
+        return out or [0]
+
+    def _spawn_traffic(self, count):
+        for _ in range(count):
+            px, py = self._random_road_point(28)
+            dirs = self._valid_dirs(px, py)
+            self.entities.append([px, py, random.choice(dirs), 0, random.randint(0, 30)])
+
+    def _spawn_police(self):
+        target = 0
+        if self.heat > 18:
+            target = 1 + min(3, int(self.heat // 35))
+        current = 0
+        for e in self.entities:
+            if e[3] == 1:
+                current += 1
+        while current < target:
+            px, py = self._random_road_point(62)
+            dirs = self._valid_dirs(px, py)
+            self.entities.append([px, py, random.choice(dirs), 1, random.randint(0, 15)])
+            current += 1
+
+    def _choose_police_dir(self, e):
+        best = e[2]
+        best_score = 999999.0
+        for d in self._valid_dirs(e[0], e[1]):
+            dx, dy = self._dir_vec(d)
+            nx = (e[0] + dx * 8) % self.WORLD
+            ny = (e[1] + dy * 8) % self.WORLD
+            score = self._dist2_to_player(nx, ny)
+            if score < best_score:
+                best = d
+                best_score = score
+        return best
+
+    def _update_entities(self):
+        kept = []
+        for e in self.entities:
+            e[4] += 1
+            if e[3] == 1 and self.heat <= 2 and self._dist2_to_player(e[0], e[1]) > 70 * 70:
+                continue
+            if self._is_intersection(e[0], e[1]) and e[4] > 12:
+                if e[3] == 1:
+                    e[2] = self._choose_police_dir(e)
+                elif random.randint(0, 99) < 34:
+                    e[2] = random.choice(self._valid_dirs(e[0], e[1]))
+                e[4] = 0
+            dx, dy = self._dir_vec(e[2])
+            step = 1.22 if e[3] == 1 else 0.78
+            if e[3] == 1:
+                step += min(0.44, self.heat * 0.006)
+            nx = (e[0] + dx * step) % self.WORLD
+            ny = (e[1] + dy * step) % self.WORLD
+            if self._is_road(nx, ny):
+                e[0] = nx
+                e[1] = ny
+            else:
+                e[2] = random.choice(self._valid_dirs(e[0], e[1]))
+            if self._dist2_to_player(e[0], e[1]) < (7 * 7):
+                if self.hit_cooldown <= 0:
+                    if e[3] == 1:
+                        self.condition -= 9.0
+                        self.heat += 2.0
+                    else:
+                        self.condition -= 4.0
+                        self.heat += 0.8
+                    self.speed *= 0.48
+                    self.bump_flash = 10
+                    self.hit_cooldown = 14
+            kept.append(e)
+        self.entities = kept
+
+    def _target(self):
+        return self.pickup if self.phase == "pickup" else self.dropoff
+
+    def _advance_job(self):
+        tx, ty = self._target()
+        if self._wrap_dist(self.x, tx) > 5 or self._wrap_dist(self.y, ty) > 5:
+            return True
+        if self.phase == "pickup":
+            self.phase = "drop"
+            self.score += 120
+            self.heat = min(100.0, self.heat + 12.0)
+            self.dropoff = self._random_road_point(70)
+            return True
+        self.jobs_done += 1
+        self.score += 520 + int(self.condition)
+        self.heat = min(100.0, self.heat + 18.0)
+        if self.jobs_done >= self.target_jobs:
+            set_game_over_score(self.score + int(self.condition * 8), won=True)
+            return False
+        self.phase = "pickup"
+        self.pickup = self._random_road_point(55)
+        self.dropoff = self._random_road_point(76)
+        return True
+
+    def _update(self, direction, boost):
+        self.frame += 1
+        if self.bump_flash > 0:
+            self.bump_flash -= 1
+        if self.boost_flash > 0:
+            self.boost_flash -= 1
+        if self.hit_cooldown > 0:
+            self.hit_cooldown -= 1
+        dx, dy = direction_to_delta_8way(direction)
+        if dx < 0:
+            self.angle -= 5.0 + min(3.0, abs(self.speed) * 1.2)
+        elif dx > 0:
+            self.angle += 5.0 + min(3.0, abs(self.speed) * 1.2)
+        if dy < 0:
+            self.speed += 0.105
+        elif dy > 0:
+            self.speed -= 0.130
+        else:
+            self.speed *= 0.982
+        max_speed = self.MAX_SPEED
+        if boost and self.energy > 1.5 and self.speed > 0.3:
+            self.speed += 0.090
+            self.energy -= 1.15
+            self.heat = min(100.0, self.heat + 0.06)
+            self.boost_flash = 4
+            max_speed = self.MAX_SPEED + 0.82
+        else:
+            self.energy = min(100.0, self.energy + 0.08)
+        self.speed = clamp(self.speed, -0.86, max_speed)
+
+        rad = math.radians(self.angle)
+        vx = math.cos(rad) * self.speed
+        vy = math.sin(rad) * self.speed
+        nx = (self.x + vx) % self.WORLD
+        ny = (self.y + vy) % self.WORLD
+        if self._is_road(nx, self.y):
+            self.x = nx
+        else:
+            self.speed *= -0.26
+            self.condition -= 1.2
+            self.bump_flash = 6
+        if self._is_road(self.x, ny):
+            self.y = ny
+        else:
+            self.speed *= -0.26
+            self.condition -= 1.2
+            self.bump_flash = 6
+
+        self.heat = clamp(self.heat - 0.018, 0.0, 100.0)
+        self._spawn_police()
+        self._update_entities()
+        self.score += int(max(0.0, self.speed) * 0.8)
+        if self.condition <= 0:
+            set_game_over_score(self.score, won=False)
+            return False
+        return self._advance_job()
+
+    def _screen_pos(self, wx, wy):
+        dx, dy = self._wrapped_delta_to_player(wx, wy)
+        sx = int(WIDTH // 2 + dx)
+        sy = int(PLAY_HEIGHT // 2 + dy)
+        return sx, sy
+
+    def _draw_city(self):
+        ox = self.x - WIDTH // 2
+        oy = self.y - PLAY_HEIGHT // 2
+        for sy in range(PLAY_HEIGHT):
+            wy = (oy + sy) % self.WORLD
+            yroad = self._road_axis(wy)
+            for sx in range(WIDTH):
+                wx = (ox + sx) % self.WORLD
+                xroad = self._road_axis(wx)
+                if xroad or yroad:
+                    shade = 34 + ((int(wx) + int(wy)) & 3) * 5
+                    if xroad and yroad:
+                        display.set_pixel(sx, sy, shade + 14, shade + 14, shade + 16)
+                    elif ((int(wx if yroad else wy) // 7) & 3) == 0:
+                        display.set_pixel(sx, sy, 210, 205, 160)
+                    else:
+                        display.set_pixel(sx, sy, shade, shade, shade + 4)
+                else:
+                    bx = int(wx) // self.BLOCK
+                    by = int(wy) // self.BLOCK
+                    c = 24 + ((bx * 17 + by * 11) % 34)
+                    display.set_pixel(sx, sy, c // 2, c, c + 12)
+
+    def _draw_marker(self, point, color):
+        sx, sy = self._screen_pos(point[0], point[1])
+        if -5 <= sx < WIDTH + 5 and -5 <= sy < PLAY_HEIGHT + 5:
+            draw_rect_outline(sx - 4, sy - 4, sx + 4, sy + 4, *color)
+            set_pixel_clipped(sx, sy, 255, 255, 255)
+            return True
+        return False
+
+    def _draw_target_pointer(self, point, color):
+        dx, dy = self._wrapped_delta_to_player(point[0], point[1])
+        if abs(dx) < 1 and abs(dy) < 1:
+            return
+        limit_x = WIDTH // 2 - 5
+        limit_y = PLAY_HEIGHT // 2 - 8
+        scale_x = limit_x / abs(dx) if abs(dx) > 0.1 else 999.0
+        scale_y = limit_y / abs(dy) if abs(dy) > 0.1 else 999.0
+        scale = min(scale_x, scale_y, 1.0)
+        px = int(WIDTH // 2 + dx * scale)
+        py = int(PLAY_HEIGHT // 2 + dy * scale)
+        px = clamp(px, 3, WIDTH - 4)
+        py = clamp(py, 8, PLAY_HEIGHT - 8)
+        draw_line(WIDTH // 2, PLAY_HEIGHT // 2, px, py, color[0] // 2, color[1] // 2, color[2] // 2)
+        draw_rect_outline(px - 2, py - 2, px + 2, py + 2, *color)
+        set_pixel_clipped(px, py, 255, 255, 255)
+
+    def _draw_car(self, sx, sy, angle, body, trim):
+        rad = math.radians(angle)
+        fx = int(math.cos(rad) * 3)
+        fy = int(math.sin(rad) * 3)
+        rx = int(math.cos(rad + math.pi / 2) * 2)
+        ry = int(math.sin(rad + math.pi / 2) * 2)
+        draw_line(sx - fx - rx, sy - fy - ry, sx + fx, sy + fy, *body)
+        draw_line(sx - fx + rx, sy - fy + ry, sx + fx, sy + fy, *body)
+        draw_line(sx - rx, sy - ry, sx + rx, sy + ry, *trim)
+        set_pixel_clipped(sx + fx, sy + fy, 255, 255, 255)
+
+    def _draw_hud(self):
+        draw_rectangle(0, 0, WIDTH - 1, 6, 0, 0, 0)
+        draw_text_small(1, 1, "J" + str(self.jobs_done) + "/" + str(self.target_jobs), 255, 255, 255)
+        heat_w = int(self.heat * 17 / 100)
+        cond_w = int(self.condition * 17 / 100)
+        draw_rectangle(25, 1, 42, 2, 25, 25, 25)
+        draw_rectangle(45, 1, 62, 2, 25, 25, 25)
+        if heat_w > 0:
+            draw_rectangle(25, 1, 24 + heat_w, 2, 255, 45, 45)
+        if cond_w > 0:
+            draw_rectangle(45, 1, 44 + cond_w, 2, 45, 220, 90)
+        label = "P" if self.phase == "pickup" else "D"
+        draw_text_small(1, PLAY_HEIGHT - 6, label, 255, 240, 90)
+        dist = min(99, int(self._target_distance()))
+        draw_text_small(8, PLAY_HEIGHT - 6, str(dist), 180, 220, 255)
+
+    def _draw(self):
+        display.clear()
+        self._draw_city()
+        if self.phase == "pickup":
+            if not self._draw_marker(self.pickup, (60, 255, 110)):
+                self._draw_target_pointer(self.pickup, (60, 255, 110))
+        else:
+            if not self._draw_marker(self.dropoff, (255, 220, 60)):
+                self._draw_target_pointer(self.dropoff, (255, 220, 60))
+        for e in self.entities:
+            sx, sy = self._screen_pos(e[0], e[1])
+            if -6 <= sx < WIDTH + 6 and -6 <= sy < PLAY_HEIGHT + 6:
+                if e[3] == 1:
+                    self._draw_car(sx, sy, e[2] * 90, (255, 40, 40), (40, 90, 255))
+                else:
+                    self._draw_car(sx, sy, e[2] * 90, (70, 170, 255), (255, 230, 70))
+        if self.bump_flash:
+            body = (255, 70, 35)
+        elif self.boost_flash:
+            body = (255, 255, 255)
+        else:
+            body = (245, 245, 245)
+        self._draw_car(WIDTH // 2, PLAY_HEIGHT // 2, self.angle, body, (255, 40, 210))
+        self._draw_hud()
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        self.reset()
+        begin_game(0)
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            d = joystick.read_direction([
+                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
+            ], debounce=False)
+            if not self._update(d, z_button):
+                return False
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
+class TopDownRacerGame:
+    """
+    RACING
+    Controls:
+      - Up / Down: accelerate / brake
+      - Left / Right: steer
+      - Z: boost
+      - C: return to menu
+    Top-down circuit racer with scrolling road, traffic, boost, and lap finish.
+    """
+    FRAME_MS = 34
+    CAR_Y = PLAY_HEIGHT - 14
+    ROAD_HALF = 17
+    LAP_LEN = 760.0
+
+    def __init__(self, ctx=None):
+        self.target_laps = int(get_context_setting(ctx, "laps", 3) or 3)
+        self.traffic_enabled = bool(get_context_setting(ctx, "traffic", True))
+        self.reset()
+
+    def reset(self):
+        self.world_y = 0.0
+        self.speed = 0.0
+        self.player_x = WIDTH // 2
+        self.energy = 100.0
+        self.score = 0
+        self.lap = 1
+        self.frame = 0
+        self.bump_flash = 0
+        self.boost_flash = 0
+        self.rivals = []
+        self.next_spawn_y = 46.0
+        self.passed = 0
+        self._spawn_until(self.world_y + 190.0)
+
+    def _track_center(self, z):
+        return (
+            WIDTH // 2
+            + math.sin(z * 0.028) * 12.0
+            + math.sin(z * 0.010 + 1.8) * 7.0
+        )
+
+    def _sample_world_for_row(self, row):
+        return self.world_y + (self.CAR_Y - row) * 2.15
+
+    def _lane_x(self, z, lane):
+        return self._track_center(z) + lane * (self.ROAD_HALF - 6)
+
+    def _spawn_until(self, limit_y):
+        if not self.traffic_enabled:
+            return
+        while self.next_spawn_y < limit_y:
+            gap = random.randint(36, 68)
+            self.next_spawn_y += gap
+            lane = random.choice((-0.72, -0.25, 0.25, 0.72))
+            kind = random.randint(0, 1)
+            drift = random.randint(0, 80)
+            self.rivals.append([self.next_spawn_y, lane, kind, drift])
+
+    def _rival_x(self, rival):
+        lane = rival[1]
+        if rival[2] == 1:
+            lane += math.sin((self.frame + rival[3]) * 0.035) * 0.12
+        lane = clamp(lane, -0.9, 0.9)
+        return self._lane_x(rival[0], lane)
+
+    def _update(self, direction, boost):
+        self.frame += 1
+        if self.bump_flash > 0:
+            self.bump_flash -= 1
+        if self.boost_flash > 0:
+            self.boost_flash -= 1
+
+        dx, dy = direction_to_delta_8way(direction)
+        if dy < 0:
+            self.speed += 0.085
+        elif dy > 0:
+            self.speed -= 0.125
+        else:
+            self.speed *= 0.988
+
+        max_speed = 3.05
+        if boost and self.energy > 2.0 and self.speed > 0.8:
+            self.speed += 0.105
+            self.energy -= 1.05
+            self.boost_flash = 4
+            max_speed = 3.95
+        else:
+            self.energy = min(100.0, self.energy + 0.075)
+
+        self.speed = clamp(self.speed, 0.0, max_speed)
+
+        if dx:
+            steer = 0.72 + self.speed * 0.23
+            self.player_x += dx * steer
+        self.player_x = clamp(self.player_x, 2.0, WIDTH - 3.0)
+
+        center = self._track_center(self.world_y)
+        margin = self.ROAD_HALF - 3
+        if abs(self.player_x - center) > margin:
+            self.speed *= 0.935
+            self.energy -= 0.42 + self.speed * 0.20
+            self.bump_flash = max(self.bump_flash, 2)
+
+        self.world_y += self.speed
+        self.lap = int(self.world_y // self.LAP_LEN) + 1
+        self.score = int(self.world_y) + self.passed * 55 + int(self.energy * 2)
+
+        kept = []
+        for rival in self.rivals:
+            rel = rival[0] - self.world_y
+            sx = self._rival_x(rival)
+            sy = self.CAR_Y - rel / 2.15
+            if -12.0 <= rel <= 9.0 and abs(sy - self.CAR_Y) <= 6.0 and abs(sx - self.player_x) <= 5.0:
+                self.energy -= 18.0 if rival[2] == 0 else 24.0
+                self.speed *= 0.43
+                self.bump_flash = 12
+                continue
+            if rel < -20.0:
+                self.passed += 1
+                continue
+            kept.append(rival)
+        self.rivals = kept
+        self._spawn_until(self.world_y + 190.0)
+
+        if self.energy <= 0.0:
+            set_game_over_score(self.score, won=False)
+            return False
+        if self.world_y >= self.LAP_LEN * self.target_laps:
+            self.score += int(self.energy * 15) + self.passed * 20 + 1000
+            set_game_over_score(self.score, won=True)
+            return False
+        return True
+
+    def _draw_car(self, x, y, body, trim, player=False):
+        x = int(x)
+        y = int(y)
+        draw_rectangle(x - 2, y - 3, x + 2, y + 3, *body)
+        draw_rectangle(x - 1, y - 4, x + 1, y - 3, *trim)
+        set_pixel_clipped(x - 3, y - 2, 20, 20, 20)
+        set_pixel_clipped(x + 3, y - 2, 20, 20, 20)
+        set_pixel_clipped(x - 3, y + 2, 20, 20, 20)
+        set_pixel_clipped(x + 3, y + 2, 20, 20, 20)
+        if player:
+            set_pixel_clipped(x, y - 5, 255, 255, 255)
+
+    def _draw_road_row(self, row):
+        z = self._sample_world_for_row(row)
+        center = int(self._track_center(z))
+        left = center - self.ROAD_HALF
+        right = center + self.ROAD_HALF
+        dash = int(z / 12) & 1
+        finish = int(z) % int(self.LAP_LEN)
+        for x in range(WIDTH):
+            if left <= x <= right:
+                if finish < 9 and ((x + row) & 3) < 2:
+                    display.set_pixel(x, row, 245, 245, 245)
+                elif x in (left, left + 1, right - 1, right):
+                    if self.boost_flash:
+                        display.set_pixel(x, row, 255, 80, 210)
+                    else:
+                        display.set_pixel(x, row, 255, 230, 50)
+                elif abs(x - center) <= 1 and dash:
+                    display.set_pixel(x, row, 220, 220, 220)
+                else:
+                    shade = 38 + ((row + int(self.world_y)) & 3) * 4
+                    if self.bump_flash:
+                        display.set_pixel(x, row, 90, 30, 32)
+                    else:
+                        display.set_pixel(x, row, shade, shade, shade + 8)
+            else:
+                grass = 20 + ((x * 3 + row + int(self.world_y)) & 7)
+                display.set_pixel(x, row, 4, grass, 12)
+
+    def _draw_hud(self):
+        draw_rectangle(0, 0, WIDTH - 1, 6, 0, 0, 0)
+        draw_text_small(1, 1, "L" + str(min(self.lap, self.target_laps)) + "/" + str(self.target_laps), 255, 255, 255)
+        bar_w = int(22 * self.energy / 100.0)
+        draw_rectangle(WIDTH - 25, 1, WIDTH - 3, 3, 25, 25, 25)
+        if bar_w > 0:
+            col = (50, 235, 90) if self.energy > 30 else (255, 70, 30)
+            draw_rectangle(WIDTH - 25, 1, WIDTH - 26 + bar_w, 3, *col)
+
+    def _draw(self):
+        display.clear()
+        for row in range(PLAY_HEIGHT):
+            self._draw_road_row(row)
+
+        for rival in self.rivals:
+            rel = rival[0] - self.world_y
+            y = self.CAR_Y - rel / 2.15
+            if -8 <= y < PLAY_HEIGHT + 8:
+                x = self._rival_x(rival)
+                if rival[2] == 0:
+                    self._draw_car(x, y, (255, 70, 45), (255, 230, 70))
+                else:
+                    self._draw_car(x, y, (45, 160, 255), (255, 255, 255))
+
+        if self.bump_flash:
+            body = (255, 60, 35)
+        elif self.boost_flash:
+            body = (255, 255, 255)
+        else:
+            body = (235, 235, 245)
+        self._draw_car(self.player_x, self.CAR_Y, body, (255, 40, 210), player=True)
+        if self.boost_flash:
+            draw_rectangle(int(self.player_x) - 1, self.CAR_Y + 4, int(self.player_x) + 1, self.CAR_Y + 6, 40, 170, 255)
+        self._draw_hud()
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        self.reset()
+        begin_game(0)
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            d = joystick.read_direction([
+                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
+                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
+            ], debounce=False)
+            if not self._update(d, z_button):
+                return False
+            self._draw()
+            return True
+        return step
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class RayRacerGame:
@@ -22525,6 +24004,7 @@ class GameOverMenu:
 
 
 def draw_menu_scrollbar(top, view, total):
+    """Draw the shared vertical scrollbar used by game and settings lists."""
     if total <= 0:
         return
     track_x = WIDTH - 1
@@ -22553,6 +24033,7 @@ class GameSettingsMenu:
         opts = self.settings.definitions_for(self.game_name)
         display.clear()
         draw_text(1, 1, self.game_name[:6], 120, 180, 255)
+        # Keep the bottom HUD band free for button hints; option rows stay above it.
         view = 4
         top = 0
         if len(opts) > view:
@@ -22630,6 +24111,8 @@ class GameSettingsMenu:
 
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
+    # Tuple shape: (menu_id, game_class, flags). GAME_FLAG_HEAVY entries can be
+    # hidden by runtime configuration for constrained targets.
     GAME_REGISTRY = (
         ("DEMOS", DemosGame, 0),
         ("2048", Game2048, GAME_FLAG_HEAVY),
@@ -22645,9 +24128,11 @@ class GameSelect:
         ("CAVEFL", CaveFlyGame, 0),
         ("CENTI", CentipedeGame, 0),
         ("CGOLG", CgolgGame, 0),
+        ("CITY", CityChaseGame, 0),
         ("CLIMB", ClimberGame, 0),
         ("COLMNS", ColumnsGame, 0),
         ("DEFUSE", DefuseGame, 0),
+        ("DODGE", DodgeGame, 0),
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
         ("FROGGR", FroggerGame, 0),
@@ -22655,6 +24140,7 @@ class GameSelect:
         ("GOLF", GolfGame, 0),
         ("INVADR", InvaderGame, 0),
         ("KEEN", KeenGame, 0),
+        ("KERBAL", KerbalGame, GAME_FLAG_HEAVY),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
         ("LASER", LaserGame, 0),
         ("LOCO", LocoMotionGame, GAME_FLAG_HEAVY),
@@ -22668,6 +24154,7 @@ class GameSelect:
         ("PITFAL", PitfallGame, 0),
         ("PONG", PongGame, 0),
         ("QIX", QixGame, GAME_FLAG_HEAVY),
+        ("RACING", TopDownRacerGame, 0),
         ("RAYRCR", RayRacerGame, GAME_FLAG_HEAVY),
         ("REVRS", OthelloGame, GAME_FLAG_HEAVY),
         ("RTYPE", RTypeGame, GAME_FLAG_HEAVY),
@@ -22682,6 +24169,7 @@ class GameSelect:
         ("TRON", TronGame, 0),
         ("TWRDEF", TowerDefenseGame, 0),
         ("UFODEF", UFODefenseGame, GAME_FLAG_HEAVY),
+        ("WORMS", WormsGame, 0),
     )
 
     def __init__(self):
@@ -22707,6 +24195,8 @@ class GameSelect:
     def _make_game_instance(self, game_name, game_cls):
         ctx = {"game_name": game_name, "settings": self.settings.snapshot(game_name)}
         init_code = getattr(getattr(game_cls, "__init__", None), "__code__", None)
+        # Older games still have __init__(self). Newer games accept ctx so they can
+        # use the shared settings system without forcing every class to change.
         if init_code is not None and getattr(init_code, "co_argcount", 1) >= 2:
             return game_cls(ctx)
         return game_cls()
@@ -22717,6 +24207,7 @@ class GameSelect:
     def _move_selection(self, delta, view, total):
         if total <= 0:
             return
+        # Wrap around both ends so Up at the first entry lands on the last game.
         self.selected = (self.selected + delta) % total
         max_top = max(0, total - view)
         if self.selected < self.top:

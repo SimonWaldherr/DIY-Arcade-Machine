@@ -34,10 +34,10 @@ jobs:
         run: python -m py_compile main.py arcade_app.py
 
       - name: Build web bundle
-        # Build the same self-contained bundle as the local `make web-build`
-        # target. The Makefile handles the repo's browser-build dependencies
-        # and avoids any runtime dependency on the external pygame-web CDN.
-        run: make web-build
+        # Build the regular browser bundle plus the iOS fullscreen variant at /ios/.
+        # The Makefile handles the repo's browser-build dependencies and avoids
+        # any runtime dependency on the external pygame-web CDN.
+        run: make web-pages-build
 
       - name: Verify build output
         # Fail fast if the Pages artifact is missing the entry point or runtime.
@@ -52,6 +52,9 @@ jobs:
           test -f build/web/archives/${RUNTIME_VERSION}/pythons.js || { echo "build/web/archives/${RUNTIME_VERSION}/pythons.js missing"; exit 1; }
           test -f build/web/archives/${RUNTIME_VERSION}/browserfs.min.js || { echo "build/web/archives/${RUNTIME_VERSION}/browserfs.min.js missing"; exit 1; }
           test -f build/web/archives/${RUNTIME_VERSION}/vt/xterm.css || { echo "build/web/archives/${RUNTIME_VERSION}/vt/xterm.css missing"; exit 1; }
+          test -f build/web/ios/index.html || { echo "build/web/ios/index.html missing"; exit 1; }
+          test -f build/web/ios/manifest.webmanifest || { echo "build/web/ios/manifest.webmanifest missing"; exit 1; }
+          test -f build/web/ios/archives/${RUNTIME_VERSION}/pythons.js || { echo "build/web/ios/archives/${RUNTIME_VERSION}/pythons.js missing"; exit 1; }
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

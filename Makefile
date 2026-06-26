@@ -8,6 +8,11 @@ PYTHON_ABI      ?= cp312
 WEB_TEMPLATE   ?= web/default.tmpl
 WEB_TITLE      ?= DIY Arcade Machine
 WEB_SRC        ?= build/web-src
+WEB_IOS_SRC    ?= build/ios-src
+WEB_IOS_OUT    ?= build/ios
+WEB_IOS_WIDTH  ?= 430
+WEB_IOS_HEIGHT ?= 932
+WEB_IOS_TITLE  ?= DIY Arcade Machine iOS
 WEB_CDN        ?= ./archives/$(RUNTIME_VERSION)/
 WEB_ARCHIVES_URL ?= https://github.com/pygame-web/archives/archive/refs/heads/main.zip
 WEB_ARCHIVES_ZIP ?= build/pygame-web-archives.zip
@@ -17,7 +22,7 @@ WEB_REPO_CACHE   ?= build/pygame-web-repo
 WEB_PYGAME_STATIC_WHEEL ?= pygame_static-1.0-$(PYTHON_ABI)-$(PYTHON_ABI)-wasm32_bi_emscripten.whl
 
 # Default behavior is to show help
-.PHONY: all help run upload build clean clean-all install web-install web-build web web-safari
+.PHONY: all help run upload build clean clean-all install web-install web-build web-pages-build web web-safari web-ios-build web-ios web-ios-safari
 
 all: help
 
@@ -31,8 +36,11 @@ help:
 	@echo "  \033[1;32mmake build\033[0m     - Compile arcade_app.py to arcade_app.mpy (requires mpy-cross)"
 	@echo "  \033[1;32mmake web-install\033[0m - Install pygbag for browser builds"
 	@echo "  \033[1;32mmake web-build\033[0m - Build the browser version into build/web/"
+	@echo "  \033[1;32mmake web-ios-build\033[0m - Build the iOS fullscreen browser version into build/ios/"
+	@echo "  \033[1;32mmake web-pages-build\033[0m - Build Pages bundle with regular and /ios/ variants"
 	@echo "  \033[1;32mmake web\033[0m       - Build and serve the browser version (Chrome/Firefox)"
 	@echo "  \033[1;32mmake web-safari\033[0m - Serve with COOP+COEP headers for Safari"
+	@echo "  \033[1;32mmake web-ios\033[0m   - Build and serve the iOS fullscreen variant"
 	@echo "  \033[1;32mmake clean\033[0m     - Remove built .mpy and temporary files"
 	@echo "  \033[1;32mmake clean-all\033[0m - Remove all temporary files and the Python virtual environment"
 
@@ -106,10 +114,45 @@ web-build: web-install web-runtime
 	rm -rf build/web
 	cp -R $(WEB_SRC)/build/web build/web
 
+web-ios-build: web-install web-runtime
+	@echo "Building iOS fullscreen WebAssembly version..."
+	rm -rf $(WEB_IOS_SRC)
+	mkdir -p $(WEB_IOS_SRC)
+	cp main.py arcade_app.py logo.png $(WEB_IOS_SRC)/
+	[ -f highscores.json ] && cp highscores.json $(WEB_IOS_SRC)/ || true
+	PYTHONUNBUFFERED=1 .venv/bin/python -m pygbag \
+		--ume_block 0 --width $(WEB_IOS_WIDTH) --height $(WEB_IOS_HEIGHT) \
+		--title "$(WEB_IOS_TITLE)" --icon logo.png \
+		--cdn "$(WEB_CDN)" --template $(abspath $(WEB_TEMPLATE)) \
+		--build $(WEB_IOS_SRC)
+	cp web/coi-serviceworker.js $(WEB_IOS_SRC)/build/web/
+	cp web/manifest.webmanifest $(WEB_IOS_SRC)/build/web/
+	cp web/favicon.ico web/favicon-16.png web/favicon-32.png web/og-image.png $(WEB_IOS_SRC)/build/web/
+	cp -R web/icons $(WEB_IOS_SRC)/build/web/
+	mkdir -p $(WEB_IOS_SRC)/build/web/archives
+	cp -R $(WEB_ARCHIVES_SRC) $(WEB_IOS_SRC)/build/web/archives/
+	mkdir -p $(WEB_IOS_SRC)/build/web/archives/repo
+	mkdir -p $(WEB_IOS_SRC)/build/web/archives/repo/$(PYTHON_ABI)
+	cp "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" \
+		$(WEB_IOS_SRC)/build/web/archives/repo/$(PYTHON_ABI)/
+	printf '{"-CDN-":"./archives/repo/"}\n' > $(WEB_IOS_SRC)/build/web/archives/repo/index-$(RUNTIME_INDEX)-$(PYTHON_ABI).json
+	printf '{"packages":{}}\n' > $(WEB_IOS_SRC)/build/web/archives/repo/repodata.json
+	rm -rf $(WEB_IOS_OUT)
+	cp -R $(WEB_IOS_SRC)/build/web $(WEB_IOS_OUT)
+
+web-pages-build: web-build web-ios-build
+	rm -rf build/web/ios
+	mkdir -p build/web/ios
+	cp -R $(WEB_IOS_OUT)/. build/web/ios/
+
 web: web-build
 	@echo "Open \033[1;32mhttp://localhost:$(PORT)\033[0m in Chrome or Firefox."
 	@echo "(Safari users: run \033[1;33mmake web-safari\033[0m instead)"
 	.venv/bin/python -m http.server $(PORT) --directory build/web
+
+web-ios: web-ios-build
+	@echo "Open \033[1;32mhttp://localhost:$(PORT)\033[0m on iPhone/iPad or with ?ios=1 in desktop testing."
+	.venv/bin/python -m http.server $(PORT) --directory $(WEB_IOS_OUT)
 
 # Safari-compatible server: serves build/web/ with Cross-Origin-Isolation
 # headers so SharedArrayBuffer (needed by pygbag's WASM timing) works in Safari.
@@ -124,6 +167,15 @@ web-safari: web-install
 	@echo "Serving with COOP+COEP headers for Safari..."
 	@echo "Open \033[1;32mhttp://localhost:$(PORT)\033[0m in Safari."
 	.venv/bin/python serve_safari.py $(PORT)
+
+web-ios-safari: web-install
+	@if [ ! -f "$(WEB_IOS_OUT)/index.html" ] || [ ! -f "$(WEB_IOS_OUT)/archives/repo/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" ]; then \
+		echo "No iOS build found – building first..."; \
+		$(MAKE) web-ios-build; \
+	fi
+	@echo "Serving iOS fullscreen build with COOP+COEP headers for Safari..."
+	@echo "Open \033[1;32mhttp://localhost:$(PORT)\033[0m in Safari."
+	.venv/bin/python serve_safari.py $(PORT) $(WEB_IOS_OUT)
 
 # Build bytecode locally if mpy-cross is available
 build:

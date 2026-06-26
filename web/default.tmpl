@@ -198,7 +198,7 @@ config = {
 <title>DIY Arcade Machine</title>
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="description" content="Play 27+ classic-inspired 64x64 arcade games in the browser, on desktop, or on LED matrix hardware.">
 <meta name="author" content="Simon Waldherr">
 <meta name="robots" content="index, follow">
@@ -312,6 +312,16 @@ body.ios-touch-enabled {
     -webkit-user-select: none;
     -webkit-touch-callout: none;
 }
+body.ios-fullscreen-variant {
+    --ios-control-area: clamp(176px, 31dvh, 292px);
+    --ios-game-size: min(
+        calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right) - 16px),
+        calc(100vh - var(--ios-control-area) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 14px)
+    );
+    gap: clamp(8px, 1.8dvh, 14px);
+    justify-content: space-evenly;
+    padding: max(6px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
 .sr-only {
     position: absolute;
     width: 1px;
@@ -328,6 +338,12 @@ body.ios-touch-enabled {
     --ios-game-size: min(
         94vw,
         calc(100dvh - var(--ios-control-area) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px)
+    );
+}
+body.ios-fullscreen-variant {
+    --ios-game-size: min(
+        calc(100dvw - env(safe-area-inset-left) - env(safe-area-inset-right) - 16px),
+        calc(100dvh - var(--ios-control-area) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 14px)
     );
 }
 }
@@ -368,9 +384,12 @@ div.emscripten {
     image-rendering: pixelated;
 }
 .loader-title {
+    max-width: 100%;
     margin: 0;
-    font: 700 clamp(24px, 7vw, 40px)/1 Arial, sans-serif;
+    font: 700 clamp(22px, 5vw, 32px)/1.08 Arial, sans-serif;
     letter-spacing: 0;
+    overflow-wrap: normal;
+    text-wrap: balance;
 }
 .loader-subtitle {
     margin: 10px 0 24px;
@@ -489,6 +508,11 @@ body.ios-touch-enabled canvas.emscripten {
     max-width: 640px;
     max-height: 640px;
 }
+body.ios-fullscreen-variant canvas.emscripten {
+    max-width: none;
+    max-height: none;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 12px 36px rgba(0, 0, 0, 0.34);
+}
 #ios-touch-controls {
     display: none;
 }
@@ -507,6 +531,10 @@ body.ios-touch-enabled #ios-touch-controls {
     -webkit-user-select: none;
     -webkit-touch-callout: none;
 }
+body.ios-fullscreen-variant #ios-touch-controls {
+    width: min(calc(100dvw - env(safe-area-inset-left) - env(safe-area-inset-right) - 18px), 780px);
+    grid-template-columns: minmax(176px, 260px) minmax(128px, 220px);
+}
 .touch-dpad,
 .touch-actions {
     touch-action: none;
@@ -522,8 +550,8 @@ body.ios-touch-enabled #ios-touch-controls {
 }
 .touch-actions {
     display: grid;
-    grid-template-columns: minmax(96px, 1fr);
-    gap: 10px;
+    grid-template-columns: repeat(2, minmax(58px, 1fr));
+    gap: 12px;
     align-items: center;
 }
 .touch-button {
@@ -573,10 +601,27 @@ body.ios-touch-enabled #ios-touch-controls {
 }
 .touch-x,
 .touch-space {
-    min-height: 66px;
+    min-height: 70px;
+    border-radius: 50%;
+    aspect-ratio: 1;
+    justify-self: center;
+    width: min(88px, 100%);
 }
 .touch-space {
-    font-size: 18px;
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 24px;
+}
+.touch-x {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: end;
+    font-size: 22px;
+    transform: translateY(20px);
+}
+.touch-x:active,
+.touch-x.is-active {
+    transform: translateY(21px);
 }
 .repo-badge {
     position: fixed;
@@ -646,6 +691,9 @@ body.ios-touch-enabled .repo-badge {
     min-height: 32px;
     touch-action: manipulation;
 }
+body.ios-fullscreen-variant .repo-badge {
+    display: none;
+}
 body.ios-touch-enabled .sound-toggle {
     position: absolute;
     top: max(8px, env(safe-area-inset-top));
@@ -687,6 +735,17 @@ body.ios-touch-enabled .sound-toggle {
         gap: clamp(8px, 2dvw, 14px);
         justify-content: center;
     }
+    body.ios-fullscreen-variant {
+        --ios-controls-width: clamp(246px, 39dvw, 390px);
+        --ios-game-size: min(
+            calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 14px),
+            calc(100dvw - var(--ios-controls-width) - env(safe-area-inset-left) - env(safe-area-inset-right) - 24px)
+        );
+    }
+    body.ios-fullscreen-variant #ios-touch-controls {
+        width: var(--ios-controls-width);
+        grid-template-columns: minmax(136px, 1fr) minmax(108px, 0.76fr);
+    }
     .touch-dpad {
         grid-template-columns: repeat(3, minmax(36px, 1fr));
         grid-template-rows: repeat(3, minmax(34px, 1fr));
@@ -695,8 +754,8 @@ body.ios-touch-enabled .sound-toggle {
         justify-self: end;
     }
     .touch-actions {
-        grid-template-columns: minmax(76px, 1fr);
-        max-width: 110px;
+        grid-template-columns: repeat(2, minmax(44px, 1fr));
+        max-width: 150px;
         justify-self: start;
     }
     .touch-button {
@@ -704,7 +763,8 @@ body.ios-touch-enabled .sound-toggle {
     }
     .touch-x,
     .touch-space {
-        min-height: 46px;
+        min-height: 56px;
+        width: min(64px, 100%);
     }
     body.ios-touch-enabled .repo-badge {
         position: absolute;
@@ -759,7 +819,7 @@ body.ios-touch-enabled .sound-toggle {
         <button type="button" class="touch-button touch-down" data-touch-key="down" aria-label="Arrow Down" data-i18n-aria-label="arrowDown">↓</button>
     </div>
     <div class="touch-actions" role="group" aria-label="Action controls" data-i18n-aria-label="actionControls">
-        <button type="button" class="touch-button touch-x" data-touch-key="x" aria-label="Back or cancel" data-i18n-aria-label="backCancel">X</button>
+        <button type="button" class="touch-button touch-x" data-touch-key="x" aria-label="Back or cancel" data-i18n-aria-label="backCancel">B</button>
         <button type="button" class="touch-button touch-space" data-touch-key="space" aria-label="Primary action" data-i18n-aria-label="primaryAction" data-i18n="spaceButton">Space</button>
     </div>
 </div>
@@ -817,7 +877,7 @@ const DIY_ARCADE_TRANSLATIONS = {
         loaderSubtitle: "Loading WebAssembly arcade...",
         loadingProgress: "Loading progress",
         primaryAction: "Primary action",
-        spaceButton: "Space",
+        spaceButton: "A",
         statusDownloading: "Downloading...",
         soundToggleOff: "Enable arcade sounds",
         soundToggleOn: "Disable arcade sounds",
@@ -837,7 +897,7 @@ const DIY_ARCADE_TRANSLATIONS = {
         loaderSubtitle: "WebAssembly-Arcade wird geladen...",
         loadingProgress: "Ladefortschritt",
         primaryAction: "Hauptaktion",
-        spaceButton: "Space",
+        spaceButton: "A",
         statusDownloading: "Wird heruntergeladen...",
         soundToggleOff: "Arcade-Sounds einschalten",
         soundToggleOn: "Arcade-Sounds ausschalten",
@@ -874,6 +934,12 @@ function DIYArcadeApplyI18n() {
 
 DIYArcadeSetPageTitle();
 DIYArcadeApplyI18n();
+
+function DIYArcadeIsIOSFullscreenVariant() {
+    const params = new URLSearchParams(window.location.search || "");
+    const pathParts = (window.location.pathname || "").split("/").filter(Boolean);
+    return params.has("ios") || params.has("fullscreen") || pathParts.indexOf("ios") !== -1;
+}
 
 (function setupArcadeSound() {
     const storageKey = "DIYArcadeSoundEnabled";
@@ -1051,6 +1117,7 @@ setTimeout(() => {
     const state = {};
     const presses = {};
     const activeSources = {};
+    const iosFullscreenVariant = DIYArcadeIsIOSFullscreenVariant();
 
     keys.forEach((key) => {
         state[key] = false;
@@ -1110,6 +1177,9 @@ setTimeout(() => {
             if (button._touchIds) {
                 button._touchIds.clear();
             }
+            if (button._pointerIds) {
+                button._pointerIds.clear();
+            }
         });
     }
 
@@ -1117,11 +1187,31 @@ setTimeout(() => {
         event.preventDefault();
     }
 
-    if (!isMobileTouchDevice()) {
+    function pulseHaptic() {
+        try {
+            if (navigator.vibrate) {
+                navigator.vibrate(8);
+            }
+        } catch (_error) {}
+    }
+
+    async function requestWakeLock() {
+        try {
+            if (!("wakeLock" in navigator) || document.hidden) {
+                return;
+            }
+            window.DIYArcadeWakeLock = await navigator.wakeLock.request("screen");
+        } catch (_error) {}
+    }
+
+    if (!iosFullscreenVariant && !isMobileTouchDevice()) {
         return;
     }
 
     document.body.classList.add("ios-touch-enabled");
+    if (iosFullscreenVariant) {
+        document.body.classList.add("ios-fullscreen-variant");
+    }
     const controls = document.getElementById("ios-touch-controls");
     if (!controls) {
         return;
@@ -1142,13 +1232,46 @@ setTimeout(() => {
         const key = button.dataset.touchKey;
         const source = "button:" + key;
         button._touchIds = new Set();
+        button._pointerIds = new Set();
+
+        const beginButtonPress = () => {
+            setKey(key, true, button, source);
+            pulseHaptic();
+            requestWakeLock();
+        };
+        const endButtonPress = () => {
+            if (button._touchIds.size === 0 && button._pointerIds.size === 0) {
+                setKey(key, false, button, source);
+            }
+        };
+
+        if (window.PointerEvent) {
+            button.addEventListener("pointerdown", (event) => {
+                event.preventDefault();
+                button._pointerIds.add(event.pointerId);
+                try {
+                    button.setPointerCapture(event.pointerId);
+                } catch (_error) {}
+                beginButtonPress();
+            }, listenerOptions);
+
+            const endPointer = (event) => {
+                event.preventDefault();
+                button._pointerIds.delete(event.pointerId);
+                endButtonPress();
+            };
+
+            button.addEventListener("pointerup", endPointer, listenerOptions);
+            button.addEventListener("pointercancel", endPointer, listenerOptions);
+            button.addEventListener("lostpointercapture", endPointer, listenerOptions);
+        }
 
         button.addEventListener("touchstart", (event) => {
             event.preventDefault();
             for (const touch of event.changedTouches) {
                 button._touchIds.add(touch.identifier);
             }
-            setKey(key, true, button, source);
+            beginButtonPress();
         }, listenerOptions);
 
         const endTouch = (event) => {
@@ -1156,9 +1279,7 @@ setTimeout(() => {
             for (const touch of event.changedTouches) {
                 button._touchIds.delete(touch.identifier);
             }
-            if (button._touchIds.size === 0) {
-                setKey(key, false, button, source);
-            }
+            endButtonPress();
         };
 
         button.addEventListener("touchend", endTouch, listenerOptions);

@@ -154,13 +154,17 @@ A 640×640 window will appear showing the emulated LED matrix (10× scale).
    python -m pygbag .    # build + serve at http://localhost:8000
    make web              # same, via Makefile (Chrome / Firefox)
    make web-safari       # Safari (adds required COOP+COEP headers)
+   make web-ios          # iPhone/iPad fullscreen-oriented variant
+   make web-ios-safari   # iOS/Safari variant with COOP+COEP headers
    ```
 
-3. **Controls in browser**: same keyboard mapping as desktop — Arrow Keys, `Z`/`Space` to confirm, `X`/`Escape` to cancel.
+3. **Controls in browser**: same keyboard mapping as desktop — Arrow Keys, `Z`/`Space` to confirm, `X`/`Escape` to cancel. On touch devices the browser build exposes an on-screen D-pad plus `A`/`B` action buttons; tapping the game canvas triggers the primary action, and swiping the canvas sends directional taps.
 
 > **Browser support:** Chrome and Firefox work out of the box. Safari requires `Cross-Origin-Isolation` headers (`make web-safari` handles this automatically).
 >
-> **Automated deployment:** every push to `main` triggers the GitHub Actions workflow which builds with `python -m pygbag --build .` (Python 3.11) and deploys the result to GitHub Pages automatically.
+> **iOS fullscreen:** the iOS build keeps the game logic at the original 64×64 matrix resolution and scales the canvas fullscreen with safe-area-aware touch controls. This avoids rewriting every game for a new coordinate system while still filling the phone or tablet screen. On GitHub Pages it is published under `/ios/`; locally use `make web-ios-safari` for the closest Safari/iOS behavior.
+>
+> **Automated deployment:** every push to `main` triggers the GitHub Actions workflow which builds the regular WebAssembly bundle plus the `/ios/` variant and deploys both to GitHub Pages automatically.
 >
 > **Note:** High scores are stored in-memory while the page is open and reset on page reload.
 
@@ -209,7 +213,12 @@ For ease of use, a `Makefile` is provided with the following commands:
 - `make install`: Installs desktop dependencies (PyGame)
 - `make run`: Runs the PyGame emulator locally (`python main.py`)
 - `make web-install`: Installs pygbag for browser/WebAssembly builds
+- `make web-build`: Builds the regular browser version into `build/web/`
+- `make web-ios-build`: Builds the fullscreen-oriented iOS version into `build/ios/`
+- `make web-pages-build`: Builds the Pages artifact with the regular version at `/` and the iOS version at `/ios/`
 - `make web`: Builds the WebAssembly version and serves it at `http://localhost:8000`
+- `make web-ios`: Builds and serves the iOS fullscreen-oriented version at `http://localhost:8000`
+- `make web-ios-safari`: Serves the iOS build with COOP+COEP headers for Safari
 - `make upload`: Compiles and uploads the code to the hardware (`./upload.sh`)
 - `make build`: Precompiles `arcade_app.py` into bytecode (`arcade_app.mpy`)
 - `make clean`: Cleans up previous build artifacts and pycache
@@ -225,12 +234,14 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 
 | Game ID | Name | Description |
 |---------|------|-------------|
-| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Cube, Spark, Plasma, Orbit, Warp, Bounce, Tunnel, Matrix, Fire |
+| `DEMOS` | Demo Showcase | Zero-player demos: Snake, Life, Cube, Spark, Plasma, Orbit, Warp, Bounce, Tunnel, Matrix, Fire, Spring, Cradle |
 | `2048` | 2048 | Sliding tile puzzle with merge scoring |
+| `AIRHKY` | Air Hockey | Fast puck-and-mallet game with CPU or 2-player support |
 | `ARENA` | Arena | Top-down wave survival with movement and shooting |
 | `ARTILL` | Artillery Simulator | Turn-based angle-and-power shell duel with wind and deforming terrain |
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
+| `BILLI` | Billiards | Pool/Snooker-style table game with cue aim, pockets, rails, and ball collisions |
 | `BOMBER` | Bomber | Timed bombs, block clearing, and maze enemies |
 | `BRKOUT` | Breakout | Brick breaker with rainbow bricks and optional powerups |
 | `BTLZON` | Battlezone | Atari-style vector tank combat with radar, rocks, projectile shots, and waves |
@@ -238,6 +249,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
 | `CENTI` | Centipede | Atari-style segmented shooter with mushrooms and waves |
 | `CGOLG` | Conway's Game of Life Game | Competitive Life battle with directed gliders and spaceships |
+| `CITY` | City Chase | Top-down city driving with jobs, traffic, police heat, and drop-offs |
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
@@ -247,6 +259,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `KEEN` | Keen | Platformer with jumps, gems, keys, enemies, and exit doors |
+| `KERBAL` | Kerbal Arcade | Launch, circularize, and optionally return in a tiny orbital flight sim |
 | `LANDER` | Lunar Lander | Multi-level landing challenge plus optional scrolling v2 route mode with fuel powerups |
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
@@ -256,8 +269,9 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `PAIRS` | Pairs | Memory card matching on a 4x4 board |
 | `PINBAL` | Pinball | Plunger launch, flippers, bumpers, targets, and multipliers |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
-| `PONG` | Pong | Paddle vs. AI or optional 2-player paddle duel |
+| `PONG` | Pong | Paddle vs. CPU or optional 2-player paddle duel |
 | `QIX` | Qix | Territory capture, avoid the enemy |
+| `RACING` | Top-Down Racing | Overhead circuit racer with curved road, boost, laps, and traffic |
 | `RAYRCR` | Ray Racer | Raytrace-style anti-grav racing with boost, energy gates, and rival hovercars |
 | `REVRS` | Othello/Reversi | Board game with simple CPU opponent |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
@@ -273,6 +287,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `TWRDEF` | Tower Defense | Build towers across rotating road and open-field layouts |
 | `UFODEF` | UFO Defense | Missile Command-style defense with turret/base and wave/time settings |
 | `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
+| `WORMS` | Worms Mini | Turn-based team artillery with destructible terrain and CPU/2-player settings |
 
 Each game tracks high scores with optional initials entry.
 
@@ -306,9 +321,15 @@ Each game tracks high scores with optional initials entry.
 
 ### Game Settings Highlights
 
+- `AIRHKY`: `PLAYR` switches between `1P` and `2P`; `GOALS` sets the match length.
+- `BILLI`: `RULE` switches between `POOL` and `SNOOK`; `AIM` changes the aim guide length.
 - `PONG`: `PLAYR` switches between `1P` and `2P`.
 - `TRON`: `PLAYR` switches between CPU opponent and `2P`.
+- `CITY`: `JOBS` sets mission count; `TRAF` toggles civilian traffic.
+- `KERBAL`: `MISN` switches between orbit-only and return mission; `ASST` toggles arcade flight assist.
 - `LANDER`: `MODE` switches between classic `V1` and scrolling `V2` with route pads and fuel pickups.
+- `RACING`: `LAPS` sets race length; `TRAF` toggles traffic cars.
+- `WORMS`: `PLAYR` switches between CPU opponent and `2P`; `TEAM` sets two or three worms per side.
 
 ### MicroPython Controller
 
@@ -320,3 +341,43 @@ Each game tracks high scores with optional initials entry.
 - **Analog stick**: 8-directional movement (includes diagonals)
 
 The code auto-detects controller variants including the "new signature" controllers (`A0 20 10 00 FF FF`).
+
+---
+
+## Usage
+
+Start the app, select a game with Up/Down, and press `Z` to launch it. If a game
+has settings, press `C` on the game list to open the shared settings menu before
+starting the game.
+
+High scores are stored per game ID. The shared game-over menu offers retry,
+high-score view, and return-to-menu actions.
+
+---
+
+## Architecture
+
+Developer notes are documented in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+Per-game gameplay and implementation notes are documented in
+[docs/games/README.md](./docs/games/README.md).
+
+The short version:
+
+- `GameSelect.GAME_REGISTRY` controls which games appear in the selector.
+- `GameSettings.DEFINITIONS` declares per-game settings for the shared settings menu.
+- Games that accept a constructor context read settings with `get_context_setting()`.
+- Games report final results through `set_game_over_score()` so the shared lost/won
+  and high-score flow can handle them.
+
+---
+
+## Troubleshooting
+
+- If the browser build appears blank, rebuild with `python -m pygbag .` and check
+  the console for import or asset errors.
+- If settings do not appear for a game, confirm the game ID in
+  `GameSettings.DEFINITIONS` exactly matches the ID in `GameSelect.GAME_REGISTRY`.
+- If a game class exists but is missing from the menu, add it to
+  `GameSelect.GAME_REGISTRY`.
+- If desktop input behaves differently from the cabinet, check the keyboard mapping
+  in the Controls section and the joystick/button helper functions in `arcade_app.py`.
