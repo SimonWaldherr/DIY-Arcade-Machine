@@ -15,7 +15,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **40+ Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
+- **50+ Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -228,7 +228,7 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ## Game List
 
-The arcade includes demo animations and over 30 games. Each game is documented in detail in the [Game Documentation](./docs/games/README.md) with gameplay notes and technical descriptions.
+The arcade includes demo animations and over 50 games. Each game is documented in detail in the [Game Documentation](./docs/games/README.md) with gameplay notes and technical descriptions.
 
 Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
 
@@ -262,21 +262,25 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `KERBAL` | Kerbal Arcade | Launch, circularize, and optionally return in a tiny orbital flight sim |
 | `LANDER` | Lunar Lander | Multi-level landing challenge plus optional scrolling v2 route mode with fuel powerups |
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
+| `LIGHTS` | Lights Out | Toggle a light and its neighbors to clear the five-by-five grid |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
 | `MINES` | Mines | Minesweeper-style reveal puzzle for the LED matrix |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
 | `PAIRS` | Pairs | Memory card matching on a 4x4 board |
+| `PICROS` | Picross | Solve five-by-five picture logic puzzles from row and column clues |
 | `PINBAL` | Pinball | Plunger launch, flippers, bumpers, targets, and multipliers |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
 | `PONG` | Pong | Paddle vs. CPU or optional 2-player paddle duel |
 | `QIX` | Qix | Territory capture, avoid the enemy |
 | `RACING` | Top-Down Racing | Overhead circuit racer with curved road, boost, laps, and traffic |
 | `RAYRCR` | Ray Racer | Raytrace-style anti-grav racing with boost, energy gates, and rival hovercars |
+| `REACT` | Reaction Grid | Hit green pads before time expires and avoid red decoys |
 | `REVRS` | Othello/Reversi | Board game with simple CPU opponent |
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `SABOTR` | Saboteur Stealth | Sneak through multiple patrol maps and reach the objective |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
+| `SLALOM` | Slalom | Carve through downhill gates; tuck for more speed and double points |
 | `SKYWAR` | Sky War | Helicopter battlefield shooter with air and ground targets |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
 | `SOCCER` | Championship Soccer | Atari-style soccer with direction-based passes and shots |
@@ -366,6 +370,8 @@ The short version:
 - `GameSelect.GAME_REGISTRY` controls which games appear in the selector.
 - `GameSettings.DEFINITIONS` declares per-game settings for the shared settings menu.
 - Games that accept a constructor context read settings with `get_context_setting()`.
+- Callback-based games inherit `FrameLoopGame` for portable sync/async frame pacing.
+- Grid games can inherit `GridCursorGame` for shared, debounced cursor movement.
 - Games report final results through `set_game_over_score()` so the shared lost/won
   and high-score flow can handle them.
 

@@ -10,7 +10,10 @@ import time
 import math
 import gc
 import sys
-import importlib.util
+try:
+    import importlib.util as _importlib_util
+except ImportError:
+    _importlib_util = None
 try:
     import uos as _os
 except ImportError:
@@ -190,6 +193,14 @@ def ticks_ms():
 
 def ticks_diff(a, b):
     return time.ticks_diff(a, b) if hasattr(time, "ticks_diff") else (a - b)
+
+
+def ticks_add(ticks, delta):
+    """Add milliseconds while preserving MicroPython tick wraparound."""
+    if hasattr(time, "ticks_add"):
+        return time.ticks_add(ticks, delta)
+    return ticks + delta
+
 
 _gc_ctr = 0
 _FRAME_PRESENT_MANAGED = False
@@ -460,7 +471,10 @@ else:
             self._pg = pygame
             pygame.init()
             try:
-                if importlib.util.find_spec("pygame.mixer") is not None:
+                if (
+                    _importlib_util is not None
+                    and _importlib_util.find_spec("pygame.mixer") is not None
+                ):
                     pygame.mixer.quit()
             except Exception:
                 pass
@@ -723,7 +737,10 @@ def draw_play_rect(x, y, w, h, r, g, b):
 
 def draw_line(x0, y0, x1, y1, r, g, b):
     """Bresenham line from (x0,y0) to (x1,y1), clipped to the full display."""
-    x0 = int(x0); y0 = int(y0); x1 = int(x1); y1 = int(y1)
+    x0 = int(x0)
+    y0 = int(y0)
+    x1 = int(x1)
+    y1 = int(y1)
     dx = abs(x1 - x0)
     dy = -abs(y1 - y0)
     sx = 1 if x0 < x1 else -1
@@ -922,7 +939,10 @@ def _pygame_sound_bytes(kind, tone, sample_rate=22050):
 def _pygame_mixer_module():
     """Return pygame.mixer only when the optional mixer module exists."""
     try:
-        if importlib.util.find_spec("pygame.mixer") is None:
+        if (
+            _importlib_util is None
+            or _importlib_util.find_spec("pygame.mixer") is None
+        ):
             return None
         import pygame  # type: ignore
         return getattr(pygame, "mixer", None)
@@ -1231,14 +1251,20 @@ def set_pixel_clipped(x, y, r, g, b):
         display.set_pixel(x, y, r, g, b)
 
 def draw_rectangle(x1, y1, x2, y2, r, g, b):
-    if x1 > x2: x1, x2 = x2, x1
-    if y1 > y2: y1, y2 = y2, y1
+    if x1 > x2:
+        x1, x2 = x2, x1
+    if y1 > y2:
+        y1, y2 = y2, y1
     if x2 < 0 or y2 < 0 or x1 >= WIDTH or y1 >= HEIGHT:
         return
-    if x1 < 0: x1 = 0
-    if y1 < 0: y1 = 0
-    if x2 >= WIDTH: x2 = WIDTH - 1
-    if y2 >= HEIGHT: y2 = HEIGHT - 1
+    if x1 < 0:
+        x1 = 0
+    if y1 < 0:
+        y1 = 0
+    if x2 >= WIDTH:
+        x2 = WIDTH - 1
+    if y2 >= HEIGHT:
+        y2 = HEIGHT - 1
     fill_rect = getattr(display, "fill_rect", None)
     if fill_rect is not None and not USE_BUFFERED_DISPLAY:
         try:
@@ -2238,7 +2264,6 @@ class InitialsEntryMenu:
             draw_text_small(WIDTH - len(bs) * 6, 1, bs, 140, 140, 140)
 
             # letters
-            x0 = 10
             y0 = 28
             for i in range(3):
                 col = (255, 255, 255) if i == self.idx else (120, 120, 120)
@@ -2313,15 +2338,19 @@ class InitialsEntryMenu:
             if ticks_diff(now, last_move) > move_delay:
                 d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
                 if d == JOYSTICK_LEFT and self.idx > 0:
-                    self.idx -= 1; last_move = now
+                    self.idx -= 1
+                    last_move = now
                 elif d == JOYSTICK_RIGHT and self.idx < 2:
-                    self.idx += 1; last_move = now
+                    self.idx += 1
+                    last_move = now
                 elif d == JOYSTICK_UP:
                     c = ord(self.letters[self.idx])
-                    self.letters[self.idx] = chr(65 if c >= 90 else c + 1); last_move = now
+                    self.letters[self.idx] = chr(65 if c >= 90 else c + 1)
+                    last_move = now
                 elif d == JOYSTICK_DOWN:
                     c = ord(self.letters[self.idx])
-                    self.letters[self.idx] = chr(90 if c <= 65 else c - 1); last_move = now
+                    self.letters[self.idx] = chr(90 if c <= 65 else c - 1)
+                    last_move = now
             c_button, z_button = self.joystick.read_buttons()
             if c_button:
                 await _wait_for_primary_release_async(self.joystick)
@@ -2334,6 +2363,55 @@ class InitialsEntryMenu:
 # ======================================================================
 #                                 GAMES
 # ======================================================================
+
+
+class FrameLoopGame:
+    """Run callback-based games consistently on every supported runtime.
+
+    Subclasses provide ``FRAME_MS`` and ``_build_step(joystick)``.  Keeping
+    the sync/async dispatch here prevents each small game from maintaining a
+    subtly different browser fallback or frame-pacing implementation.
+    """
+
+    FRAME_MS = CONFIG_FRAME_MS_DEFAULT
+
+    def main_loop(self, joystick):
+        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+
+    async def main_loop_async(self, joystick):
+        if asyncio is None:
+            return self.main_loop(joystick)
+        await _run_game_loop_async(
+            self.FRAME_MS,
+            self._build_step(joystick),
+        )
+
+
+class GridCursorGame(FrameLoopGame):
+    """Shared, debounced four-way cursor movement for grid games."""
+
+    MOVE_DELAY_MS = 135
+
+    def _move_cursor(self, joystick):
+        now = ticks_ms()
+        if ticks_diff(now, self.last_move) < self.MOVE_DELAY_MS:
+            return False
+        direction = joystick.read_direction(
+            [
+                JOYSTICK_UP,
+                JOYSTICK_DOWN,
+                JOYSTICK_LEFT,
+                JOYSTICK_RIGHT,
+            ]
+        )
+        dx, dy = direction_to_delta(direction)
+        if not (dx or dy):
+            return False
+        self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
+        self.cursor_y = clamp(self.cursor_y + dy, 0, self.GRID_H - 1)
+        self.last_move = now
+        return True
+
 
 class SimonGame:
     """
@@ -2981,7 +3059,7 @@ class PongGame:
         await _run_game_loop_async(45, self._build_step(joystick))
 
 
-class AirHockeyGame:
+class AirHockeyGame(FrameLoopGame):
     """
     AIRHKY
     Controls:
@@ -3277,14 +3355,6 @@ class AirHockeyGame:
             self._draw()
             return True
         return step
-
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 # ---------- Breakout ----------
@@ -3941,10 +4011,14 @@ class QixGame:
             return
 
         nx, ny = self.player_x, self.player_y
-        if d == JOYSTICK_UP: ny -= 1
-        elif d == JOYSTICK_DOWN: ny += 1
-        elif d == JOYSTICK_LEFT: nx -= 1
-        elif d == JOYSTICK_RIGHT: nx += 1
+        if d == JOYSTICK_UP:
+            ny -= 1
+        elif d == JOYSTICK_DOWN:
+            ny += 1
+        elif d == JOYSTICK_LEFT:
+            nx -= 1
+        elif d == JOYSTICK_RIGHT:
+            nx += 1
 
         if nx < 0 or nx >= self.width or ny < 0 or ny >= self.height:
             return
@@ -4697,7 +4771,7 @@ class FlappyGame:
         await _run_game_loop_async(35, self._build_step(joystick))
 
 
-class DodgeGame:
+class DodgeGame(FrameLoopGame):
     """
     DODGE (Ausweichspiel)
     Steuerung:
@@ -4828,16 +4902,8 @@ class DodgeGame:
             return True
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class InvaderGame:
+class InvaderGame(FrameLoopGame):
     """
     INVADR
     Controls:
@@ -5172,16 +5238,8 @@ class InvaderGame:
             return self._step(joystick, z_button)
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class TronGame:
+class TronGame(FrameLoopGame):
     """
     TRON LIGHT CYCLE (Endless)
     Controls:
@@ -5421,14 +5479,6 @@ class TronGame:
             return True
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
 
 class RTypeGame:
     """
@@ -5589,8 +5639,10 @@ class RTypeGame:
                 e[0] -= 1
                 e[4] = (e[4] + 1) & 15
                 e[1] = e[6] + self._SIN[e[4]]
-                if e[1] < 1: e[1] = 1
-                if e[1] > PLAY_HEIGHT - 6: e[1] = PLAY_HEIGHT - 6
+                if e[1] < 1:
+                    e[1] = 1
+                if e[1] > PLAY_HEIGHT - 6:
+                    e[1] = PLAY_HEIGHT - 6
             else:
                 e[0] -= 1
                 e[5] -= 1
@@ -5681,7 +5733,8 @@ class RTypeGame:
 
         # powerups
         for p in self.powerups:
-            x = int(p[0]); y = int(p[1])
+            x = int(p[0])
+            y = int(p[1])
             if 0 <= x < WIDTH and 0 <= y < PLAY_HEIGHT:
                 sp(x, y, 0, 255, 0)
                 if x + 1 < WIDTH:
@@ -5707,7 +5760,9 @@ class RTypeGame:
 
         # enemies
         for e in self.enemies:
-            x = int(e[0]); y = int(e[1]); typ = e[2]
+            x = int(e[0])
+            y = int(e[1])
+            typ = e[2]
             if typ == 0:
                 self._rect_play(x, y, 4, 3, 255, 60, 60)
             elif typ == 1:
@@ -5762,10 +5817,14 @@ class RTypeGame:
                 self.px += step
 
             # bounds
-            if self.px < 0: self.px = 0
-            if self.px > WIDTH - self.pw - 1: self.px = WIDTH - self.pw - 1
-            if self.py < 0: self.py = 0
-            if self.py > PLAY_HEIGHT - self.ph: self.py = PLAY_HEIGHT - self.ph
+            if self.px < 0:
+                self.px = 0
+            if self.px > WIDTH - self.pw - 1:
+                self.px = WIDTH - self.pw - 1
+            if self.py < 0:
+                self.py = 0
+            if self.py > PLAY_HEIGHT - self.ph:
+                self.py = PLAY_HEIGHT - self.ph
 
             # shoot
             if self.fire_cd > 0:
@@ -5835,10 +5894,14 @@ class RTypeGame:
                 self.px += step
 
             # bounds
-            if self.px < 0: self.px = 0
-            if self.px > WIDTH - self.pw - 1: self.px = WIDTH - self.pw - 1
-            if self.py < 0: self.py = 0
-            if self.py > PLAY_HEIGHT - self.ph: self.py = PLAY_HEIGHT - self.ph
+            if self.px < 0:
+                self.px = 0
+            if self.px > WIDTH - self.pw - 1:
+                self.px = WIDTH - self.pw - 1
+            if self.py < 0:
+                self.py = 0
+            if self.py > PLAY_HEIGHT - self.ph:
+                self.py = PLAY_HEIGHT - self.ph
 
             # shoot
             if self.fire_cd > 0:
@@ -7017,7 +7080,7 @@ class ArtilleryGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
-class WormsGame:
+class WormsGame(FrameLoopGame):
     """
     WORMS
     Controls:
@@ -7296,14 +7359,6 @@ class WormsGame:
             self._draw()
             return True
         return step
-
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class BattlezoneGame:
@@ -12131,8 +12186,6 @@ class DemosGame:
 
     # --- STARS ---
     def _stars_init(self):
-        w = self._demo_w
-        h = self._demo_h
         self._stars = []
         for _ in range(40):
             # x, y, z
@@ -12173,8 +12226,10 @@ class DemosGame:
             
             if 0 <= nx < w and 0 <= ny < h:
                 bright = int(255 * (1.0 - nz/2.0))
-                if bright < 0: bright = 0
-                if bright > 255: bright = 255
+                if bright < 0:
+                    bright = 0
+                if bright > 255:
+                    bright = 255
                 display.set_pixel(nx, ny, bright, bright, bright)
                 
     # --- MYSTIFY ---
@@ -14547,10 +14602,14 @@ class LunarLanderGame:
                 self.vy += ay
 
                 # clamp velocity
-                if self.vx > 2.2: self.vx = 2.2
-                if self.vx < -2.2: self.vx = -2.2
-                if self.vy > 3.0: self.vy = 3.0
-                if self.vy < -3.0: self.vy = -3.0
+                if self.vx > 2.2:
+                    self.vx = 2.2
+                if self.vx < -2.2:
+                    self.vx = -2.2
+                if self.vy > 3.0:
+                    self.vy = 3.0
+                if self.vy < -3.0:
+                    self.vy = -3.0
 
                 self.x += self.vx
                 self.y += self.vy
@@ -14676,10 +14735,14 @@ class LunarLanderGame:
                 self.vy += ay
 
                 # clamp velocity
-                if self.vx > 2.2: self.vx = 2.2
-                if self.vx < -2.2: self.vx = -2.2
-                if self.vy > 3.0: self.vy = 3.0
-                if self.vy < -3.0: self.vy = -3.0
+                if self.vx > 2.2:
+                    self.vx = 2.2
+                if self.vx < -2.2:
+                    self.vx = -2.2
+                if self.vy > 3.0:
+                    self.vy = 3.0
+                if self.vy < -3.0:
+                    self.vy = -3.0
 
                 self.x += self.vx
                 self.y += self.vy
@@ -14752,7 +14815,7 @@ class LunarLanderGame:
                 return
 
 
-class KerbalGame:
+class KerbalGame(FrameLoopGame):
     """
     KERBAL
     Controls:
@@ -15048,14 +15111,6 @@ class KerbalGame:
             return self._step(joystick)
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
 
 class UFODefenseGame:
     """
@@ -15211,7 +15266,8 @@ class UFODefenseGame:
         r = ex["r"]
         if r <= 0:
             return
-        x0 = ex["x"]; y0 = ex["y"]
+        x0 = ex["x"]
+        y0 = ex["y"]
         col = ex["col"]
         sp = display.set_pixel
         if self.blast_style == "filled":
@@ -15248,7 +15304,8 @@ class UFODefenseGame:
                 continue
 
             r2 = (ex["r"] + 1) * (ex["r"] + 1)
-            exx = ex["x"]; exy = ex["y"]
+            exx = ex["x"]
+            exy = ex["y"]
 
             keep_enemy = []
             for em in self.enemy_missiles:
@@ -16533,8 +16590,10 @@ class DoomLiteGame:
 
             start = (PLAY_H - line_h) // 2
             end = start + line_h - 1
-            if start < 0: start = 0
-            if end >= PLAY_H: end = PLAY_H - 1
+            if start < 0:
+                start = 0
+            if end >= PLAY_H:
+                end = PLAY_H - 1
 
             b = light - int(dist * 7)
             if b < 18:
@@ -16579,7 +16638,8 @@ class DoomLiteGame:
             # apply damage flash overeverything in this column
             if dmg_flash > 0:
                 flash_r = 150 + dmg_flash * 6
-                if flash_r > 255: flash_r = 255
+                if flash_r > 255:
+                    flash_r = 255
                 sky_r, sky_g, sky_b = flash_r, 0, 0
                 wr, wg, wb = flash_r, 0, 0
                 fl_r, fl_g, fl_b = flash_r, 0, 0
@@ -17005,7 +17065,7 @@ class DoomLiteGame:
                 return
 
 
-class CityChaseGame:
+class CityChaseGame(FrameLoopGame):
     """
     CITY
     Controls:
@@ -17380,16 +17440,8 @@ class CityChaseGame:
             return True
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class TopDownRacerGame:
+class TopDownRacerGame(FrameLoopGame):
     """
     RACING
     Controls:
@@ -17616,14 +17668,6 @@ class TopDownRacerGame:
             self._draw()
             return True
         return step
-
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class RayRacerGame:
@@ -18142,7 +18186,7 @@ class StackerGame:
                                             delay_ms=900)
 
 
-class FroggerGame:
+class FroggerGame(FrameLoopGame):
     """
     FROGGR
     Controls:
@@ -18272,16 +18316,8 @@ class FroggerGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class CatchGame:
+class CatchGame(FrameLoopGame):
     """
     CATCH
     Controls:
@@ -18397,15 +18433,7 @@ class CatchGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-class MinesGame:
+class MinesGame(GridCursorGame):
     """
     MINES
     Controls:
@@ -18470,17 +18498,6 @@ class MinesGame:
                     total += 1
         return total
 
-    def _move_cursor(self, joystick):
-        now = ticks_ms()
-        if ticks_diff(now, self.last_move) < 135:
-            return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
-        dx, dy = direction_to_delta(d)
-        if dx or dy:
-            self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
-            self.cursor_y = clamp(self.cursor_y + dy, 0, self.GRID_H - 1)
-            self.last_move = now
-
     def _draw(self):
         display.clear()
         ox = 4
@@ -18531,16 +18548,8 @@ class MinesGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class ClimberGame:
+class ClimberGame(FrameLoopGame):
     """
     CLIMB
     Controls:
@@ -18638,16 +18647,8 @@ class ClimberGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class ArenaGame:
+class ArenaGame(FrameLoopGame):
     """
     ARENA
     Controls:
@@ -18822,16 +18823,8 @@ class ArenaGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class DefuseGame:
+class DefuseGame(FrameLoopGame):
     """
     DEFUSE
     Controls:
@@ -18961,16 +18954,8 @@ class DefuseGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class BilliardsGame:
+class BilliardsGame(FrameLoopGame):
     """
     BILLI
     Controls:
@@ -19328,16 +19313,8 @@ class BilliardsGame:
             return True
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class GolfGame:
+class GolfGame(FrameLoopGame):
     """
     GOLF
     Controls:
@@ -19530,15 +19507,7 @@ class GolfGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-class LaserGame:
+class LaserGame(FrameLoopGame):
     """
     LASER
     Controls:
@@ -19827,16 +19796,8 @@ class LaserGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class PairsGame:
+class PairsGame(FrameLoopGame):
     """
     PAIRS
     Controls:
@@ -19976,15 +19937,7 @@ class PairsGame:
             return True
 
         return step
-
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-class BomberGame:
+class BomberGame(FrameLoopGame):
     """
     BOMBER
     Controls:
@@ -20187,15 +20140,7 @@ class BomberGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-class SkyWarGame:
+class SkyWarGame(FrameLoopGame):
     """
     SKYWAR
     Controls:
@@ -20374,16 +20319,8 @@ class SkyWarGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class WingsGame:
+class WingsGame(FrameLoopGame):
     """
     WINGS
     Controls:
@@ -20653,14 +20590,6 @@ class WingsGame:
             return True
 
         return step
-
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class CgolgGame:
@@ -21399,7 +21328,7 @@ class PinballGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
-class SabotrGame:
+class SabotrGame(FrameLoopGame):
     """
     SABOTR
     Controls:
@@ -21636,14 +21565,6 @@ class SabotrGame:
             self._draw()
             return True
         return step
-
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class SoccerGame:
@@ -21921,7 +21842,7 @@ class SoccerGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
-class TowerDefenseGame:
+class TowerDefenseGame(FrameLoopGame):
     """
     TWRDEF
     Controls:
@@ -22415,16 +22336,8 @@ class TowerDefenseGame:
             return True
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class DigDugGame:
+class DigDugGame(FrameLoopGame):
     """
     DIGDUG
     Controls:
@@ -22616,16 +22529,8 @@ class DigDugGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class JoustGame:
+class JoustGame(FrameLoopGame):
     """
     JOUST
     Controls:
@@ -22781,16 +22686,8 @@ class JoustGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class BurgerTimeGame:
+class BurgerTimeGame(FrameLoopGame):
     """
     BURGER
     Controls:
@@ -23008,16 +22905,8 @@ class BurgerTimeGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class StickArcherGame:
+class StickArcherGame(FrameLoopGame):
     """
     STKARC
     Controls:
@@ -23267,16 +23156,8 @@ class StickArcherGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class OrbitGame:
+class OrbitGame(FrameLoopGame):
     """
     ORBIT
     Controls:
@@ -23398,7 +23279,6 @@ class OrbitGame:
             self._apply_wells(b)
             self._move_object(b, b[4])
         # Blob-blob absorption: larger blobs eat smaller ones
-        alive = list(range(len(self.blobs)))
         eaten = set()
         for i in range(len(self.blobs)):
             if i in eaten:
@@ -23486,16 +23366,8 @@ class OrbitGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class GalaxyGame:
+class GalaxyGame(FrameLoopGame):
     """
     GALAXY
     Controls:
@@ -23749,16 +23621,8 @@ class GalaxyGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class OrbitalGame:
+class OrbitalGame(FrameLoopGame):
     """
     ORBTAL
     Controls:
@@ -24098,14 +23962,6 @@ class OrbitalGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
 
 class ColumnsGame:
     """
@@ -24325,6 +24181,487 @@ class ColumnsGame:
             return self.main_loop(joystick)
         begin_game(0)
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+
+
+class LightsOutGame(GridCursorGame):
+    """Turn off a five-by-five light grid by toggling adjacent cells."""
+
+    FRAME_MS = 40
+    GRID_W = 5
+    GRID_H = 5
+    CELL = 10
+    ORIGIN_X = 7
+    ORIGIN_Y = 4
+    SCRAMBLE_STEPS_MIN = 12
+    SCRAMBLE_STEPS_MAX = 16
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.cursor_x = self.GRID_W // 2
+        self.cursor_y = self.GRID_H // 2
+        self.last_move = ticks_ms()
+        self.last_z = False
+        self.moves = 0
+        self.grid = [0] * (self.GRID_W * self.GRID_H)
+        used_positions = []
+        scramble_steps = random.randint(
+            self.SCRAMBLE_STEPS_MIN,
+            self.SCRAMBLE_STEPS_MAX,
+        )
+        while len(used_positions) < scramble_steps:
+            index = random.randint(0, self.GRID_W * self.GRID_H - 1)
+            if index in used_positions:
+                continue
+            used_positions.append(index)
+            self._flip_pattern(index % self.GRID_W, index // self.GRID_W)
+        if self._is_solved():
+            self._flip_pattern(self.cursor_x, self.cursor_y)
+        self.needs_redraw = True
+
+    def _index(self, x, y):
+        return y * self.GRID_W + x
+
+    def _flip_pattern(self, x, y):
+        for dx, dy in ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)):
+            nx = x + dx
+            ny = y + dy
+            if 0 <= nx < self.GRID_W and 0 <= ny < self.GRID_H:
+                index = self._index(nx, ny)
+                self.grid[index] = 1 - self.grid[index]
+
+    def _is_solved(self):
+        return not any(self.grid)
+
+    def _draw(self):
+        display.clear()
+        for y in range(self.GRID_H):
+            for x in range(self.GRID_W):
+                px = self.ORIGIN_X + x * self.CELL
+                py = self.ORIGIN_Y + y * self.CELL
+                if self.grid[self._index(x, y)]:
+                    color = (255, 210, 30)
+                else:
+                    color = (18, 28, 42)
+                draw_rectangle(px, py, px + 7, py + 7, *color)
+        px = self.ORIGIN_X + self.cursor_x * self.CELL
+        py = self.ORIGIN_Y + self.cursor_y * self.CELL
+        draw_rect_outline(px - 1, py - 1, px + 8, py + 8,
+                          255, 255, 255)
+        display_score_and_time(self.moves)
+
+    def _build_step(self, joystick):
+        begin_game(0)
+        self.reset()
+        self._draw()
+        self.needs_redraw = False
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            if self._move_cursor(joystick):
+                self.needs_redraw = True
+            if z_button and not self.last_z:
+                self._flip_pattern(self.cursor_x, self.cursor_y)
+                self.moves += 1
+                self.needs_redraw = True
+                if self._is_solved():
+                    score = max(10, 1000 - self.moves * 20)
+                    set_game_over_score(score, won=True)
+                    return False
+            self.last_z = z_button
+            if self.needs_redraw:
+                self._draw()
+                self.needs_redraw = False
+            return True
+
+        return step
+
+
+class ReactionGridGame(GridCursorGame):
+    """Hit lit pads quickly, but leave red decoy pads alone."""
+
+    FRAME_MS = 35
+    GRID_W = 4
+    GRID_H = 4
+    CELL = 12
+    ORIGIN_X = 8
+    ORIGIN_Y = 4
+    MAX_STRIKES = 3
+    TARGET_COUNT = GRID_W * GRID_H
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.cursor_x = 0
+        self.cursor_y = 0
+        self.last_move = ticks_ms()
+        self.last_z = False
+        self.score = 0
+        self.strikes = 0
+        self.target = -1
+        self.target_is_decoy = False
+        self.deadline = ticks_ms()
+        self._spawn_target()
+        self.needs_redraw = True
+
+    def _spawn_target(self):
+        old_target = self.target
+        if old_target < 0:
+            self.target = random.randint(0, self.TARGET_COUNT - 1)
+        else:
+            target = random.randint(0, self.TARGET_COUNT - 2)
+            self.target = target + (target >= old_target)
+        self.target_is_decoy = (
+            self.score >= 3 and random.randint(0, 5) == 0
+        )
+        timeout = max(400, 1150 - self.score * 28)
+        self.deadline = ticks_add(ticks_ms(), timeout)
+
+    def _selected_index(self):
+        return self.cursor_y * self.GRID_W + self.cursor_x
+
+    def _add_strike(self):
+        self.strikes += 1
+        if self.strikes >= self.MAX_STRIKES:
+            set_game_over_score(self.score)
+            return False
+        return True
+
+    def _draw(self):
+        display.clear()
+        for index in range(self.GRID_W * self.GRID_H):
+            x = index % self.GRID_W
+            y = index // self.GRID_W
+            px = self.ORIGIN_X + x * self.CELL
+            py = self.ORIGIN_Y + y * self.CELL
+            color = (22, 34, 50)
+            if index == self.target:
+                if self.target_is_decoy:
+                    color = (255, 35, 25)
+                else:
+                    color = (30, 240, 100)
+            draw_rectangle(px, py, px + 9, py + 9, *color)
+        px = self.ORIGIN_X + self.cursor_x * self.CELL
+        py = self.ORIGIN_Y + self.cursor_y * self.CELL
+        draw_rect_outline(px - 1, py - 1, px + 10, py + 10,
+                          255, 255, 255)
+        for strike in range(self.strikes):
+            display.set_pixel(WIDTH - strike * 3 - 2, 1, 255, 0, 0)
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        begin_game(0)
+        self.reset()
+        self._draw()
+        self.needs_redraw = False
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            if self._move_cursor(joystick):
+                self.needs_redraw = True
+            if z_button and not self.last_z:
+                hit_target = self._selected_index() == self.target
+                if hit_target and not self.target_is_decoy:
+                    self.score += 1
+                    self._spawn_target()
+                    self.needs_redraw = True
+                elif not self._add_strike():
+                    return False
+                else:
+                    self.needs_redraw = True
+            self.last_z = z_button
+            if ticks_diff(ticks_ms(), self.deadline) >= 0:
+                if not self.target_is_decoy and not self._add_strike():
+                    return False
+                self._spawn_target()
+                self.needs_redraw = True
+            if self.needs_redraw:
+                self._draw()
+                self.needs_redraw = False
+            return True
+
+        return step
+
+
+class PicrossGame(GridCursorGame):
+    """Solve compact nonograms from row and column run clues."""
+
+    FRAME_MS = 40
+    GRID_W = 5
+    GRID_H = 5
+    CELL = 8
+    ORIGIN_X = 22
+    ORIGIN_Y = 16
+    PUZZLES = (
+        (
+            ("01110", "10001", "10101", "10001", "01110"),
+            ("3", "11", "111", "11", "3"),
+            ("3", "11", "111", "11", "3"),
+        ),
+        (
+            ("00100", "01110", "11111", "01110", "00100"),
+            ("1", "3", "5", "3", "1"),
+            ("1", "3", "5", "3", "1"),
+        ),
+        (
+            ("10001", "01010", "00100", "01010", "10001"),
+            ("11", "11", "1", "11", "11"),
+            ("11", "11", "1", "11", "11"),
+        ),
+        (
+            ("11011", "11011", "00000", "10001", "01110"),
+            ("22", "22", "0", "11", "3"),
+            ("21", "21", "1", "21", "21"),
+        ),
+        (
+            ("10101", "11111", "01110", "00100", "00100"),
+            ("111", "5", "3", "1", "1"),
+            ("2", "2", "5", "2", "2"),
+        ),
+    )
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.pattern, self.row_clues, self.column_clues = random.choice(
+            self.PUZZLES
+        )
+        self.grid = [0] * (self.GRID_W * self.GRID_H)
+        self.cursor_x = 0
+        self.cursor_y = 0
+        self.last_move = ticks_ms()
+        self.last_z = False
+        self.moves = 0
+        self.needs_redraw = True
+
+    def _index(self, x, y):
+        return y * self.GRID_W + x
+
+    def _matches_pattern(self):
+        for y in range(self.GRID_H):
+            for x in range(self.GRID_W):
+                filled = self.grid[self._index(x, y)] == 1
+                if filled != (self.pattern[y][x] == "1"):
+                    return False
+        return True
+
+    def _draw_clues(self):
+        for y, clue in enumerate(self.row_clues):
+            x = self.ORIGIN_X - len(clue) * 6 - 2
+            py = self.ORIGIN_Y + y * self.CELL + 1
+            draw_text_small(x, py, clue, 120, 180, 220)
+        for x, clue in enumerate(self.column_clues):
+            px = self.ORIGIN_X + x * self.CELL + 1
+            py = self.ORIGIN_Y - len(clue) * 5
+            for digit in clue:
+                draw_text_small(px, py, digit, 120, 180, 220)
+                py += 5
+
+    def _draw(self):
+        display.clear()
+        self._draw_clues()
+        for y in range(self.GRID_H):
+            for x in range(self.GRID_W):
+                px = self.ORIGIN_X + x * self.CELL
+                py = self.ORIGIN_Y + y * self.CELL
+                state = self.grid[self._index(x, y)]
+                color = (18, 30, 42)
+                if state == 1:
+                    color = (40, 210, 255)
+                draw_rectangle(px, py, px + 6, py + 6, *color)
+                if state == 2:
+                    display.set_pixel(px + 3, py + 3, 100, 120, 135)
+        px = self.ORIGIN_X + self.cursor_x * self.CELL
+        py = self.ORIGIN_Y + self.cursor_y * self.CELL
+        draw_rect_outline(px - 1, py - 1, px + 7, py + 7,
+                          255, 255, 255)
+        display_score_and_time(self.moves)
+
+    def _build_step(self, joystick):
+        begin_game(0)
+        self.reset()
+        self._draw()
+        self.needs_redraw = False
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            if self._move_cursor(joystick):
+                self.needs_redraw = True
+            if z_button and not self.last_z:
+                index = self._index(self.cursor_x, self.cursor_y)
+                self.grid[index] = (self.grid[index] + 1) % 3
+                self.moves += 1
+                self.needs_redraw = True
+                if self._matches_pattern():
+                    score = max(10, 1200 - self.moves * 15)
+                    set_game_over_score(score, won=True)
+                    return False
+            self.last_z = z_button
+            if self.needs_redraw:
+                self._draw()
+                self.needs_redraw = False
+            return True
+
+        return step
+
+
+class SlalomGame(FrameLoopGame):
+    """Carve through downhill gates; hold Z to tuck and accelerate."""
+
+    FRAME_MS = 35
+    PLAYER_Y = 47
+    PLAYER_HALF_WIDTH = 2
+    MAX_GATES = 5
+    MAX_SNOW = 24
+    MAX_GATE_SHIFT = 14
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.x = WIDTH / 2.0
+        self.velocity_x = 0.0
+        self.score = 0
+        self.gates = []
+        self.snow = []
+        for _unused in range(self.MAX_SNOW):
+            self.snow.append([
+                random.randint(0, WIDTH - 1),
+                random.randint(0, PLAY_HEIGHT - 1),
+                random.randint(1, 3),
+            ])
+        self._spawn_gate(-5.0)
+
+    def _gate_gap(self):
+        return max(10, 20 - self.score // 4)
+
+    def _spawn_gate(self, y):
+        gap = self._gate_gap()
+        margin = gap // 2 + 5
+        min_center = margin
+        max_center = WIDTH - margin - 1
+        if self.gates:
+            previous_center = self.gates[-1][1]
+            min_center = max(min_center, previous_center - self.MAX_GATE_SHIFT)
+            max_center = min(max_center, previous_center + self.MAX_GATE_SHIFT)
+        center = random.randint(min_center, max_center)
+        self.gates.append([float(y), center, gap, False])
+
+    def _inside_gate(self, gate):
+        center = gate[1]
+        half_gap = gate[2] // 2
+        safe_left = center - half_gap + 1
+        safe_right = center + half_gap - 1
+        return (
+            self.x - self.PLAYER_HALF_WIDTH >= safe_left
+            and self.x + self.PLAYER_HALF_WIDTH <= safe_right
+        )
+
+    def _steer(self, joystick, tucked):
+        direction = joystick.read_direction(
+            [JOYSTICK_LEFT, JOYSTICK_RIGHT],
+            debounce=False,
+        )
+        acceleration = 0.28 if tucked else 0.52
+        if direction == JOYSTICK_LEFT:
+            self.velocity_x -= acceleration
+        elif direction == JOYSTICK_RIGHT:
+            self.velocity_x += acceleration
+        else:
+            self.velocity_x *= 0.82
+        self.velocity_x = clamp(self.velocity_x, -3.2, 3.2)
+        self.x += self.velocity_x
+        if self.x < self.PLAYER_HALF_WIDTH:
+            self.x = float(self.PLAYER_HALF_WIDTH)
+            self.velocity_x = 0.0
+        elif self.x > WIDTH - self.PLAYER_HALF_WIDTH - 1:
+            self.x = float(WIDTH - self.PLAYER_HALF_WIDTH - 1)
+            self.velocity_x = 0.0
+
+    def _advance_snow(self, speed):
+        for flake in self.snow:
+            flake[1] += speed * flake[2] * 0.55
+            if flake[1] >= PLAY_HEIGHT:
+                flake[0] = random.randint(0, WIDTH - 1)
+                flake[1] -= PLAY_HEIGHT
+
+    def _advance_gates(self, tucked):
+        speed = 1.05 + min(1.45, self.score * 0.05)
+        if tucked:
+            speed += 0.75
+        self._advance_snow(speed)
+
+        keep_index = 0
+        for gate in self.gates:
+            previous_y = gate[0]
+            gate[0] += speed
+            if (
+                not gate[3]
+                and previous_y < self.PLAYER_Y <= gate[0]
+            ):
+                if not self._inside_gate(gate):
+                    set_game_over_score(self.score)
+                    return False
+                gate[3] = True
+                self.score += 2 if tucked else 1
+            if gate[0] < PLAY_HEIGHT + 6:
+                self.gates[keep_index] = gate
+                keep_index += 1
+        del self.gates[keep_index:]
+        if (
+            len(self.gates) < self.MAX_GATES
+            and (not self.gates or self.gates[-1][0] >= 12)
+        ):
+            self._spawn_gate(-5.0)
+        return True
+
+    def _draw(self, tucked):
+        display.clear()
+        for x, y, _flake_speed in self.snow:
+            display.set_pixel(int(x), int(y), 65, 80, 100)
+        for y, center, gap, _passed in self.gates:
+            pole_y = int(y)
+            left = center - gap // 2
+            right = center + gap // 2
+            draw_play_rect(left, pole_y, 2, 6, 40, 120, 255)
+            draw_play_rect(right - 1, pole_y, 2, 6, 255, 55, 45)
+            draw_play_rect(left + 2, pole_y, 3, 2, 40, 120, 255)
+            draw_play_rect(right - 4, pole_y, 3, 2, 255, 55, 45)
+
+        player_x = int(self.x)
+        color = (255, 210, 30) if not tucked else (255, 90, 25)
+        draw_play_rect(player_x - 1, self.PLAYER_Y, 3, 4, *color)
+        draw_line(player_x - 3, self.PLAYER_Y + 4,
+                  player_x, self.PLAYER_Y + 3, 220, 240, 255)
+        draw_line(player_x, self.PLAYER_Y + 3,
+                  player_x + 3, self.PLAYER_Y + 4, 220, 240, 255)
+        display_score_and_time(self.score)
+
+    def _build_step(self, joystick):
+        begin_game(0)
+        self.reset()
+        self._draw(False)
+
+        def step():
+            c_button, z_button = joystick.read_buttons()
+            if c_button:
+                return False
+            self._steer(joystick, z_button)
+            if not self._advance_gates(z_button):
+                return False
+            self._draw(z_button)
+            return True
+
+        return step
 
 
 class GameOverMenu:
@@ -24682,6 +25019,7 @@ class GameSelect:
         ("KERBAL", KerbalGame, GAME_FLAG_HEAVY),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
         ("LASER", LaserGame, 0),
+        ("LIGHTS", LightsOutGame, 0),
         ("LOCO", LocoMotionGame, GAME_FLAG_HEAVY),
         ("MAZE", MazeGame, GAME_FLAG_HEAVY),
         ("MINES", MinesGame, 0),
@@ -24689,16 +25027,19 @@ class GameSelect:
         ("ORBTAL", OrbitalGame, 0),
         ("PACMAN", PacmanGame, 0),
         ("PAIRS", PairsGame, 0),
+        ("PICROS", PicrossGame, 0),
         ("PINBAL", PinballGame, 0),
         ("PITFAL", PitfallGame, 0),
         ("PONG", PongGame, 0),
         ("QIX", QixGame, GAME_FLAG_HEAVY),
         ("RACING", TopDownRacerGame, 0),
         ("RAYRCR", RayRacerGame, GAME_FLAG_HEAVY),
+        ("REACT", ReactionGridGame, 0),
         ("REVRS", OthelloGame, GAME_FLAG_HEAVY),
         ("RTYPE", RTypeGame, GAME_FLAG_HEAVY),
         ("SABOTR", SabotrGame, 0),
         ("SIMON", SimonGame, 0),
+        ("SLALOM", SlalomGame, 0),
         ("SNAKE", SnakeGame, 0),
         ("SOCCER", SoccerGame, 0),
         ("SOKO", SokobanGame, GAME_FLAG_HEAVY),

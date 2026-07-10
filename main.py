@@ -14,11 +14,16 @@ Browser (pygbag / WebAssembly)
 
 import os
 import sys
-import importlib.util
+
+try:
+    import importlib.util as _importlib_util
+except ImportError:
+    _importlib_util = None
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 if getattr(sys, "platform", "") == "emscripten":
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+
 
 def _logo_candidates():
     paths = []
@@ -32,6 +37,7 @@ def _logo_candidates():
             if path not in paths:
                 paths.append(path)
     return paths
+
 
 def _hide_web_loader():
     if getattr(sys, "platform", "") != "emscripten":
@@ -55,7 +61,8 @@ def _hide_web_loader():
         try:
             platform.window.eval(
                 "const t=document.getElementById('transfer');"
-                "if(t){t.classList.add('loader-hidden');t.hidden=true;t.style.display='none';}"
+                "if(t){t.classList.add('loader-hidden');t.hidden=true;"
+                "t.style.display='none';}"
                 "document.title='DIY Arcade Machine';"
                 "window.DIYArcadeLoaderReady=true;"
             )
@@ -63,6 +70,7 @@ def _hide_web_loader():
             pass
     except Exception:
         pass
+
 
 def _print_exception(exc):
     try:
@@ -97,7 +105,10 @@ async def main():
         import pygame
         pygame.init()
         try:
-            if importlib.util.find_spec("pygame.mixer") is not None:
+            if (
+                _importlib_util is not None
+                and _importlib_util.find_spec("pygame.mixer") is not None
+            ):
                 mixer = pygame.mixer
                 mixer.quit()
         except Exception:
