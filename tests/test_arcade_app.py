@@ -232,6 +232,59 @@ class ArcadeGameTests(unittest.TestCase):
         self.assertEqual(game.frame, frame + 1)
         self.assertGreater(len(game.enemies), 0)
 
+    def test_demo_heavy_effects_use_target_aware_frame_pacing(self):
+        demo = app.DemosGame()
+        original_web = app.IS_WEB
+        try:
+            app.IS_WEB = True
+            self.assertEqual(
+                demo._frame_ms_for_demo("MANDEL"),
+                demo.TARGET_HEAVY_FRAME_MS,
+            )
+            self.assertEqual(demo._frame_ms_for_demo("MATRIX"), demo.FRAME_MS)
+        finally:
+            app.IS_WEB = original_web
+
+    def test_demo_animation_work_lists_are_reused(self):
+        demo = app.DemosGame()
+
+        demo._ants_init()
+        ants_previous = demo._ants_prev
+        ants_changed = demo._ants_changed
+        demo._ants_step()
+        self.assertIs(demo._ants_prev, ants_previous)
+        self.assertIs(demo._ants_changed, ants_changed)
+        self.assertEqual(len(ants_previous), len(demo._ants))
+
+        demo._radar_init()
+        radar_blips = demo._radar_blips
+        radar_rings = demo._radar_rings
+        radar_blips.append([app.WIDTH // 2, app.HEIGHT // 2, 40])
+        demo._radar_step()
+        self.assertIs(demo._radar_blips, radar_blips)
+        self.assertIs(demo._radar_rings, radar_rings)
+        self.assertEqual(tuple(len(ring) for ring in radar_rings), (32, 32, 32))
+
+        demo._firwrk_init()
+        rockets = demo._fw_rockets
+        particles = demo._fw_particles
+        rockets.append([32.0, 25.0, -0.1, 25.0, 0])
+        demo._firwrk_step()
+        self.assertIs(demo._fw_rockets, rockets)
+        self.assertIs(demo._fw_particles, particles)
+        self.assertLessEqual(len(particles), demo.MAX_FIREWORK_PARTICLES)
+
+    def test_demo_pendulum_trail_keeps_its_storage(self):
+        demo = app.DemosGame()
+        demo._pendul_init()
+        trail = demo._pend_trail
+
+        for _unused in range(52):
+            demo._pendul_step()
+
+        self.assertIs(demo._pend_trail, trail)
+        self.assertEqual(len(trail), 48)
+
 
 if __name__ == "__main__":
     unittest.main()

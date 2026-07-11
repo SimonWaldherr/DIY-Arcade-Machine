@@ -12230,6 +12230,22 @@ class DemosGame:
     """
 
     FRAME_MS = 35
+    TARGET_HEAVY_FRAME_MS = 45
+    HEAVY_EFFECTS = (
+        "MANDEL",
+        "BOIDS",
+        "NBODY",
+        "METAB",
+        "GRAV",
+        "RIPPLE",
+        "FIRWRK",
+        "PHYLLO",
+        "LISSAJO",
+        "PENDUL",
+        "WINMAZE",
+    )
+    MAX_RADAR_BLIPS = 18
+    MAX_FIREWORK_PARTICLES = 56 if CONFIG_LOW_RAM_MODE else 104
     GAME_DEMOS = (
         "2048",
         "ARENA",
@@ -12420,6 +12436,12 @@ class DemosGame:
         self._game_demo_wait_ms = 850
         self._reset_demo_state()
 
+    def _frame_ms_for_demo(self, demo):
+        """Keep math-heavy effects responsive on constrained render targets."""
+        if demo in self.HEAVY_EFFECTS and (CONFIG_LOW_RAM_MODE or IS_WEB):
+            return self.TARGET_HEAVY_FRAME_MS
+        return self.FRAME_MS
+
     def _demo_clock_text(self):
         if not self.clock_enabled:
             return None
@@ -12556,6 +12578,7 @@ class DemosGame:
         # RADAR
         self._radar_phase = 0
         self._radar_blips = []
+        self._radar_rings = ()
 
         # MANDEL
         self._mandel_y = 0
@@ -12735,8 +12758,12 @@ class DemosGame:
         cells = self._ants_cells
         ants = self._ants
 
-        prev_positions = []
-        changed = []
+        # These short-lived work lists are reused every frame. That is much
+        # friendlier to the MicroPython allocator than rebuilding them at 28 FPS.
+        prev_positions = self._ants_prev
+        changed = self._ants_changed
+        del prev_positions[:]
+        del changed[:]
 
         # 1) update ants + grid state
         for ant in ants:
@@ -13060,15 +13087,9 @@ class DemosGame:
         w = self._demo_w
         h = self._demo_h
 
-        # darken screen
-        for y in range(h):
-            for x in range(w):
-                # Reading software-buffer pixels is not portable across configs.
-                # Just draw black with alpha effect conceptually.
-                pass
-
-        # Better matrix approach without reading buffer:
-        # Just clear screen occasionally or redraw tails in black
+        # Framebuffer reads are not portable on all targets. Erasing each
+        # outgoing tail produces the same effect without a no-op full-screen
+        # traversal every frame.
         for drop in self._matrix_drops:
             # Erase tail
             ty = drop["y"] - drop["len"]
@@ -13807,6 +13828,21 @@ class DemosGame:
     def _radar_init(self):
         self._radar_phase = random.randint(0, 255)
         self._radar_blips = []
+        cx = WIDTH // 2
+        cy = HEIGHT // 2
+        rings = []
+        for radius in (10, 18, 27):
+            points = []
+            for i in range(0, 64, 2):
+                angle = i * 6.28318 / 64.0
+                points.append(
+                    (
+                        int(cx + math.cos(angle) * radius),
+                        int(cy + math.sin(angle) * radius),
+                    )
+                )
+            rings.append(tuple(points))
+        self._radar_rings = tuple(rings)
         display.clear()
 
     def _radar_step(self):
@@ -13816,13 +13852,11 @@ class DemosGame:
         self._radar_phase = (self._radar_phase + 3) & 255
         phase = self._radar_phase
 
-        for radius in (10, 18, 27):
-            for i in range(0, 64, 2):
-                a = i * 6.28318 / 64.0
-                x = int(cx + math.cos(a) * radius)
-                y = int(cy + math.sin(a) * radius)
+        sp = display.set_pixel
+        for ring in self._radar_rings:
+            for x, y in ring:
                 if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                    display.set_pixel(x, y, 0, 45, 0)
+                    sp(x, y, 0, 45, 0)
         draw_line(cx, 4, cx, HEIGHT - 5, 0, 28, 0)
         draw_line(4, cy, WIDTH - 5, cy, 0, 28, 0)
 
@@ -13836,27 +13870,31 @@ class DemosGame:
             ty = int(cy + math.sin(a) * 29)
             draw_line(cx, cy, tx, ty, 0, 90 // i, 25 // i)
 
-        if (self._frame & 3) == 0 and random.randint(0, 99) < 70:
+        blips = self._radar_blips
+        if (
+            len(blips) < self.MAX_RADAR_BLIPS
+            and (self._frame & 3) == 0
+            and random.randint(0, 99) < 70
+        ):
             r = random.randint(7, 29)
             x = int(cx + math.cos(sweep) * r)
             y = int(cy + math.sin(sweep) * r)
             if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                self._radar_blips.append([x, y, 255])
+                blips.append([x, y, 255])
                 self._demo_sound("ping", r, 120)
 
-        active = []
-        for blip in self._radar_blips:
+        active_count = 0
+        for blip in blips:
             x, y, bright = blip
-            display.set_pixel(x, y, bright // 5, bright, bright // 8)
+            sp(x, y, bright // 5, bright, bright // 8)
             if bright > 170 and x + 1 < WIDTH:
-                display.set_pixel(x + 1, y, bright // 8, bright // 2, 0)
+                sp(x + 1, y, bright // 8, bright // 2, 0)
             bright -= 7
             if bright > 18:
                 blip[2] = bright
-                active.append(blip)
-        if len(active) > 18:
-            active = active[-18:]
-        self._radar_blips = active
+                blips[active_count] = blip
+                active_count += 1
+        del blips[active_count:]
 
     # --- MANDELBROT ---
     def _mandel_init(self):
@@ -14552,6 +14590,10 @@ class DemosGame:
 
     def _firwrk_burst(self, x, y, hue):
         n = 14 if CONFIG_LOW_RAM_MODE else 26
+        available = self.MAX_FIREWORK_PARTICLES - len(self._fw_particles)
+        if available <= 0:
+            return
+        n = min(n, available)
         for _ in range(n):
             a = random.randint(0, 359) * 0.0174533
             speed = random.uniform(0.4, 1.7)
@@ -14575,7 +14617,8 @@ class DemosGame:
             self._firwrk_launch()
 
         sp = display.set_pixel
-        rockets = []
+        rockets = self._fw_rockets
+        active_rockets = 0
         for rk in self._fw_rockets:
             rk[1] += rk[2]
             rk[2] += 0.03  # gravity slows the ascent
@@ -14591,10 +14634,12 @@ class DemosGame:
                 ty = y + 1
                 if ty < HEIGHT:
                     sp(x, ty, r // 3, g // 3, b // 4)
-            rockets.append(rk)
-        self._fw_rockets = rockets
+            rockets[active_rockets] = rk
+            active_rockets += 1
+        del rockets[active_rockets:]
 
-        alive = []
+        particles = self._fw_particles
+        active_particles = 0
         for p in self._fw_particles:
             p[0] += p[2]
             p[1] += p[3]
@@ -14610,8 +14655,9 @@ class DemosGame:
                 bright = 100
             r, g, b = hsb_to_rgb(p[5], 1, bright / 100.0)
             sp(x, y, r, g, b)
-            alive.append(p)
-        self._fw_particles = alive
+            particles[active_particles] = p
+            active_particles += 1
+        del particles[active_particles:]
 
     # --- PHYLLO (phyllotaxis sunflower spiral) ---
     def _phyllo_init(self):
@@ -14734,11 +14780,12 @@ class DemosGame:
         y2 = y1 + l2 * math.cos(a2)
 
         # Record the tip path; old points fade out.
-        self._pend_trail.append((x2, y2))
-        if len(self._pend_trail) > 48:
-            self._pend_trail = self._pend_trail[-48:]
-        n = len(self._pend_trail)
-        for i, (tx, ty) in enumerate(self._pend_trail):
+        trail = self._pend_trail
+        trail.append((x2, y2))
+        if len(trail) > 48:
+            del trail[:-48]
+        n = len(trail)
+        for i, (tx, ty) in enumerate(trail):
             ix = int(tx)
             iy = int(ty)
             if 0 <= ix < WIDTH and 0 <= iy < HEIGHT:
@@ -15082,7 +15129,6 @@ class DemosGame:
 
     def main_loop(self, joystick):
         self._prepare_demo_loop()
-        frame_ms = self.FRAME_MS
         last_frame = ticks_ms()
 
         while True:
@@ -15099,6 +15145,7 @@ class DemosGame:
                 sleep_ms(10)
                 continue
 
+            frame_ms = self._frame_ms_for_demo(demo)
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 sleep_ms(1)
@@ -15116,7 +15163,6 @@ class DemosGame:
             return self.main_loop(joystick)
 
         self._prepare_demo_loop()
-        frame_ms = self.FRAME_MS
         last_frame = ticks_ms()
 
         while True:
@@ -15133,6 +15179,7 @@ class DemosGame:
                 await asyncio.sleep(0.010)
                 continue
 
+            frame_ms = self._frame_ms_for_demo(demo)
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 await asyncio.sleep(0.001)
