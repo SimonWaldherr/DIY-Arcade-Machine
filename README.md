@@ -226,6 +226,21 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 ---
 
+## Content Selection
+
+The configuration block at the very top of [`arcade_app.py`](./arcade_app.py)
+can hide content for a smaller or curated build. Add menu IDs to
+`CONFIG_DISABLED_GAMES` and effect IDs to `CONFIG_DISABLED_DEMOS`; leave the
+lists empty to show everything. CPU game previews in DEMOS use `G:NAME`, for
+example `"G:DOOMLT"`.
+
+```python
+CONFIG_DISABLED_GAMES = ("DOOMLT", "RAYRCR")
+CONFIG_DISABLED_DEMOS = ("MANDEL", "G:DOOMLT")
+```
+
+---
+
 ## Game List
 
 The arcade includes demo animations and over 50 games. Each game is documented in detail in the [Game Documentation](./docs/games/README.md) with gameplay notes and technical descriptions.
@@ -252,12 +267,14 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `CITY` | City Chase | Top-down city driving with jobs, traffic, police heat, and drop-offs |
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
+| `DIGDUG` | Dig Dug | Dig tunnels, collect gems, and pump burrowing enemies |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
 | `DOOMLT` | Doom Lite | Target-aware raycaster FPS with textured walls, enemy archetypes, and Quad burst fire; also powers the WINMAZE demo renderer |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
 | `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
+| `JOUST` | Joust | Flap between platforms and defeat riders from above |
 | `KEEN` | Keen | Platformer with jumps, gems, keys, enemies, and exit doors |
 | `KERBAL` | Kerbal Arcade | Launch, circularize, and optionally return in a tiny orbital flight sim |
 | `LANDER` | Lunar Lander | Multi-level landing challenge plus optional scrolling v2 route mode with fuel powerups |

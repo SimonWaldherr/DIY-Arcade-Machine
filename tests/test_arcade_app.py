@@ -84,6 +84,37 @@ class ArcadeGameTests(unittest.TestCase):
         self.assertIn(("PICROS", app.PicrossGame, 0), registry)
         self.assertIn(("REACT", app.ReactionGridGame, 0), registry)
         self.assertIn(("SLALOM", app.SlalomGame, 0), registry)
+        self.assertIn(("DIGDUG", app.DigDugGame, 0), registry)
+        self.assertIn(("JOUST", app.JoustGame, 0), registry)
+        self.assertIn("DIGDUG", app.DemosGame.GAME_DEMOS)
+        self.assertIn("JOUST", app.DemosGame.GAME_DEMOS)
+        self.assertEqual(app.DemosGame.GAME_CLASS_NAMES["DIGDUG"], "DigDugGame")
+        self.assertEqual(app.DemosGame.GAME_CLASS_NAMES["JOUST"], "JoustGame")
+
+    def test_new_classics_build_a_playable_frame(self):
+        joystick = _JoystickStub()
+        for game_type in (app.DigDugGame, app.JoustGame):
+            game = game_type()
+            step = game._build_step(joystick)
+
+            self.assertTrue(step())
+
+    def test_content_blocklists_hide_games_and_demos(self):
+        disabled_games = app.CONFIG_DISABLED_GAMES
+        disabled_demos = app.CONFIG_DISABLED_DEMOS
+        try:
+            app.CONFIG_DISABLED_GAMES = ("DIGDUG",)
+            app.CONFIG_DISABLED_DEMOS = ("MATRIX",)
+
+            selector = app.GameSelect()
+            demos = app.DemosGame()
+
+            self.assertNotIn("DIGDUG", selector.sorted_games)
+            self.assertIn("JOUST", selector.sorted_games)
+            self.assertNotIn("MATRIX", demos.demos)
+        finally:
+            app.CONFIG_DISABLED_GAMES = disabled_games
+            app.CONFIG_DISABLED_DEMOS = disabled_demos
 
     def test_lights_out_toggle_is_reversible(self):
         game = app.LightsOutGame()

@@ -27,6 +27,15 @@ try:
 except Exception:
     pass
 
+# ---------- Content and target configuration ----------
+# Edit this block before copying the application to a target. The empty
+# allowlists keep every item; put names in either blocklist to hide them from
+# the game menu or demo carousel. Demo game previews use the "G:NAME" form.
+#
+# Examples:
+#   CONFIG_DISABLED_GAMES = ("DOOMLT", "RAYRCR")
+#   CONFIG_DISABLED_DEMOS = ("MANDEL", "G:DOOMLT")
+#
 # Low-resource defaults. Keep debug logging off unless explicitly changed here.
 DEBUG_BOOT_LOG = False
 CONFIG_LOW_RAM_MODE = False
@@ -34,11 +43,10 @@ CONFIG_BUFFERED_DISPLAY = False
 CONFIG_ENABLE_HEAVY_GAMES = True
 CONFIG_ENABLE_GAME_DEMOS = False
 # Empty allowlists mean "all"; blocklists remove names after that.
-# Game demo names in CONFIG_*_DEMOS use the "G:NAME" form, e.g. "G:SNAKE".
 CONFIG_ENABLED_GAMES = ()
-CONFIG_DISABLED_GAMES = ()
+CONFIG_DISABLED_GAMES = ()  # e.g. ("DOOMLT", "RAYRCR")
 CONFIG_ENABLED_DEMOS = ()
-CONFIG_DISABLED_DEMOS = ()
+CONFIG_DISABLED_DEMOS = ()  # e.g. ("MANDEL", "G:DOOMLT")
 CONFIG_FRAME_MS_DEFAULT = 35
 FEATURE_TIER = 2
 
@@ -12453,12 +12461,14 @@ class DemosGame:
         "CLIMB",
         "COLMNS",
         "DEFUSE",
+        "DIGDUG",
         "DOOMLT",
         "FLAPPY",
         "FROGGR",
         "GALAXY",
         "GOLF",
         "INVADR",
+        "JOUST",
         "KEEN",
         "LANDER",
         "LASER",
@@ -12504,12 +12514,14 @@ class DemosGame:
         "CLIMB": "ClimberGame",
         "COLMNS": "ColumnsGame",
         "DEFUSE": "DefuseGame",
+        "DIGDUG": "DigDugGame",
         "DOOMLT": "DoomLiteGame",
         "FLAPPY": "FlappyGame",
         "FROGGR": "FroggerGame",
         "GALAXY": "GalaxyGame",
         "GOLF": "GolfGame",
         "INVADR": "InvaderGame",
+        "JOUST": "JoustGame",
         "KEEN": "KeenGame",
         "LANDER": "LunarLanderGame",
         "LASER": "LaserGame",
@@ -27192,6 +27204,7 @@ class GameSelect:
         ("CLIMB", ClimberGame, 0),
         ("COLMNS", ColumnsGame, 0),
         ("DEFUSE", DefuseGame, 0),
+        ("DIGDUG", DigDugGame, 0),
         ("DODGE", DodgeGame, 0),
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
@@ -27199,6 +27212,7 @@ class GameSelect:
         ("GALAXY", GalaxyGame, 0),
         ("GOLF", GolfGame, 0),
         ("INVADR", InvaderGame, 0),
+        ("JOUST", JoustGame, 0),
         ("KEEN", KeenGame, 0),
         ("KERBAL", KerbalGame, GAME_FLAG_HEAVY),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
