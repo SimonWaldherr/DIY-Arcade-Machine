@@ -5,11 +5,13 @@ for running the game console on both CPytthon (emulator) and MicroPython.
 
 Mainly manages the frame buffer, UI updates, state transitions, and high scores.
 """
-import random
-import time
-import math
+
 import gc
+import math
+import random
 import sys
+import time
+
 try:
     import importlib.util as _importlib_util
 except ImportError:
@@ -25,6 +27,15 @@ try:
 except Exception:
     pass
 
+# ---------- Content and target configuration ----------
+# Edit this block before copying the application to a target. The empty
+# allowlists keep every item; put names in either blocklist to hide them from
+# the game menu or demo carousel. Demo game previews use the "G:NAME" form.
+#
+# Examples:
+#   CONFIG_DISABLED_GAMES = ("DOOMLT", "RAYRCR")
+#   CONFIG_DISABLED_DEMOS = ("MANDEL", "G:DOOMLT")
+#
 # Low-resource defaults. Keep debug logging off unless explicitly changed here.
 DEBUG_BOOT_LOG = False
 CONFIG_LOW_RAM_MODE = False
@@ -32,11 +43,10 @@ CONFIG_BUFFERED_DISPLAY = False
 CONFIG_ENABLE_HEAVY_GAMES = True
 CONFIG_ENABLE_GAME_DEMOS = False
 # Empty allowlists mean "all"; blocklists remove names after that.
-# Game demo names in CONFIG_*_DEMOS use the "G:NAME" form, e.g. "G:SNAKE".
 CONFIG_ENABLED_GAMES = ()
-CONFIG_DISABLED_GAMES = ()
+CONFIG_DISABLED_GAMES = ("BTLZON","CENTI","CGOLG","CITY","DIGDUG","DODGE","JOUST","KERBAL","LIGHTS","PICROS","WORMS")  # e.g. ("DOOMLT", "RAYRCR")
 CONFIG_ENABLED_DEMOS = ()
-CONFIG_DISABLED_DEMOS = ()
+CONFIG_DISABLED_DEMOS = ()  # e.g. ("MANDEL", "G:DOOMLT")
 CONFIG_FRAME_MS_DEFAULT = 35
 FEATURE_TIER = 2
 
@@ -50,19 +60,23 @@ def _boot_log(tag):
     except Exception:
         pass
 
+
 _boot_log("imports done")
+
 
 def _name_enabled(name, enabled=(), disabled=()):
     if enabled and name not in enabled:
         return False
     return name not in disabled
 
+
 def _shuffle_in_place(seq):
-    # Fisher-Yates; avoids relying on random.shuffle (not present on some MicroPython builds)
+    # Fisher-Yates avoids random.shuffle, which some MicroPython builds lack.
     n = len(seq)
     for i in range(n - 1, 0, -1):
         j = random.randint(0, i)
         seq[i], seq[j] = seq[j], seq[i]
+
 
 # ---------- Runtime detection ----------
 # A single module drives three distinct runtimes. Each platform flag below is
@@ -72,7 +86,7 @@ def _shuffle_in_place(seq):
 #   * "web"         — pygbag / WebAssembly (Emscripten) inside a browser
 #   * "desktop"     — CPython + PyGame emulator on a normal computer
 try:
-    IS_MICROPYTHON = (sys.implementation.name == "micropython")
+    IS_MICROPYTHON = sys.implementation.name == "micropython"
 except Exception:
     IS_MICROPYTHON = False
 
@@ -99,8 +113,10 @@ _boot_log("runtime detect")
 if IS_MICROPYTHON:
     _boot_log("before hub75 import")
     import hub75
+
     _boot_log("after hub75 import")
     import machine
+
     _boot_log("after machine import")
 else:
     hub75 = None
@@ -110,12 +126,15 @@ else:
 try:
     from micropython import const
 except ImportError:
-    def const(x): return x
 
-WIDTH  = const(64)
+    def const(x):
+        return x
+
+
+WIDTH = const(64)
 HEIGHT = const(64)
 
-HUD_HEIGHT  = const(6)
+HUD_HEIGHT = const(6)
 PLAY_HEIGHT = const(HEIGHT - HUD_HEIGHT)  # 58
 
 GAME_FLAG_HEAVY = const(1)
@@ -123,11 +142,13 @@ FRAMEBUFFER_MIN_FREE_RP2040 = const(110000)
 FRAMEBUFFER_MIN_FREE_RP2350 = const(70000)
 LOW_RAM_FREE_THRESHOLD = const(95000)
 
+
 def _mem_free():
     try:
         return gc.mem_free()
     except Exception:
         return 0
+
 
 def _board_name():
     try:
@@ -137,6 +158,7 @@ def _board_name():
             return sys.platform.lower()
         except Exception:
             return ""
+
 
 def _detect_feature_tier():
     if not IS_MICROPYTHON:
@@ -149,8 +171,13 @@ def _detect_feature_tier():
         return 0
     return 1
 
+
 def refresh_runtime_config():
-    global FEATURE_TIER, CONFIG_LOW_RAM_MODE, CONFIG_BUFFERED_DISPLAY, CONFIG_ENABLE_HEAVY_GAMES
+    global \
+        FEATURE_TIER, \
+        CONFIG_LOW_RAM_MODE, \
+        CONFIG_BUFFERED_DISPLAY, \
+        CONFIG_ENABLE_HEAVY_GAMES
     FEATURE_TIER = _detect_feature_tier()
     CONFIG_LOW_RAM_MODE = bool(IS_MICROPYTHON and FEATURE_TIER == 0)
     CONFIG_ENABLE_HEAVY_GAMES = bool((not IS_MICROPYTHON) or FEATURE_TIER >= 1)
@@ -158,12 +185,18 @@ def refresh_runtime_config():
         CONFIG_BUFFERED_DISPLAY = False
         return
     free = _mem_free()
-    threshold = FRAMEBUFFER_MIN_FREE_RP2350 if FEATURE_TIER >= 2 else FRAMEBUFFER_MIN_FREE_RP2040
+    threshold = (
+        FRAMEBUFFER_MIN_FREE_RP2350
+        if FEATURE_TIER >= 2
+        else FRAMEBUFFER_MIN_FREE_RP2040
+    )
     CONFIG_BUFFERED_DISPLAY = bool(free == 0 or free >= threshold)
+
 
 refresh_runtime_config()
 
 _boot_log("constants")
+
 
 def sleep_ms(ms):
     try:
@@ -176,6 +209,7 @@ def sleep_ms(ms):
         time.sleep_ms(ms)
     else:
         time.sleep(ms / 1000)
+
 
 def ticks_ms():
     now = time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
@@ -191,6 +225,7 @@ def ticks_ms():
             pass
     return now
 
+
 def ticks_diff(a, b):
     return time.ticks_diff(a, b) if hasattr(time, "ticks_diff") else (a - b)
 
@@ -204,6 +239,8 @@ def ticks_add(ticks, delta):
 
 _gc_ctr = 0
 _FRAME_PRESENT_MANAGED = False
+
+
 def maybe_collect(period=90):
     global _gc_ctr
     _gc_ctr += 1
@@ -211,19 +248,31 @@ def maybe_collect(period=90):
         _gc_ctr = 0
         gc.collect()
 
+
 def draw_centered_text_lines(lines, start_y=18, line_height=12, r=255, g=255, b=255):
     for idx, line in enumerate(lines):
         x = (WIDTH - len(line) * 8) // 2
         y = start_y + idx * line_height
         draw_text(x, y, line, r, g, b)
 
-def show_center_message(lines, start_y=18, line_height=12,
-                        r=255, g=255, b=255, clear=True,
-                        score=None, delay_ms=0):
+
+def show_center_message(
+    lines,
+    start_y=18,
+    line_height=12,
+    r=255,
+    g=255,
+    b=255,
+    clear=True,
+    score=None,
+    delay_ms=0,
+):
     """Draw centered text lines with optional clear, score update and delay."""
     if clear:
         display.clear()
-    draw_centered_text_lines(lines, start_y=start_y, line_height=line_height, r=r, g=g, b=b)
+    draw_centered_text_lines(
+        lines, start_y=start_y, line_height=line_height, r=r, g=g, b=b
+    )
     if score is not None:
         display_score_and_time(score)
     try:
@@ -232,6 +281,7 @@ def show_center_message(lines, start_y=18, line_height=12,
         pass
     if delay_ms > 0:
         sleep_ms(delay_ms)
+
 
 async def sleep_ms_async(ms):
     """Async-friendly sleep that also presents pending display updates."""
@@ -247,13 +297,24 @@ async def sleep_ms_async(ms):
     except Exception:
         sleep_ms(ms)
 
-async def show_center_message_async(lines, start_y=18, line_height=12,
-                                    r=255, g=255, b=255, clear=True,
-                                    score=None, delay_ms=0):
+
+async def show_center_message_async(
+    lines,
+    start_y=18,
+    line_height=12,
+    r=255,
+    g=255,
+    b=255,
+    clear=True,
+    score=None,
+    delay_ms=0,
+):
     """Async version of show_center_message()."""
     if clear:
         display.clear()
-    draw_centered_text_lines(lines, start_y=start_y, line_height=line_height, r=r, g=g, b=b)
+    draw_centered_text_lines(
+        lines, start_y=start_y, line_height=line_height, r=r, g=g, b=b
+    )
     if score is not None:
         display_score_and_time(score)
     try:
@@ -263,6 +324,7 @@ async def show_center_message_async(lines, start_y=18, line_height=12,
     if delay_ms > 0:
         await sleep_ms_async(delay_ms)
 
+
 def clamp(value, lo, hi):
     """Clamp value to the inclusive [lo, hi] range."""
     if value < lo:
@@ -271,17 +333,23 @@ def clamp(value, lo, hi):
         return hi
     return value
 
+
 def in_bounds(x, y, w=WIDTH, h=PLAY_HEIGHT):
     """Return True when (x, y) is inside 0..w-1 and 0..h-1."""
     return (0 <= x < w) and (0 <= y < h)
+
 
 def point_in_rect(px, py, rx, ry, rw, rh):
     """Return True when point (px, py) is inside rectangle (rx, ry, rw, rh)."""
     return (rx <= px < (rx + rw)) and (ry <= py < (ry + rh))
 
+
 def rects_overlap(ax, ay, aw, ah, bx, by, bw, bh):
     """Return True when rectangles A(ax,ay,aw,ah) and B(bx,by,bw,bh) overlap."""
-    return (ax < (bx + bw)) and (bx < (ax + aw)) and (ay < (by + bh)) and (by < (ay + ah))
+    return (
+        (ax < (bx + bw)) and (bx < (ax + aw)) and (ay < (by + bh)) and (by < (ay + ah))
+    )
+
 
 def draw_rect_outline(x1, y1, x2, y2, r, g, b):
     """Draw a one-pixel rectangle outline."""
@@ -289,6 +357,7 @@ def draw_rect_outline(x1, y1, x2, y2, r, g, b):
     draw_rectangle(x1, y2, x2, y2, r, g, b)
     draw_rectangle(x1, y1, x1, y2, r, g, b)
     draw_rectangle(x2, y1, x2, y2, r, g, b)
+
 
 def begin_game(score=0):
     """Reset shared game-over state at the start of a playable game."""
@@ -298,12 +367,14 @@ def begin_game(score=0):
     global_score = int(score or 0)
     display_score_and_time(global_score, force=True)
 
+
 def set_game_over_score(score, won=False):
     """Record the final score before returning to the shared game-over flow."""
     global game_over, global_score, game_result
     global_score = int(score or 0)
     game_result = "WON" if won else "LOST"
     game_over = True
+
 
 def get_context_setting(ctx, key, default=None):
     """Read a per-game setting from the optional game context."""
@@ -320,6 +391,7 @@ def get_context_setting(ctx, key, default=None):
         pass
     return default
 
+
 async def yield_runtime(delay=0):
     """Yield cooperatively on web/desktop async runtimes; no-op on sync-only builds."""
     if asyncio is None:
@@ -328,6 +400,7 @@ async def yield_runtime(delay=0):
         await asyncio.sleep(delay)
     except Exception:
         pass
+
 
 def _run_game_loop_sync(frame_ms, loop_fn):
     """Small sync counterpart to _run_game_loop_async for games with frame callbacks."""
@@ -342,6 +415,7 @@ def _run_game_loop_sync(frame_ms, loop_fn):
             return
         maybe_collect(150)
 
+
 def reset_menu_display(score=0):
     """Return the matrix to the common menu/HUD baseline after errors or restarts."""
     display.clear()
@@ -351,47 +425,48 @@ def reset_menu_display(score=0):
     except Exception:
         pass
 
+
 async def _run_game_loop_async(frame_ms, loop_fn):
     """
     Generic async game loop runner with frame pacing for pygbag compatibility.
-    
+
     Eliminates code duplication across all game main_loop_async() methods by
     centralizing frame pacing, asyncio.sleep() handling, and GC collection logic.
     Provides cooperative multitasking via asyncio.sleep() and frame pacing via
     ticks_ms/ticks_diff. Automatically falls back to sync when asyncio unavailable.
-    
+
     Usage Example:
     ==========================================
     async def main_loop_async(self, joystick):
         if asyncio is None:
             return self.main_loop(joystick)
-        
+
         # Setup game state
         display.clear()
         self.init_game()
         display_score_and_time(0, force=True)
-        
+
         # Define one frame of game logic
         def loop_iteration():
             # Handle input
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False  # Exit loop
-            
+
             # Update and render game
             self.update(joystick)
             self.draw()
             display_score_and_time(self.score)
-            
+
             return True  # Continue loop
-        
+
         # Run game with frame pacing (45ms per frame)
         await _run_game_loop_async(45, loop_iteration)
     ==========================================
-    
+
     Args:
         frame_ms (int): Target frame time in milliseconds (e.g., 45, 35, 60)
-        loop_fn (callable): Function to run each frame. 
+        loop_fn (callable): Function to run each frame.
                            Return False to exit loop, True to continue.
                            Should not be async.
     """
@@ -400,7 +475,7 @@ async def _run_game_loop_async(frame_ms, loop_fn):
         while loop_fn():
             pass
         return
-    
+
     # Async mode: frame pacing with asyncio.sleep()
     global _FRAME_PRESENT_MANAGED
     last_frame = ticks_ms()
@@ -421,11 +496,12 @@ async def _run_game_loop_async(frame_ms, loop_fn):
                 pass
         finally:
             _FRAME_PRESENT_MANAGED = False
-        
+
         try:
             maybe_collect(150)
         except Exception:
             pass
+
 
 # ---------- Display ----------
 if IS_MICROPYTHON:
@@ -442,7 +518,8 @@ else:
     # Desktop (CPython) runtime: emulate HUB75 via PyGame.
     class _DesktopRTC:
         def datetime(self):
-            # machine.RTC().datetime() layout: (year, month, day, weekday, hour, minute, second, subseconds)
+            # machine.RTC().datetime():
+            # year, month, day, weekday, hour, minute, second, subseconds.
             lt = time.localtime()
             # weekday: MicroPython usually uses 0=Mon..6=Sun
             return (lt[0], lt[1], lt[2], lt[6], lt[3], lt[4], lt[5], 0)
@@ -467,7 +544,9 @@ else:
             try:
                 import pygame  # type: ignore
             except Exception as e:
-                raise RuntimeError("PyGame not installed. Install with: pip install pygame") from e
+                raise RuntimeError(
+                    "PyGame not installed. Install with: pip install pygame"
+                ) from e
             self._pg = pygame
             pygame.init()
             try:
@@ -510,7 +589,9 @@ else:
             if not self._surface:
                 return
             if 0 <= x < self.w and 0 <= y < self.h:
-                self._surface.set_at((int(x), int(y)), (int(r) & 255, int(g) & 255, int(b) & 255))
+                self._surface.set_at(
+                    (int(x), int(y)), (int(r) & 255, int(g) & 255, int(b) & 255)
+                )
 
         def clear(self):
             if self._surface:
@@ -540,10 +621,16 @@ else:
                 self._pg.display.flip()
                 return
             if self._scaled_surface is not None:
-                self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale), self._scaled_surface)
+                self._pg.transform.scale(
+                    self._surface,
+                    (self.w * self.scale, self.h * self.scale),
+                    self._scaled_surface,
+                )
                 self._screen.blit(self._scaled_surface, (0, 0))
             else:
-                scaled = self._pg.transform.scale(self._surface, (self.w * self.scale, self.h * self.scale))
+                scaled = self._pg.transform.scale(
+                    self._surface, (self.w * self.scale, self.h * self.scale)
+                )
                 self._screen.blit(scaled, (0, 0))
             self._pg.display.flip()
 
@@ -576,9 +663,16 @@ _display_clear_orig = getattr(display, "clear", None)
 
 _boot_log("display refs")
 
+
 def init_buffered_display():
     """Allocate software framebuffer + hooks after hub75 display is started."""
-    global USE_BUFFERED_DISPLAY, USE_BUFFERED_DISPLAY_DESIRED, _fb_current, _fb_prev, _dirty_mask, _force_full_flush
+    global \
+        USE_BUFFERED_DISPLAY, \
+        USE_BUFFERED_DISPLAY_DESIRED, \
+        _fb_current, \
+        _fb_prev, \
+        _dirty_mask, \
+        _force_full_flush
     refresh_runtime_config()
     USE_BUFFERED_DISPLAY_DESIRED = CONFIG_BUFFERED_DISPLAY
     if USE_BUFFERED_DISPLAY:
@@ -593,7 +687,11 @@ def init_buffered_display():
 
     free = _mem_free()
     if IS_MICROPYTHON and free:
-        threshold = FRAMEBUFFER_MIN_FREE_RP2350 if FEATURE_TIER >= 2 else FRAMEBUFFER_MIN_FREE_RP2040
+        threshold = (
+            FRAMEBUFFER_MIN_FREE_RP2350
+            if FEATURE_TIER >= 2
+            else FRAMEBUFFER_MIN_FREE_RP2040
+        )
         if free < threshold:
             USE_BUFFERED_DISPLAY = False
             return
@@ -619,10 +717,12 @@ def init_buffered_display():
     except Exception:
         USE_BUFFERED_DISPLAY = False
 
+
 def _mark_dirty_pixel(px):
     # legacy stub (kept to avoid touching other call-sites)
     if _dirty_mask is not None:
         _dirty_mask[px] = 1
+
 
 def _set_pixel_buf(x, y, r, g, b):
     if x < 0 or x >= _fb_w or y < 0 or y >= _fb_h:
@@ -637,6 +737,7 @@ def _set_pixel_buf(x, y, r, g, b):
         _fb_current[idx + 2] = b
         if _dirty_mask is not None:
             _dirty_mask[pix] = 1
+
 
 def _clear_buf():
     # clear current framebuffer and mark all pixels dirty
@@ -657,6 +758,7 @@ def _clear_buf():
             _display_clear_orig()
         except Exception:
             pass
+
 
 def display_flush():
     if not USE_BUFFERED_DISPLAY:
@@ -711,7 +813,9 @@ def display_flush():
     except Exception:
         pass
 
+
 # Note: hooks are installed by init_buffered_display() after display.start().
+
 
 # Helper for games: use this to push changed pixels to the hardware.
 def push_frame():
@@ -719,6 +823,7 @@ def push_frame():
         display_flush()
     except Exception:
         pass
+
 
 # Shared helper for playfield-aware rectangles
 def draw_play_rect(x, y, w, h, r, g, b):
@@ -734,6 +839,7 @@ def draw_play_rect(x, y, w, h, r, g, b):
     if y2 >= PLAY_HEIGHT:
         y2 = PLAY_HEIGHT - 1
     draw_rectangle(x1, y1, x2, y2, r, g, b)
+
 
 def draw_line(x0, y0, x1, y1, r, g, b):
     """Bresenham line from (x0,y0) to (x1,y1), clipped to the full display."""
@@ -759,6 +865,7 @@ def draw_line(x0, y0, x1, y1, r, g, b):
         if e2 <= dx:
             err += dx
             y0 += sy
+
 
 def _draw_line_wrapped(start, end, color):
     """Bresenham line with toroidal (modulo) wrapping — used by AsteroidGame."""
@@ -798,9 +905,9 @@ game_result = "LOST"
 
 # ---------- Colors ----------
 COLORS_BRIGHT = [
-    (255, 0, 0),    # Red
-    (0, 255, 0),    # Green
-    (0, 0, 255),    # Blue
+    (255, 0, 0),  # Red
+    (0, 255, 0),  # Green
+    (0, 0, 255),  # Blue
     (255, 255, 0),  # Yellow
 ]
 # Pre-computed to avoid list comprehension allocations during import
@@ -819,7 +926,7 @@ inactive_colors = (
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
-RED   = (255, 0, 0)
+RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 
 # ---------- Joystick directions ----------
@@ -834,6 +941,7 @@ JOYSTICK_DOWN_RIGHT = "DOWN-RIGHT"
 
 _WEB_TOUCH_KEYS = ("up", "down", "left", "right", "x", "space")
 
+
 def _js_prop(obj, name, default=None):
     try:
         return obj[name]
@@ -843,11 +951,13 @@ def _js_prop(obj, name, default=None):
         except Exception:
             return default
 
+
 def _read_web_touch_input():
     if not IS_WEB:
         return None
     try:
         import platform  # type: ignore
+
         state = getattr(platform.window, "DIYArcadeTouchInput", None)
     except Exception:
         return None
@@ -864,22 +974,26 @@ def _read_web_touch_input():
             result[key + "_presses"] = 0
     return result
 
+
 def play_web_sound(kind, tone=0):
     """Fire a tiny browser-side WebAudio cue when running under pygbag."""
     if not IS_WEB:
         return
     try:
         import platform  # type: ignore
+
         fn = getattr(platform.window, "DIYArcadeSound", None)
         if fn:
             fn(kind, int(tone or 0))
     except Exception:
         pass
 
+
 _PYGAME_SOUND_CACHE = {}
 _PYGAME_SOUND_FAILED = False
 _DESKTOP_SOUND_CACHE = {}
 _DESKTOP_SOUND_FAILED = False
+
 
 def _pygame_sound_bytes(kind, tone, sample_rate=22050):
     """Generate a small chiptune-style PCM cue; no asset file required."""
@@ -896,7 +1010,7 @@ def _pygame_sound_bytes(kind, tone, sample_rate=22050):
     data = bytearray(count * 2)
     tone = int(tone or 0)
     base = 180 + (tone % 11) * 18
-    seed = (tone * 1103515245 + len(str(kind)) * 97) & 0x7fffffff
+    seed = (tone * 1103515245 + len(str(kind)) * 97) & 0x7FFFFFFF
 
     # The mixer buffer is signed 16-bit for broad PyGame compatibility, but the
     # waveform is deliberately quantized and square/noise based for an 8-bit feel.
@@ -919,7 +1033,7 @@ def _pygame_sound_bytes(kind, tone, sample_rate=22050):
             wave = tri
         elif kind == "zap":
             freq = 220.0 - 120.0 * (i / count)
-            seed = (seed * 1103515245 + 12345) & 0x7fffffff
+            seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
             noise = ((seed >> 16) & 255) / 127.5 - 1.0
             pulse = 1.0 if math.sin(2.0 * math.pi * freq * t) >= 0 else -1.0
             wave = pulse * 0.65 + noise * 0.35
@@ -936,18 +1050,18 @@ def _pygame_sound_bytes(kind, tone, sample_rate=22050):
         data[j + 1] = (sample >> 8) & 255
     return bytes(data)
 
+
 def _pygame_mixer_module():
     """Return pygame.mixer only when the optional mixer module exists."""
     try:
-        if (
-            _importlib_util is None
-            or _importlib_util.find_spec("pygame.mixer") is None
-        ):
+        if _importlib_util is None or _importlib_util.find_spec("pygame.mixer") is None:
             return None
         import pygame  # type: ignore
+
         return getattr(pygame, "mixer", None)
     except Exception:
         return None
+
 
 def play_pygame_sound(kind, tone=0):
     """Play a procedurally generated cue on desktop PyGame."""
@@ -972,6 +1086,7 @@ def play_pygame_sound(kind, tone=0):
         _PYGAME_SOUND_FAILED = True
         return False
 
+
 def _desktop_sound_wav_path(kind, tone):
     """Create/cache a temporary WAV for native desktop fallback players."""
     key = (str(kind), int(tone or 0))
@@ -981,6 +1096,7 @@ def _desktop_sound_wav_path(kind, tone):
     try:
         import tempfile
         import wave
+
         base = _os.path.join(tempfile.gettempdir(), "diy_arcade_sfx")
         try:
             _os.makedirs(base)
@@ -998,6 +1114,7 @@ def _desktop_sound_wav_path(kind, tone):
     except Exception:
         return None
 
+
 def play_native_desktop_sound(kind, tone=0):
     """Fallback when pygame.mixer is unavailable; stores temp WAVs outside repo."""
     global _DESKTOP_SOUND_FAILED
@@ -1006,6 +1123,7 @@ def play_native_desktop_sound(kind, tone=0):
     try:
         import shutil
         import subprocess
+
         path = _desktop_sound_wav_path(kind, tone)
         if not path:
             _DESKTOP_SOUND_FAILED = True
@@ -1020,6 +1138,7 @@ def play_native_desktop_sound(kind, tone=0):
             cmd = [player, path]
         elif sys.platform.startswith("win"):
             import winsound
+
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
             return True
         else:
@@ -1031,14 +1150,16 @@ def play_native_desktop_sound(kind, tone=0):
         _DESKTOP_SOUND_FAILED = True
         return False
 
+
 def play_sound(kind, tone=0):
     """Cross-runtime sound hook: WebAudio in pygbag, procedural PyGame on desktop."""
     play_web_sound(kind, tone)
     if IS_DESKTOP and not play_pygame_sound(kind, tone):
         play_native_desktop_sound(kind, tone)
 
+
 def direction_to_delta(direction, default_dx=0, default_dy=0):
-    """Map 4-way joystick direction constants to (dx, dy), else return provided defaults."""
+    """Map a four-way joystick direction to ``(dx, dy)`` or the defaults."""
     if direction == JOYSTICK_UP:
         return 0, -1
     if direction == JOYSTICK_DOWN:
@@ -1049,8 +1170,9 @@ def direction_to_delta(direction, default_dx=0, default_dy=0):
         return 1, 0
     return default_dx, default_dy
 
+
 def direction_to_delta_8way(direction, default_dx=0, default_dy=0):
-    """Map 8-way joystick direction constants to (dx, dy), else return provided defaults."""
+    """Map an eight-way joystick direction to ``(dx, dy)`` or the defaults."""
     if direction == JOYSTICK_UP:
         return 0, -1
     if direction == JOYSTICK_DOWN:
@@ -1069,11 +1191,13 @@ def direction_to_delta_8way(direction, default_dx=0, default_dy=0):
         return 1, 1
     return default_dx, default_dy
 
+
 # Neutral analog reading for an idle nunchuck/joystick axis. The threshold
 # logic in _read_direction_from_xy() treats this midpoint as "no input".
 ANALOG_CENTER = const(128)
 ANALOG_MIN = const(0)
 ANALOG_MAX = const(255)
+
 
 def dpad_to_analog(up, down, left, right):
     """Synthesize an analog (x, y) pair from four boolean D-pad inputs.
@@ -1098,78 +1222,117 @@ def dpad_to_analog(up, down, left, right):
         y = ANALOG_MIN
     return x, y
 
+
 # ---------- Fonts ----------
 # NOTE: On MicroPython, even defining large dicts at module level can trigger
 # MemoryError during import. We define them inside functions (lazy) to avoid
 # any allocation until first use.
 
+
 def _get_char_dict():
     return {
-        "A": "3078ccccfccccc00","B": "fc66667c6666fc00","C": "3c66c0c0c0663c00","D": "f86c6666666cf800",
-        "E": "fe6268786862fe00","F": "fe6268786860f000","G": "3c66c0c0ce663e00","H": "ccccccfccccccc00",
-        "I": "7830303030307800","J": "1e0c0c0ccccc7800","K": "f6666c786c66f600","L": "f06060606266fe00",
-        "M": "c6eefefed6c6c600","N": "c6e6f6decec6c600","O": "386cc6c6c66c3800","P": "fc66667c6060f000",
-        "Q": "78ccccccdc781c00","R": "fc66667c6c66f600","S": "78cce0380ccc7800","T": "fcb4303030307800",
-        "U": "ccccccccccccfc00","V": "cccccccccc783000","W": "c6c6c6d6feeec600","X": "c6c66c38386cc600",
-        "Y": "cccccc7830307800","Z": "fec68c183266fe00",
-        "0": "386cc6c6c66c3800","1": "307030303030fc00","2": "78cc0c3860ccfc00","3": "78cc0c380ccc7800",
-        "4": "1c3c6cccfe0c1e00","5": "fcc0f80c0ccc7800","6": "3860c0f8cccc7800","7": "fccc0c1830303000",
-        "8": "78cccc78cccc7800","9": "78cccc7c0c187000",
-        "!": "3078783030003000","#": "6c6cfe6cfe6c6c00","$": "307cc0780cf83000","%": "00c6cc183066c600",
-        "&": "386c3876dccc7600","?": "78cc0c1830003000"," ": "0000000000000000",".": "0000000000003000",
-        ":": "0030000000300000","(": "0c18303030180c00",")": "6030180c18306000","-": "000000fc00000000",
+        "A": "3078ccccfccccc00",
+        "B": "fc66667c6666fc00",
+        "C": "3c66c0c0c0663c00",
+        "D": "f86c6666666cf800",
+        "E": "fe6268786862fe00",
+        "F": "fe6268786860f000",
+        "G": "3c66c0c0ce663e00",
+        "H": "ccccccfccccccc00",
+        "I": "7830303030307800",
+        "J": "1e0c0c0ccccc7800",
+        "K": "f6666c786c66f600",
+        "L": "f06060606266fe00",
+        "M": "c6eefefed6c6c600",
+        "N": "c6e6f6decec6c600",
+        "O": "386cc6c6c66c3800",
+        "P": "fc66667c6060f000",
+        "Q": "78ccccccdc781c00",
+        "R": "fc66667c6c66f600",
+        "S": "78cce0380ccc7800",
+        "T": "fcb4303030307800",
+        "U": "ccccccccccccfc00",
+        "V": "cccccccccc783000",
+        "W": "c6c6c6d6feeec600",
+        "X": "c6c66c38386cc600",
+        "Y": "cccccc7830307800",
+        "Z": "fec68c183266fe00",
+        "0": "386cc6c6c66c3800",
+        "1": "307030303030fc00",
+        "2": "78cc0c3860ccfc00",
+        "3": "78cc0c380ccc7800",
+        "4": "1c3c6cccfe0c1e00",
+        "5": "fcc0f80c0ccc7800",
+        "6": "3860c0f8cccc7800",
+        "7": "fccc0c1830303000",
+        "8": "78cccc78cccc7800",
+        "9": "78cccc7c0c187000",
+        "!": "3078783030003000",
+        "#": "6c6cfe6cfe6c6c00",
+        "$": "307cc0780cf83000",
+        "%": "00c6cc183066c600",
+        "&": "386c3876dccc7600",
+        "?": "78cc0c1830003000",
+        " ": "0000000000000000",
+        ".": "0000000000003000",
+        ":": "0030000000300000",
+        "(": "0c18303030180c00",
+        ")": "6030180c18306000",
+        "-": "000000fc00000000",
     }
+
 
 def _get_nums_dict():
     return {
-        "0": ["01110","10001","10001","10001","01110"],
-        "1": ["00100","01100","00100","00100","01110"],
-        "2": ["11110","00001","01110","10000","11111"],
-        "3": ["11110","00001","00110","00001","11110"],
-        "4": ["10000","10010","10010","11111","00010"],
-        "5": ["11111","10000","11110","00001","11110"],
-        "6": ["01110","10000","11110","10001","01110"],
-        "7": ["11111","00010","00100","01000","10000"],
-        "8": ["01110","10001","01110","10001","01110"],
-        "9": ["01110","10001","01111","00001","01110"],
-        "A": ["01110","10001","11111","10001","10001"],
-        "B": ["11110","10001","11110","10001","11110"],
-        "C": ["01111","10000","10000","10000","01111"],
-        "D": ["11110","10001","10001","10001","11110"],
-        "E": ["11111","10000","11110","10000","11111"],
-        "F": ["11111","10000","11110","10000","10000"],
-        "G": ["01111","10000","10111","10001","01110"],
-        "H": ["10001","10001","11111","10001","10001"],
-        "I": ["11111","00100","00100","00100","11111"],
-        "J": ["00111","00010","00010","10010","01100"],
-        "K": ["10001","10010","11100","10010","10001"],
-        "L": ["10000","10000","10000","10000","11111"],
-        "M": ["10001","11011","10101","10001","10001"],
-        "N": ["10001","11001","10101","10011","10001"],
-        "O": ["01110","10001","10001","10001","01110"],
-        "P": ["11110","10001","11110","10000","10000"],
-        "Q": ["01110","10001","10101","10010","01101"],
-        "R": ["11110","10001","11110","10010","10001"],
-        "S": ["01111","10000","01110","00001","11110"],
-        "T": ["11111","00100","00100","00100","00100"],
-        "U": ["10001","10001","10001","10001","01110"],
-        "V": ["10001","10001","10001","01010","00100"],
-        "W": ["10001","10001","10101","11011","10001"],
-        "X": ["10001","01010","00100","01010","10001"],
-        "Y": ["10001","01010","00100","00100","00100"],
-        "Z": ["11111","00010","00100","01000","11111"],
-        " ": ["00000","00000","00000","00000","00000"],
-        ".": ["00000","00000","00000","00000","00001"],
-        ":": ["00000","00100","00000","00100","00000"],
-        "/": ["00001","00010","00100","01000","10000"],
-        "|": ["00100","00100","00100","00100","00100"],
-        "-": ["00000","00000","11111","00000","00000"],
-        "=": ["00000","11111","00000","11111","00000"],
-        "+": ["00000","00100","01110","00100","00000"],
-        "*": ["00000","10101","01110","10101","00000"],
-        "(": ["00010","00100","00100","00100","00010"],
-        ")": ["00100","00010","00010","00010","00100"],
+        "0": ["01110", "10001", "10001", "10001", "01110"],
+        "1": ["00100", "01100", "00100", "00100", "01110"],
+        "2": ["11110", "00001", "01110", "10000", "11111"],
+        "3": ["11110", "00001", "00110", "00001", "11110"],
+        "4": ["10000", "10010", "10010", "11111", "00010"],
+        "5": ["11111", "10000", "11110", "00001", "11110"],
+        "6": ["01110", "10000", "11110", "10001", "01110"],
+        "7": ["11111", "00010", "00100", "01000", "10000"],
+        "8": ["01110", "10001", "01110", "10001", "01110"],
+        "9": ["01110", "10001", "01111", "00001", "01110"],
+        "A": ["01110", "10001", "11111", "10001", "10001"],
+        "B": ["11110", "10001", "11110", "10001", "11110"],
+        "C": ["01111", "10000", "10000", "10000", "01111"],
+        "D": ["11110", "10001", "10001", "10001", "11110"],
+        "E": ["11111", "10000", "11110", "10000", "11111"],
+        "F": ["11111", "10000", "11110", "10000", "10000"],
+        "G": ["01111", "10000", "10111", "10001", "01110"],
+        "H": ["10001", "10001", "11111", "10001", "10001"],
+        "I": ["11111", "00100", "00100", "00100", "11111"],
+        "J": ["00111", "00010", "00010", "10010", "01100"],
+        "K": ["10001", "10010", "11100", "10010", "10001"],
+        "L": ["10000", "10000", "10000", "10000", "11111"],
+        "M": ["10001", "11011", "10101", "10001", "10001"],
+        "N": ["10001", "11001", "10101", "10011", "10001"],
+        "O": ["01110", "10001", "10001", "10001", "01110"],
+        "P": ["11110", "10001", "11110", "10000", "10000"],
+        "Q": ["01110", "10001", "10101", "10010", "01101"],
+        "R": ["11110", "10001", "11110", "10010", "10001"],
+        "S": ["01111", "10000", "01110", "00001", "11110"],
+        "T": ["11111", "00100", "00100", "00100", "00100"],
+        "U": ["10001", "10001", "10001", "10001", "01110"],
+        "V": ["10001", "10001", "10001", "01010", "00100"],
+        "W": ["10001", "10001", "10101", "11011", "10001"],
+        "X": ["10001", "01010", "00100", "01010", "10001"],
+        "Y": ["10001", "01010", "00100", "00100", "00100"],
+        "Z": ["11111", "00010", "00100", "01000", "11111"],
+        " ": ["00000", "00000", "00000", "00000", "00000"],
+        ".": ["00000", "00000", "00000", "00000", "00001"],
+        ":": ["00000", "00100", "00000", "00100", "00000"],
+        "/": ["00001", "00010", "00100", "01000", "10000"],
+        "|": ["00100", "00100", "00100", "00100", "00100"],
+        "-": ["00000", "00000", "11111", "00000", "00000"],
+        "=": ["00000", "11111", "00000", "11111", "00000"],
+        "+": ["00000", "00100", "01110", "00100", "00000"],
+        "*": ["00000", "10101", "01110", "10101", "00000"],
+        "(": ["00010", "00100", "00100", "00100", "00010"],
+        ")": ["00100", "00010", "00010", "00010", "00100"],
     }
+
 
 def _hex_to_bytes(hex_str):
     try:
@@ -1178,7 +1341,7 @@ def _hex_to_bytes(hex_str):
         out = bytearray(len(hex_str) // 2)
         oi = 0
         for i in range(0, len(hex_str), 2):
-            out[oi] = int(hex_str[i:i+2], 16)
+            out[oi] = int(hex_str[i : i + 2], 16)
             oi += 1
         return bytes(out)
 
@@ -1245,10 +1408,12 @@ def _get_font5(ch):
     cache[ch] = out
     return out
 
+
 # ---------- Drawing ----------
 def set_pixel_clipped(x, y, r, g, b):
     if 0 <= x < WIDTH and 0 <= y < HEIGHT:
         display.set_pixel(x, y, r, g, b)
+
 
 def draw_rectangle(x1, y1, x2, y2, r, g, b):
     if x1 > x2:
@@ -1277,6 +1442,7 @@ def draw_rectangle(x1, y1, x2, y2, r, g, b):
         for x in range(x1, x2 + 1):
             sp(x, y, r, g, b)
 
+
 def draw_character(x, y, ch, r, g, b):
     rows = _get_font8(ch)
     if not rows:
@@ -1294,11 +1460,13 @@ def draw_character(x, y, ch, r, g, b):
                 if 0 <= xx < WIDTH:
                     sp(xx, yy, r, g, b)
 
+
 def draw_text(x, y, text, r, g, b):
     ox = x
     for ch in text:
         draw_character(ox, y, ch, r, g, b)
         ox += 9
+
 
 def draw_character_small(x, y, ch, r, g, b):
     rows = _get_font5(ch)
@@ -1316,16 +1484,19 @@ def draw_character_small(x, y, ch, r, g, b):
                 if 0 <= xx < WIDTH:
                     sp(xx, yy, r, g, b)
 
+
 def draw_text_small(x, y, text, r, g, b):
     ox = x
     for ch in text:
         draw_character_small(ox, y, ch, r, g, b)
         ox += 6
 
+
 # ---------- HUD ----------
 _hud_last_ms = 0
 _hud_time_str = "00:00"
 _hud_last_text = None
+
 
 def display_score_and_time(score, force=False):
     global _hud_last_ms, _hud_time_str, _hud_last_text, global_score
@@ -1357,10 +1528,12 @@ def display_score_and_time(score, force=False):
         except Exception:
             pass
 
+
 # ---------- Grid (nibble-packed) for Maze/Qix ----------
 GRID_W = WIDTH
 GRID_H = PLAY_HEIGHT
 grid = None  # lazy-allocated to reduce import-time RAM usage on MicroPython
+
 
 def initialize_grid():
     global grid
@@ -1371,11 +1544,13 @@ def initialize_grid():
         for i in range(size):
             grid[i] = 0
 
+
 def _ensure_grid():
     # Small helper to avoid allocating at import-time.
     global grid
     if grid is None:
         grid = bytearray((GRID_W * GRID_H + 1) // 2)
+
 
 def get_grid_value(x, y):
     _ensure_grid()
@@ -1387,6 +1562,7 @@ def get_grid_value(x, y):
         return (b >> 4) & 0x0F
     return b & 0x0F
 
+
 def set_grid_value(x, y, value):
     _ensure_grid()
     if x < 0 or x >= GRID_W or y < 0 or y >= GRID_H:
@@ -1397,6 +1573,7 @@ def set_grid_value(x, y, value):
         grid[bi] = (grid[bi] & 0x0F) | ((value & 0x0F) << 4)
     else:
         grid[bi] = (grid[bi] & 0xF0) | (value & 0x0F)
+
 
 def flood_fill(x, y, accessible_mark=3, max_steps=9000):
     # use packed integer stack to reduce tuple allocations and memory pressure
@@ -1431,6 +1608,7 @@ def flood_fill(x, y, accessible_mark=3, max_steps=9000):
             stack.append((ny << 8) | px)
     return bool(stack)
 
+
 def count_cells_with_mark(mark, width, height):
     cells = width * height
     nbytes = (cells + 1) // 2
@@ -1446,12 +1624,14 @@ def count_cells_with_mark(mark, width, height):
             cnt += 1
     return cnt
 
+
 # ---------- Control exception ----------
 class RestartProgram(Exception):
     pass
 
+
 # ---------- Nunchuk / Joystick ----------
-NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
+NEW_CONTROLLER_SIGNATURE = b"\xa0\x20\x10\x00\xff\xff\x00\x00"
 
 # Axis thresholds for treating a 0-255 analog reading as a directional press.
 # A reading below LOW means "low end" (LEFT / DOWN); above HIGH means "high end"
@@ -1460,6 +1640,7 @@ NEW_CONTROLLER_SIGNATURE = b"\xA0\x20\x10\x00\xFF\xFF\x00\x00"
 # shares one tuning point instead of scattering magic numbers.
 AXIS_LOW = const(100)
 AXIS_HIGH = const(150)
+
 
 def _read_direction_from_xy(x, y, possible_directions):
     """Convert raw joystick axis values (0-255) to a direction constant.
@@ -1486,6 +1667,7 @@ def _read_direction_from_xy(x, y, possible_directions):
         return JOYSTICK_UP
     return None
 
+
 def _primary_release_done(joystick, t0, timeout_ms):
     """Shared stop condition for the sync/async release-wait loops below.
 
@@ -1499,11 +1681,13 @@ def _primary_release_done(joystick, t0, timeout_ms):
         return True
     return ticks_diff(ticks_ms(), t0) >= timeout_ms
 
+
 def _wait_for_primary_release(joystick, timeout_ms=1200):
     """Block until all buttons are released or the timeout expires (sync)."""
     t0 = ticks_ms()
     while not _primary_release_done(joystick, t0, timeout_ms):
         sleep_ms(10)
+
 
 async def _wait_for_primary_release_async(joystick, timeout_ms=1200):
     """Async version: yields to the browser event loop on every iteration."""
@@ -1514,6 +1698,7 @@ async def _wait_for_primary_release_async(joystick, timeout_ms=1200):
     t0 = ticks_ms()
     while not _primary_release_done(joystick, t0, timeout_ms):
         await asyncio.sleep(0.010)
+
 
 class _JoystickBase:
     """Platform-independent joystick facade.
@@ -1526,6 +1711,7 @@ class _JoystickBase:
         _read_xy_raw()      -> (x, y) analog pair (0-255), or None if unavailable
         _read_buttons_raw() -> (c_button, z_button); may raise RestartProgram
     """
+
     _debounce_ms = 70
 
     def __init__(self):
@@ -1549,7 +1735,10 @@ class _JoystickBase:
         if d is None:
             self._last_dir = None
             return None
-        if d == self._last_dir and ticks_diff(now, self._last_dir_ms) < self._debounce_ms:
+        if (
+            d == self._last_dir
+            and ticks_diff(now, self._last_dir_ms) < self._debounce_ms
+        ):
             return None
         self._last_dir = d
         self._last_dir_ms = now
@@ -1577,6 +1766,7 @@ class _JoystickBase:
 #   * Desktop/Web: keyboard events plus optional browser touch buttons
 # Only the two _read_*_raw hooks differ; all higher-level behaviour is shared.
 if IS_MICROPYTHON:
+
     class Nunchuck:
         def __init__(self, i2c, poll=True, poll_interval=25):
             self.i2c = i2c
@@ -1629,7 +1819,10 @@ if IS_MICROPYTHON:
             return up, down, left, right, a_btn, b_btn, start, select
 
         def __poll(self):
-            if self.polling_threshold > 0 and ticks_diff(ticks_ms(), self.last_poll) > self.polling_threshold:
+            if (
+                self.polling_threshold > 0
+                and ticks_diff(ticks_ms(), self.last_poll) > self.polling_threshold
+            ):
                 self.update()
                 self.last_poll = ticks_ms()
 
@@ -1726,6 +1919,7 @@ else:
             self._up_until = 0
             self._down_until = 0
             self._touch_press_counts = {}
+            self._last_poll_ms = -1
 
         def _poll(self):
             try:
@@ -1733,6 +1927,9 @@ else:
             except Exception:
                 return
             now = ticks_ms()
+            if now == self._last_poll_ms:
+                return
+            self._last_poll_ms = now
             try:
                 events = pygame.event.get([pygame.KEYDOWN])
             except Exception:
@@ -1772,16 +1969,39 @@ else:
                         self._touch_press_counts[touch_key] = press_count
 
             keys = pygame.key.get_pressed()
-            left = bool(keys[pygame.K_LEFT] or ticks_diff(self._left_until, now) > 0 or (touch and touch.get("left")))
-            right = bool(keys[pygame.K_RIGHT] or ticks_diff(self._right_until, now) > 0 or (touch and touch.get("right")))
-            up = bool(keys[pygame.K_UP] or ticks_diff(self._up_until, now) > 0 or (touch and touch.get("up")))
-            down = bool(keys[pygame.K_DOWN] or ticks_diff(self._down_until, now) > 0 or (touch and touch.get("down")))
+            left = bool(
+                keys[pygame.K_LEFT]
+                or ticks_diff(self._left_until, now) > 0
+                or (touch and touch.get("left"))
+            )
+            right = bool(
+                keys[pygame.K_RIGHT]
+                or ticks_diff(self._right_until, now) > 0
+                or (touch and touch.get("right"))
+            )
+            up = bool(
+                keys[pygame.K_UP]
+                or ticks_diff(self._up_until, now) > 0
+                or (touch and touch.get("up"))
+            )
+            down = bool(
+                keys[pygame.K_DOWN]
+                or ticks_diff(self._down_until, now) > 0
+                or (touch and touch.get("down"))
+            )
 
             # Z button: z/space/enter
-            self._held_z = bool(keys[pygame.K_z] or keys[pygame.K_SPACE] or keys[pygame.K_RETURN] or (touch and touch.get("space")))
+            self._held_z = bool(
+                keys[pygame.K_z]
+                or keys[pygame.K_SPACE]
+                or keys[pygame.K_RETURN]
+                or (touch and touch.get("space"))
+            )
             self._z = bool(self._held_z or ticks_diff(self._z_until, now) > 0)
             # C button: x/escape
-            self._held_c = bool(keys[pygame.K_x] or keys[pygame.K_ESCAPE] or (touch and touch.get("x")))
+            self._held_c = bool(
+                keys[pygame.K_x] or keys[pygame.K_ESCAPE] or (touch and touch.get("x"))
+            )
             self._c = bool(self._held_c or ticks_diff(self._c_until, now) > 0)
 
             # Keyboard/touch only give us digital direction state; funnel it
@@ -1810,12 +2030,13 @@ else:
             return self.nunchuck.buttons()
 
 
-def read_wasd_direction(possible_directions, debounce=False):
-    """Read WASD as a digital direction source for desktop/web multiplayer."""
+def read_wasd_input(possible_directions, debounce=False):
+    """Return the WASD player's direction and action from one keyboard poll."""
     if IS_MICROPYTHON:
-        return None
+        return None, False
     try:
         import pygame  # type: ignore
+
         pygame.event.pump()
         keys = pygame.key.get_pressed()
         up = bool(keys[pygame.K_w])
@@ -1824,34 +2045,34 @@ def read_wasd_direction(possible_directions, debounce=False):
         right = bool(keys[pygame.K_d])
         x, y = dpad_to_analog(up, down, left, right)
         d = _read_direction_from_xy(x, y, possible_directions)
+        action = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
         if not debounce:
-            return d
+            return d, action
         now = ticks_ms()
-        last_dir = getattr(read_wasd_direction, "_last_dir", None)
-        last_ms = getattr(read_wasd_direction, "_last_ms", 0)
+        last_dir = getattr(read_wasd_input, "_last_dir", None)
+        last_ms = getattr(read_wasd_input, "_last_ms", 0)
         if d is None:
-            setattr(read_wasd_direction, "_last_dir", None)
-            return None
+            setattr(read_wasd_input, "_last_dir", None)
+            return None, action
         if d == last_dir and ticks_diff(now, last_ms) < _JoystickBase._debounce_ms:
-            return None
-        setattr(read_wasd_direction, "_last_dir", d)
-        setattr(read_wasd_direction, "_last_ms", now)
-        return d
+            return None, action
+        setattr(read_wasd_input, "_last_dir", d)
+        setattr(read_wasd_input, "_last_ms", now)
+        return d, action
     except Exception:
-        return None
+        return None, False
+
+
+def read_wasd_direction(possible_directions, debounce=False):
+    """Read WASD as a digital direction source for desktop/web multiplayer."""
+    direction, _action = read_wasd_input(possible_directions, debounce)
+    return direction
 
 
 def read_wasd_buttons():
     """Return (back, action) for the WASD-side player on desktop/web."""
-    if IS_MICROPYTHON:
-        return False, False
-    try:
-        import pygame  # type: ignore
-        pygame.event.pump()
-        keys = pygame.key.get_pressed()
-        return False, bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
-    except Exception:
-        return False, False
+    _direction, action = read_wasd_input((), debounce=False)
+    return False, action
 
 
 def read_player2_direction(possible_directions, debounce=False):
@@ -1862,6 +2083,7 @@ def read_player2_direction(possible_directions, debounce=False):
 def read_player2_buttons():
     """Compatibility stub; player 2 uses the normal joystick/arrow buttons."""
     return False, False
+
 
 # ---------- Color helper ----------
 def hsb_to_rgb(hue, saturation, brightness):
@@ -1888,14 +2110,17 @@ def hsb_to_rgb(hue, saturation, brightness):
 
     return int(r * 255), int(g * 255), int(b * 255)
 
+
 def hypot(x, y):
-    return math.sqrt(x*x + y*y)
+    return math.sqrt(x * x + y * y)
+
 
 # ---------- Highscores ----------
 try:
     import ujson as json
 except ImportError:
     import json
+
 
 class HighScores:
     FILE = "highscores.json"
@@ -1938,7 +2163,7 @@ class HighScores:
             entry = self._entry_from_value(value)
             entries = [entry] if entry else []
         entries.sort(key=lambda item: int(item.get("score", 0) or 0), reverse=True)
-        return entries[:self.MAX_ENTRIES]
+        return entries[: self.MAX_ENTRIES]
 
     def _set_entries(self, game, entries):
         clean = []
@@ -1947,7 +2172,7 @@ class HighScores:
             if item:
                 clean.append(item)
         clean.sort(key=lambda item: int(item.get("score", 0) or 0), reverse=True)
-        self.scores[game] = clean[:self.MAX_ENTRIES]
+        self.scores[game] = clean[: self.MAX_ENTRIES]
 
     def _normalize_scores(self):
         for game in list(self.scores.keys()):
@@ -2048,13 +2273,23 @@ class HighScores:
         out = []
         if game is not None:
             for entry in self._entries_from_value(self.scores.get(game, [])):
-                out.append((game, int(entry.get("score", 0) or 0),
-                            self._clean_name(entry.get("name", "---"))))
+                out.append(
+                    (
+                        game,
+                        int(entry.get("score", 0) or 0),
+                        self._clean_name(entry.get("name", "---")),
+                    )
+                )
         else:
             for game_name in self.scores:
                 for entry in self._entries_from_value(self.scores.get(game_name, [])):
-                    out.append((game_name, int(entry.get("score", 0) or 0),
-                                self._clean_name(entry.get("name", "---"))))
+                    out.append(
+                        (
+                            game_name,
+                            int(entry.get("score", 0) or 0),
+                            self._clean_name(entry.get("name", "---")),
+                        )
+                    )
             out.sort(key=lambda item: item[1], reverse=True)
         if limit is not None:
             return out[:limit]
@@ -2082,19 +2317,36 @@ class HighScores:
 
 class GameSettings:
     """Shared per-game option state for selector menus and game instances."""
+
     FILE = "settings.json"
     # Definition shape:
-    #   game_id: ((key, short_label, ((stored_value, menu_label), ...), default_index), ...)
+    #   game_id: ((key, short_label, ((stored_value, menu_label), ...),
+    #             default_index), ...)
     # The selector uses this declarative data to draw settings screens; games read
     # the stored values from the context passed by GameSelect._make_game_instance().
     DEFINITIONS = {
         "DEMOS": (
-            ("slide_ms", "SLIDE", ((30000, "30S"), (60000, "60S"), (90000, "90S"), (120000, "120S")), 1),
+            (
+                "slide_ms",
+                "SLIDE",
+                ((30000, "30S"), (60000, "60S"), (90000, "90S"), (120000, "120S")),
+                1,
+            ),
             ("order", "ORDER", (("sorted", "SORT"), ("random", "RAND")), 0),
             ("clock", "CLOCK", ((False, "OFF"), (True, "ON")), 0),
             ("clock_source", "TIME", (("rtc", "RTC"), ("manual", "SET")), 0),
-            ("clock_hour", "HOUR", tuple((i, "{:02}".format(i)) for i in range(24)), 12),
-            ("clock_minute", "MIN", tuple((i, "{:02}".format(i)) for i in range(60)), 0),
+            (
+                "clock_hour",
+                "HOUR",
+                tuple((i, "{:02}".format(i)) for i in range(24)),
+                12,
+            ),
+            (
+                "clock_minute",
+                "MIN",
+                tuple((i, "{:02}".format(i)) for i in range(60)),
+                0,
+            ),
         ),
         "ORBTAL": (
             ("gravity", "GRAV", ((False, "OFF"), (True, "ON")), 0),
@@ -2112,30 +2364,27 @@ class GameSettings:
             ("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),
             ("goals", "GOALS", ((3, "3"), (5, "5"), (7, "7")), 1),
         ),
-        "BRKOUT": (
-            ("powerups", "POWER", ((False, "OFF"), (True, "ON")), 0),
-        ),
+        "BRKOUT": (("powerups", "POWER", ((False, "OFF"), (True, "ON")), 0),),
         "BTLZON": (
-            ("difficulty", "DIFF", (("easy", "EASY"), ("normal", "NORM"), ("hard", "HARD")), 1),
+            (
+                "difficulty",
+                "DIFF",
+                (("easy", "EASY"), ("normal", "NORM"), ("hard", "HARD")),
+                1,
+            ),
             ("obstacles", "ROCKS", ((False, "OFF"), (True, "ON")), 1),
         ),
         "CITY": (
             ("jobs", "JOBS", ((3, "3"), (5, "5")), 0),
             ("traffic", "TRAF", ((True, "ON"), (False, "OFF")), 0),
         ),
-        "LANDER": (
-            ("mode", "MODE", (("classic", "V1"), ("scroll", "V2")), 0),
-        ),
+        "LANDER": (("mode", "MODE", (("classic", "V1"), ("scroll", "V2")), 0),),
         "KERBAL": (
             ("mission", "MISN", (("orbit", "ORB"), ("return", "RET")), 0),
             ("assist", "ASST", ((True, "ON"), (False, "OFF")), 0),
         ),
-        "PONG": (
-            ("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),
-        ),
-        "TRON": (
-            ("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),
-        ),
+        "PONG": (("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),),
+        "TRON": (("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),),
         "WORMS": (
             ("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),
             ("worms", "TEAM", ((2, "2"), (3, "3")), 0),
@@ -2239,6 +2488,7 @@ class GameSettings:
 
 class InitialsEntryMenu:
     """3-letter initials entry for highscores."""
+
     def __init__(self, joystick, score, best, best_name="---", title="NEW HS"):
         self.joystick = joystick
         self.score = score
@@ -2269,13 +2519,17 @@ class InitialsEntryMenu:
                 col = (255, 255, 255) if i == self.idx else (120, 120, 120)
                 draw_text(10 + i * 18, y0, self.letters[i], *col)
                 if i == self.idx:
-                    draw_rectangle(8 + i * 18, y0 + 13, 20 + i * 18, y0 + 14, 255, 255, 255)
+                    draw_rectangle(
+                        8 + i * 18, y0 + 13, 20 + i * 18, y0 + 14, 255, 255, 255
+                    )
 
             draw_text_small(2, 50, "A=OK B=BACK", 120, 120, 120)
 
             now = ticks_ms()
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                )
                 if d == JOYSTICK_LEFT and self.idx > 0:
                     self.idx -= 1
                     last_move = now
@@ -2336,7 +2590,9 @@ class InitialsEntryMenu:
             display_flush()
             now = ticks_ms()
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                )
                 if d == JOYSTICK_LEFT and self.idx > 0:
                     self.idx -= 1
                     last_move = now
@@ -2359,6 +2615,7 @@ class InitialsEntryMenu:
                 await _wait_for_primary_release_async(self.joystick)
                 return "".join(self.letters)
             await asyncio.sleep(0.020)
+
 
 # ======================================================================
 #                                 GAMES
@@ -2421,6 +2678,7 @@ class SimonGame:
       - Z: confirm selected color
       - C: return to menu
     """
+
     INPUT_BAR_Y = PLAY_HEIGHT - 6
 
     def __init__(self):
@@ -2498,11 +2756,19 @@ class SimonGame:
                 return self.cursor
             last_z = z_button
             now = ticks_ms()
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_LEFT, JOYSTICK_DOWN,
-                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT,
-                JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT,
-            ], debounce=False)
+            d = joystick.read_direction(
+                [
+                    JOYSTICK_UP,
+                    JOYSTICK_RIGHT,
+                    JOYSTICK_LEFT,
+                    JOYSTICK_DOWN,
+                    JOYSTICK_UP_LEFT,
+                    JOYSTICK_UP_RIGHT,
+                    JOYSTICK_DOWN_LEFT,
+                    JOYSTICK_DOWN_RIGHT,
+                ],
+                debounce=False,
+            )
             if d:
                 dx, dy = direction_to_delta_8way(d)
                 col = self.cursor % 2
@@ -2556,7 +2822,7 @@ class SimonGame:
                 self.user_input.append(sel)
                 self.redraw_input_view()
                 # check prefix
-                if self.user_input != self.sequence[:len(self.user_input)]:
+                if self.user_input != self.sequence[: len(self.user_input)]:
                     global_score = len(self.sequence) - 1
                     game_over = True
                     return
@@ -2611,12 +2877,19 @@ class SimonGame:
                         break
                     last_z = z_button
                     now = ticks_ms()
-                    d = joystick.read_direction([
-                        JOYSTICK_UP, JOYSTICK_RIGHT,
-                        JOYSTICK_LEFT, JOYSTICK_DOWN,
-                        JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT,
-                        JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT,
-                    ], debounce=False)
+                    d = joystick.read_direction(
+                        [
+                            JOYSTICK_UP,
+                            JOYSTICK_RIGHT,
+                            JOYSTICK_LEFT,
+                            JOYSTICK_DOWN,
+                            JOYSTICK_UP_LEFT,
+                            JOYSTICK_UP_RIGHT,
+                            JOYSTICK_DOWN_LEFT,
+                            JOYSTICK_DOWN_RIGHT,
+                        ],
+                        debounce=False,
+                    )
                     if d:
                         dx, dy = direction_to_delta_8way(d)
                         col = self.cursor % 2
@@ -2647,7 +2920,7 @@ class SimonGame:
 
                 self.user_input.append(sel)
                 self.redraw_input_view()
-                if self.user_input != self.sequence[:len(self.user_input)]:
+                if self.user_input != self.sequence[: len(self.user_input)]:
                     global_score = len(self.sequence) - 1
                     game_over = True
                     return
@@ -2663,6 +2936,7 @@ class SnakeGame:
       - Left / Right / Up / Down: steer snake
       - C: return to menu
     """
+
     def __init__(self):
         self.restart_game()
 
@@ -2738,7 +3012,7 @@ class SnakeGame:
             JOYSTICK_LEFT: (hx - 1, hy),
             JOYSTICK_RIGHT: (hx + 1, hy),
         }
-        
+
         safe_dirs = [d for d, p in moves.items() if p not in body_positions]
         if moves[self.snake_direction] in body_positions:
             if safe_dirs:
@@ -2793,7 +3067,7 @@ class SnakeGame:
 
     def draw_snake(self):
         hue = 0
-        for (x, y) in self.snake[:self.snake_length]:
+        for x, y in self.snake[: self.snake_length]:
             hue = (hue + 7) % 360
             r, g, b = hsb_to_rgb(hue, 1, 1)
             display.set_pixel(x, y, r, g, b)
@@ -2809,7 +3083,9 @@ class SnakeGame:
             self.place_green_target()
         self.update_green_targets()
 
-        direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        direction = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if direction:
             self.snake_direction = direction
 
@@ -2844,7 +3120,7 @@ class SnakeGame:
         """Async version for pygbag: yields with asyncio.sleep()."""
         if asyncio is None:
             return self.main_loop(joystick)
-        
+
         global game_over
         game_over = False
         self.restart_game()
@@ -2854,6 +3130,7 @@ class SnakeGame:
 
         await _run_game_loop_async(56, loop_iteration)
 
+
 class PongGame:
     """
     PONG
@@ -2861,6 +3138,7 @@ class PongGame:
       - Up / Down: move paddle
       - C: return to menu
     """
+
     def __init__(self, ctx=None):
         self.players_mode = get_context_setting(ctx, "players", "cpu")
         self.paddle_height = 10
@@ -2941,32 +3219,43 @@ class PongGame:
         if d == JOYSTICK_UP:
             self.left_paddle_y = max(self.left_paddle_y - self.paddle_speed, 0)
         elif d == JOYSTICK_DOWN:
-            self.left_paddle_y = min(self.left_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+            self.left_paddle_y = min(
+                self.left_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height
+            )
 
         if self.players_mode == "two":
             p2 = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
             if p2 == JOYSTICK_UP:
                 self.right_paddle_y = max(self.right_paddle_y - self.paddle_speed, 0)
             elif p2 == JOYSTICK_DOWN:
-                self.right_paddle_y = min(self.right_paddle_y + self.paddle_speed, PLAY_HEIGHT - self.paddle_height)
+                self.right_paddle_y = min(
+                    self.right_paddle_y + self.paddle_speed,
+                    PLAY_HEIGHT - self.paddle_height,
+                )
             return
 
         # Lightweight AI: good enough to rally, imperfect enough to beat.
         by = self.ball_position[1]
         pc = self.right_paddle_y + self.paddle_height // 2
-        ai_speed = self.ai_min_speed + min(self.ai_max_speed - self.ai_min_speed, self.left_score // 35)
+        ai_speed = self.ai_min_speed + min(
+            self.ai_max_speed - self.ai_min_speed, self.left_score // 35
+        )
         if self.ball_speed[0] < 0:
             # Re-center slowly while the ball travels away.
             target = PLAY_HEIGHT // 2
             if pc < target - 2:
-                self.right_paddle_y = min(self.right_paddle_y + 1, PLAY_HEIGHT - self.paddle_height)
+                self.right_paddle_y = min(
+                    self.right_paddle_y + 1, PLAY_HEIGHT - self.paddle_height
+                )
             elif pc > target + 2:
                 self.right_paddle_y = max(self.right_paddle_y - 1, 0)
             return
         if by < pc - 1:
             self.right_paddle_y = max(self.right_paddle_y - ai_speed, 0)
         elif by > pc + 1:
-            self.right_paddle_y = min(self.right_paddle_y + ai_speed, PLAY_HEIGHT - self.paddle_height)
+            self.right_paddle_y = min(
+                self.right_paddle_y + ai_speed, PLAY_HEIGHT - self.paddle_height
+            )
 
     def update_ball(self):
         global game_over, global_score
@@ -2983,14 +3272,20 @@ class PongGame:
             y = self.ball_position[1]
 
         # left paddle hit
-        if x == self.left_paddle_x + 1 and self.left_paddle_y <= y < self.left_paddle_y + self.paddle_height:
+        if (
+            x == self.left_paddle_x + 1
+            and self.left_paddle_y <= y < self.left_paddle_y + self.paddle_height
+        ):
             self.ball_position[0] = self.left_paddle_x + 1
             self.ball_speed[0] = abs(self.ball_speed[0])
             self._apply_paddle_english(self.left_paddle_y)
             self.left_score += 1
 
         # right paddle hit
-        if x == self.right_paddle_x - 1 and self.right_paddle_y <= y < self.right_paddle_y + self.paddle_height:
+        if (
+            x == self.right_paddle_x - 1
+            and self.right_paddle_y <= y < self.right_paddle_y + self.paddle_height
+        ):
             self.ball_position[0] = self.right_paddle_x - 1
             self.ball_speed[0] = -abs(self.ball_speed[0])
             self._apply_paddle_english(self.right_paddle_y)
@@ -3035,6 +3330,7 @@ class PongGame:
         display.clear()
         self.reset_match()
         display_score_and_time(0, force=True)
+
         def step():
             c_button, _ = joystick.read_buttons()
             if c_button or game_over:
@@ -3044,10 +3340,18 @@ class PongGame:
             self.draw_paddles()
             if self.players_mode == "two":
                 draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-                draw_text_small(1, PLAY_HEIGHT, str(self.left_score) + "-" + str(self.right_score), 255, 255, 255)
+                draw_text_small(
+                    1,
+                    PLAY_HEIGHT,
+                    str(self.left_score) + "-" + str(self.right_score),
+                    255,
+                    255,
+                    255,
+                )
             else:
                 display_score_and_time(self.left_score)
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -3067,12 +3371,15 @@ class AirHockeyGame(FrameLoopGame):
       - C: return to menu
     Fast puck-and-mallet air hockey with CPU or local 2-player support.
     """
+
     FRAME_MS = 30
     RINK_LEFT = 3
     RINK_RIGHT = WIDTH - 4
     RINK_TOP = 3
     RINK_BOTTOM = PLAY_HEIGHT - 3
     GOAL_HALF = 7
+    GOAL_TOP = PLAY_HEIGHT // 2 - GOAL_HALF
+    GOAL_BOTTOM = PLAY_HEIGHT // 2 + GOAL_HALF
     PUCK_R = 1.1
     MALLET_R = 3.3
     MALLET_SPEED = 1.55
@@ -3102,6 +3409,13 @@ class AirHockeyGame(FrameLoopGame):
         self.puck_y = PLAY_HEIGHT / 2
         self.puck_vx = 1.65
         self.puck_vy = random.choice((-0.9, -0.45, 0.45, 0.9))
+        self._draw_left_x = self.left_x
+        self._draw_left_y = self.left_y
+        self._draw_right_x = self.right_x
+        self._draw_right_y = self.right_y
+        self._draw_puck_x = self.puck_x
+        self._draw_puck_y = self.puck_y
+        self._rink_ready = False
 
     def _puck_speed(self):
         return math.sqrt(self.puck_vx * self.puck_vx + self.puck_vy * self.puck_vy)
@@ -3114,10 +3428,14 @@ class AirHockeyGame(FrameLoopGame):
         self.flash = 8
 
     def _keep_left(self, x, y):
-        return clamp(x, self.RINK_LEFT + 4, WIDTH / 2 - 6), clamp(y, self.RINK_TOP + 4, self.RINK_BOTTOM - 4)
+        return clamp(x, self.RINK_LEFT + 4, WIDTH / 2 - 6), clamp(
+            y, self.RINK_TOP + 4, self.RINK_BOTTOM - 4
+        )
 
     def _keep_right(self, x, y):
-        return clamp(x, WIDTH / 2 + 6, self.RINK_RIGHT - 4), clamp(y, self.RINK_TOP + 4, self.RINK_BOTTOM - 4)
+        return clamp(x, WIDTH / 2 + 6, self.RINK_RIGHT - 4), clamp(
+            y, self.RINK_TOP + 4, self.RINK_BOTTOM - 4
+        )
 
     def _move_left(self, direction):
         if direction is None:
@@ -3127,7 +3445,9 @@ class AirHockeyGame(FrameLoopGame):
         dx, dy = direction_to_delta_8way(direction)
         self.prev_left_x = self.left_x
         self.prev_left_y = self.left_y
-        self.left_x, self.left_y = self._keep_left(self.left_x + dx * self.MALLET_SPEED, self.left_y + dy * self.MALLET_SPEED)
+        self.left_x, self.left_y = self._keep_left(
+            self.left_x + dx * self.MALLET_SPEED, self.left_y + dy * self.MALLET_SPEED
+        )
 
     def _move_right(self, direction):
         if direction is None:
@@ -3137,7 +3457,9 @@ class AirHockeyGame(FrameLoopGame):
         dx, dy = direction_to_delta_8way(direction)
         self.prev_right_x = self.right_x
         self.prev_right_y = self.right_y
-        self.right_x, self.right_y = self._keep_right(self.right_x + dx * self.MALLET_SPEED, self.right_y + dy * self.MALLET_SPEED)
+        self.right_x, self.right_y = self._keep_right(
+            self.right_x + dx * self.MALLET_SPEED, self.right_y + dy * self.MALLET_SPEED
+        )
 
     def _predict_puck_y(self, target_x):
         x = self.puck_x
@@ -3173,7 +3495,9 @@ class AirHockeyGame(FrameLoopGame):
                 target_y += clamp((self.puck_y - PLAY_HEIGHT / 2) * 0.16, -1.5, 1.5)
         else:
             target_x = WIDTH - 13.0
-            target_y = PLAY_HEIGHT / 2 + clamp((self.puck_y - PLAY_HEIGHT / 2) * 0.28, -3.5, 3.5)
+            target_y = PLAY_HEIGHT / 2 + clamp(
+                (self.puck_y - PLAY_HEIGHT / 2) * 0.28, -3.5, 3.5
+            )
         dx = target_x - self.right_x
         dy = target_y - self.right_y
         if abs(dx) < 0.8 and abs(dy) < 0.8:
@@ -3238,7 +3562,10 @@ class AirHockeyGame(FrameLoopGame):
             self._serve(-1)
         global global_score
         global_score = max(self.left_score, self.right_score)
-        if self.left_score >= self.target_goals or self.right_score >= self.target_goals:
+        if (
+            self.left_score >= self.target_goals
+            or self.right_score >= self.target_goals
+        ):
             won = self.left_score > self.right_score
             if self.players_mode == "two":
                 won = self.left_score > self.right_score
@@ -3278,22 +3605,97 @@ class AirHockeyGame(FrameLoopGame):
             self.puck_x = self.RINK_RIGHT - self.PUCK_R
             self.puck_vx = -abs(self.puck_vx)
 
-        self._bounce_puck_off_mallet(self.left_x, self.left_y, self.prev_left_x, self.prev_left_y)
-        self._bounce_puck_off_mallet(self.right_x, self.right_y, self.prev_right_x, self.prev_right_y)
+        self._bounce_puck_off_mallet(
+            self.left_x, self.left_y, self.prev_left_x, self.prev_left_y
+        )
+        self._bounce_puck_off_mallet(
+            self.right_x, self.right_y, self.prev_right_x, self.prev_right_y
+        )
         return True
 
     def _draw_rink(self):
         display.clear()
         draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 14, 90, 70)
-        draw_rectangle(self.RINK_LEFT, self.RINK_TOP, self.RINK_RIGHT, self.RINK_BOTTOM, 8, 120, 92)
-        draw_rect_outline(self.RINK_LEFT, self.RINK_TOP, self.RINK_RIGHT, self.RINK_BOTTOM, 220, 220, 220)
-        draw_line(WIDTH // 2, self.RINK_TOP + 1, WIDTH // 2, self.RINK_BOTTOM - 1, 220, 220, 220)
+        draw_rectangle(
+            self.RINK_LEFT, self.RINK_TOP, self.RINK_RIGHT, self.RINK_BOTTOM, 8, 120, 92
+        )
+        draw_rect_outline(
+            self.RINK_LEFT,
+            self.RINK_TOP,
+            self.RINK_RIGHT,
+            self.RINK_BOTTOM,
+            220,
+            220,
+            220,
+        )
+        draw_line(
+            WIDTH // 2,
+            self.RINK_TOP + 1,
+            WIDTH // 2,
+            self.RINK_BOTTOM - 1,
+            220,
+            220,
+            220,
+        )
         for y in range(self.RINK_TOP + 4, self.RINK_BOTTOM - 3, 8):
             draw_line(WIDTH // 2 - 1, y, WIDTH // 2 + 1, y + 1, 220, 220, 220)
-        goal_y1 = int(PLAY_HEIGHT / 2 - self.GOAL_HALF)
-        goal_y2 = int(PLAY_HEIGHT / 2 + self.GOAL_HALF)
-        draw_rectangle(self.RINK_LEFT, goal_y1, self.RINK_LEFT + 1, goal_y2, 0, 0, 0)
-        draw_rectangle(self.RINK_RIGHT - 1, goal_y1, self.RINK_RIGHT, goal_y2, 0, 0, 0)
+        draw_rectangle(
+            self.RINK_LEFT, self.GOAL_TOP, self.RINK_LEFT + 1, self.GOAL_BOTTOM, 0, 0, 0
+        )
+        draw_rectangle(
+            self.RINK_RIGHT - 1,
+            self.GOAL_TOP,
+            self.RINK_RIGHT,
+            self.GOAL_BOTTOM,
+            0,
+            0,
+            0,
+        )
+
+    def _rink_pixel_color(self, x, y):
+        """Return the static rink color below a moving puck or mallet."""
+        if (
+            self.RINK_LEFT <= x <= self.RINK_RIGHT
+            and self.RINK_TOP <= y <= self.RINK_BOTTOM
+        ):
+            color = (8, 120, 92)
+        else:
+            color = (14, 90, 70)
+
+        if (
+            x == self.RINK_LEFT
+            or x == self.RINK_RIGHT
+            or y == self.RINK_TOP
+            or y == self.RINK_BOTTOM
+        ):
+            color = (220, 220, 220)
+        elif x == WIDTH // 2 and self.RINK_TOP < y < self.RINK_BOTTOM:
+            color = (220, 220, 220)
+        elif (
+            WIDTH // 2 - 1 <= x <= WIDTH // 2 + 1
+            and self.RINK_TOP + 4 <= y < self.RINK_BOTTOM - 3
+            and (y - (self.RINK_TOP + 4)) % 8 < 2
+        ):
+            color = (220, 220, 220)
+
+        if self.GOAL_TOP <= y <= self.GOAL_BOTTOM and (
+            self.RINK_LEFT <= x <= self.RINK_LEFT + 1
+            or self.RINK_RIGHT - 1 <= x <= self.RINK_RIGHT
+        ):
+            return 0, 0, 0
+        return color
+
+    def _restore_rink_region(self, cx, cy, radius):
+        """Restore one small dynamic region without repainting the whole rink."""
+        x0 = max(0, int(cx) - radius)
+        x1 = min(WIDTH - 1, int(cx) + radius)
+        y0 = max(0, int(cy) - radius)
+        y1 = min(PLAY_HEIGHT - 1, int(cy) + radius)
+        sp = display.set_pixel
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                r, g, b = self._rink_pixel_color(x, y)
+                sp(x, y, r, g, b)
 
     def _draw_player(self, x, y, color):
         draw_rectangle(int(x) - 2, int(y) - 2, int(x) + 2, int(y) + 2, *color)
@@ -3309,13 +3711,33 @@ class AirHockeyGame(FrameLoopGame):
         draw_text_small(44, PLAY_HEIGHT, mode, 160, 160, 160)
 
     def _draw(self):
-        self._draw_rink()
+        if not self._rink_ready:
+            self._draw_rink()
+            self._rink_ready = True
+        else:
+            self._restore_rink_region(self._draw_left_x, self._draw_left_y, 2)
+            self._restore_rink_region(self._draw_right_x, self._draw_right_y, 2)
+            self._restore_rink_region(self._draw_puck_x, self._draw_puck_y, 1)
         self._draw_player(self.left_x, self.left_y, (70, 170, 255))
         self._draw_player(self.right_x, self.right_y, (255, 90, 90))
         if self.flash:
             self.flash -= 1
-        draw_rectangle(int(self.puck_x) - 1, int(self.puck_y) - 1, int(self.puck_x) + 1, int(self.puck_y) + 1, 255, 255, 255)
+        draw_rectangle(
+            int(self.puck_x) - 1,
+            int(self.puck_y) - 1,
+            int(self.puck_x) + 1,
+            int(self.puck_y) + 1,
+            255,
+            255,
+            255,
+        )
         self._draw_hud()
+        self._draw_left_x = self.left_x
+        self._draw_left_y = self.left_y
+        self._draw_right_x = self.right_x
+        self._draw_right_y = self.right_y
+        self._draw_puck_x = self.puck_x
+        self._draw_puck_y = self.puck_y
         global global_score
         global_score = max(self.left_score, self.right_score)
         display_flush()
@@ -3331,20 +3753,44 @@ class AirHockeyGame(FrameLoopGame):
             self.frame += 1
             if self.players_mode == "two":
                 left_dir = read_wasd_direction(
-                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                     JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT],
-                    debounce=True
+                    [
+                        JOYSTICK_UP,
+                        JOYSTICK_DOWN,
+                        JOYSTICK_LEFT,
+                        JOYSTICK_RIGHT,
+                        JOYSTICK_UP_LEFT,
+                        JOYSTICK_UP_RIGHT,
+                        JOYSTICK_DOWN_LEFT,
+                        JOYSTICK_DOWN_RIGHT,
+                    ],
+                    debounce=True,
                 )
                 right_dir = joystick.read_direction(
-                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                     JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT],
-                    debounce=True
+                    [
+                        JOYSTICK_UP,
+                        JOYSTICK_DOWN,
+                        JOYSTICK_LEFT,
+                        JOYSTICK_RIGHT,
+                        JOYSTICK_UP_LEFT,
+                        JOYSTICK_UP_RIGHT,
+                        JOYSTICK_DOWN_LEFT,
+                        JOYSTICK_DOWN_RIGHT,
+                    ],
+                    debounce=True,
                 )
             else:
                 left_dir = joystick.read_direction(
-                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                     JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT],
-                    debounce=True
+                    [
+                        JOYSTICK_UP,
+                        JOYSTICK_DOWN,
+                        JOYSTICK_LEFT,
+                        JOYSTICK_RIGHT,
+                        JOYSTICK_UP_LEFT,
+                        JOYSTICK_UP_RIGHT,
+                        JOYSTICK_DOWN_LEFT,
+                        JOYSTICK_DOWN_RIGHT,
+                    ],
+                    debounce=True,
                 )
                 right_dir = self._cpu_direction()
             self._move_left(left_dir)
@@ -3354,6 +3800,7 @@ class AirHockeyGame(FrameLoopGame):
                 return False
             self._draw()
             return True
+
         return step
 
 
@@ -3366,6 +3813,7 @@ BRICK_HEIGHT = const(4)
 BRICK_ROWS = const(5)
 BRICK_COLS = const(8)
 
+
 class BreakoutGame:
     """
     BREAKOUT
@@ -3373,6 +3821,7 @@ class BreakoutGame:
       - Left / Right: move paddle
       - C: return to menu
     """
+
     def __init__(self, ctx=None):
         self.powerups_enabled = bool(get_context_setting(ctx, "powerups", False))
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
@@ -3398,10 +3847,26 @@ class BreakoutGame:
         return bricks
 
     def draw_paddle(self):
-        draw_rectangle(self.paddle_x, self.paddle_y, self.paddle_x + self.paddle_w - 1, self.paddle_y + PADDLE_HEIGHT - 1, 255, 255, 255)
+        draw_rectangle(
+            self.paddle_x,
+            self.paddle_y,
+            self.paddle_x + self.paddle_w - 1,
+            self.paddle_y + PADDLE_HEIGHT - 1,
+            255,
+            255,
+            255,
+        )
 
     def clear_paddle(self):
-        draw_rectangle(self.paddle_x, self.paddle_y, self.paddle_x + self.paddle_w - 1, self.paddle_y + PADDLE_HEIGHT - 1, 0, 0, 0)
+        draw_rectangle(
+            self.paddle_x,
+            self.paddle_y,
+            self.paddle_x + self.paddle_w - 1,
+            self.paddle_y + PADDLE_HEIGHT - 1,
+            0,
+            0,
+            0,
+        )
 
     def draw_ball(self):
         bx, by = int(self.ball_x), int(self.ball_y)
@@ -3430,16 +3895,19 @@ class BreakoutGame:
         elif self.ball_x >= WIDTH - 2:
             self.ball_x = WIDTH - 2
             self.ball_dx = -abs(self.ball_dx)
-            
+
         if self.ball_y <= 0:
             self.ball_dy = -self.ball_dy
 
         # paddle bounce
         if self.ball_y + 1 >= self.paddle_y:
-            if self.paddle_x <= self.ball_x + 1 and self.ball_x <= self.paddle_x + self.paddle_w - 1:
+            if (
+                self.paddle_x <= self.ball_x + 1
+                and self.ball_x <= self.paddle_x + self.paddle_w - 1
+            ):
                 self.ball_dy = -abs(self.ball_dy)
                 self.ball_y = self.paddle_y - 2
-                
+
                 # apply spin based on paddle movement
                 last_move = getattr(self, "last_paddle_move", None)
                 if last_move == JOYSTICK_LEFT:
@@ -3469,7 +3937,11 @@ class BreakoutGame:
                 self.score += 10
                 global_score = self.score
                 draw_rectangle(x, y, x + BRICK_WIDTH - 1, y + BRICK_HEIGHT - 1, 0, 0, 0)
-                if self.powerups_enabled and random.randint(0, 99) < 18 and len(self.powerups) < 3:
+                if (
+                    self.powerups_enabled
+                    and random.randint(0, 99) < 18
+                    and len(self.powerups) < 3
+                ):
                     self.powerups.append([x + BRICK_WIDTH // 2, y + BRICK_HEIGHT, 0])
                 break
 
@@ -3481,7 +3953,9 @@ class BreakoutGame:
             self.paddle_x = max(self.paddle_x - self.paddle_speed, 0)
         elif d == JOYSTICK_RIGHT:
             self.clear_paddle()
-            self.paddle_x = min(self.paddle_x + self.paddle_speed, WIDTH - self.paddle_w)
+            self.paddle_x = min(
+                self.paddle_x + self.paddle_speed, WIDTH - self.paddle_w
+            )
         self.draw_paddle()
 
     def update_powerups(self):
@@ -3489,7 +3963,9 @@ class BreakoutGame:
             return
         keep = []
         for p in self.powerups:
-            draw_rectangle(int(p[0]) - 1, int(p[1]) - 1, int(p[0]) + 1, int(p[1]) + 1, 0, 0, 0)
+            draw_rectangle(
+                int(p[0]) - 1, int(p[1]) - 1, int(p[0]) + 1, int(p[1]) + 1, 0, 0, 0
+            )
             p[1] += 0.65
             if p[1] >= self.paddle_y - 1:
                 if self.paddle_x - 1 <= p[0] <= self.paddle_x + self.paddle_w:
@@ -3501,7 +3977,15 @@ class BreakoutGame:
                     continue
             if p[1] < PLAY_HEIGHT:
                 keep.append(p)
-                draw_rectangle(int(p[0]) - 1, int(p[1]) - 1, int(p[0]) + 1, int(p[1]) + 1, 80, 220, 255)
+                draw_rectangle(
+                    int(p[0]) - 1,
+                    int(p[1]) - 1,
+                    int(p[0]) + 1,
+                    int(p[1]) + 1,
+                    80,
+                    220,
+                    255,
+                )
         self.powerups = keep
         if self.wide_timer > 0:
             self.wide_timer -= 1
@@ -3509,7 +3993,9 @@ class BreakoutGame:
                 self.clear_paddle()
                 center = self.paddle_x + self.paddle_w // 2
                 self.paddle_w = PADDLE_WIDTH
-                self.paddle_x = clamp(center - self.paddle_w // 2, 0, WIDTH - self.paddle_w)
+                self.paddle_x = clamp(
+                    center - self.paddle_w // 2, 0, WIDTH - self.paddle_w
+                )
 
     def _start_round(self, show_hud=True):
         global game_over, global_score
@@ -3555,7 +4041,9 @@ class BreakoutGame:
         if not self.bricks:
             set_game_over_score(self.score, won=True)
             if show_win:
-                show_center_message(("YOU", "WON"), start_y=10, line_height=15, delay_ms=1500)
+                show_center_message(
+                    ("YOU", "WON"), start_y=10, line_height=15, delay_ms=1500
+                )
             return False
         return True
 
@@ -3573,19 +4061,21 @@ class BreakoutGame:
         """Async version for pygbag: yields with asyncio.sleep()."""
         if asyncio is None:
             return self.main_loop(joystick)
-        
+
         self._start_round()
-        
+
         def loop_iteration():
             return self._step_once(joystick, show_win=False)
-        
+
         await _run_game_loop_async(35, loop_iteration)
+
 
 # ---------- Asteroids ----------
 SHIP_COOLDOWN = const(10)
 FPS = const(20)
 PIXEL_WIDTH = WIDTH
 PIXEL_HEIGHT = PLAY_HEIGHT
+
 
 class AsteroidGame:
     """
@@ -3596,6 +4086,7 @@ class AsteroidGame:
       - Z: shoot
       - C: return to menu
     """
+
     _SHAPE_CACHE = None
 
     @classmethod
@@ -3747,8 +4238,11 @@ class AsteroidGame:
             wide = 1.0 + (self.flame_phase % 3) * 0.25
             self.draw_line(p1, tail, (255, 60, 0))
             self.draw_line(p2, tail, (255, 120, 0))
-            self.draw_line((bx - math.sin(rad) * wide, by - math.cos(rad) * wide),
-                           tail, (255, 220, 40))
+            self.draw_line(
+                (bx - math.sin(rad) * wide, by - math.cos(rad) * wide),
+                tail,
+                (255, 220, 40),
+            )
 
         def draw(self):
             a = self.angle
@@ -3756,12 +4250,9 @@ class AsteroidGame:
             rad0 = math.radians(a)
             rad1 = math.radians(a + 120)
             rad2 = math.radians(a - 120)
-            p0 = (self.x + math.cos(rad0) * s,
-                  self.y - math.sin(rad0) * s)
-            p1 = (self.x + math.cos(rad1) * s,
-                  self.y - math.sin(rad1) * s)
-            p2 = (self.x + math.cos(rad2) * s,
-                  self.y - math.sin(rad2) * s)
+            p0 = (self.x + math.cos(rad0) * s, self.y - math.sin(rad0) * s)
+            p1 = (self.x + math.cos(rad1) * s, self.y - math.sin(rad1) * s)
+            p2 = (self.x + math.cos(rad2) * s, self.y - math.sin(rad2) * s)
 
             self._draw_flame(p1, p2, rad0)
             self._fill_triangle((p0, p1, p2), WHITE)
@@ -3814,9 +4305,17 @@ class AsteroidGame:
                 if hit_a.size > 3:
                     half = max(2, hit_a.size // 2)
                     if len(self.asteroids) + len(spawned) < self.max_asteroids:
-                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half, speed_boost=speed_boost))
+                        spawned.append(
+                            self.Asteroid(
+                                hit_a.x, hit_a.y, half, speed_boost=speed_boost
+                            )
+                        )
                     if len(self.asteroids) + len(spawned) < self.max_asteroids:
-                        spawned.append(self.Asteroid(hit_a.x, hit_a.y, half, speed_boost=speed_boost))
+                        spawned.append(
+                            self.Asteroid(
+                                hit_a.x, hit_a.y, half, speed_boost=speed_boost
+                            )
+                        )
             else:
                 self.projectiles[keep_i] = p
                 keep_i += 1
@@ -3853,12 +4352,15 @@ class AsteroidGame:
         self.score = 0
         display.clear()
         display_score_and_time(0, force=True)
+
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button or game_over:
                 return False
-            direction = joystick.read_direction([JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            direction = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             self.ship.update(direction)
             if z_button:
                 pr = self.ship.shoot()
@@ -3878,7 +4380,10 @@ class AsteroidGame:
                 return False
             if not self.asteroids:
                 speed_boost = min(self.score / 600.0, 1.5)
-                self.asteroids = [self.Asteroid(start=True, speed_boost=speed_boost) for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)]
+                self.asteroids = [
+                    self.Asteroid(start=True, speed_boost=speed_boost)
+                    for _ in range(3 if CONFIG_LOW_RAM_MODE else 4)
+                ]
             display.clear()
             self.ship.draw()
             for a in self.asteroids:
@@ -3888,6 +4393,7 @@ class AsteroidGame:
             display_score_and_time(self.score)
             global_score = self.score
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -3898,6 +4404,7 @@ class AsteroidGame:
             return self.main_loop(joystick)
         await _run_game_loop_async(50, self._build_step(joystick))
 
+
 # ---------- Qix ----------
 class QixGame:
     """
@@ -3906,6 +4413,7 @@ class QixGame:
       - Left / Right / Up / Down: move and draw boundary
       - C: return to menu
     """
+
     def __init__(self):
         self.height = PLAY_HEIGHT
         self.width = WIDTH
@@ -3953,10 +4461,12 @@ class QixGame:
             display.set_pixel(self.width - 1, y, 0, 0, 255)
 
     def place_player(self):
-        edges = ([(x, 0) for x in range(self.width)] +
-                 [(x, self.height - 1) for x in range(self.width)] +
-                 [(0, y) for y in range(self.height)] +
-                 [(self.width - 1, y) for y in range(self.height)])
+        edges = (
+            [(x, 0) for x in range(self.width)]
+            + [(x, self.height - 1) for x in range(self.width)]
+            + [(0, y) for y in range(self.height)]
+            + [(self.width - 1, y) for y in range(self.height)]
+        )
         self.player_x, self.player_y = random.choice(edges)
         display.set_pixel(self.player_x, self.player_y, 0, 255, 0)
 
@@ -3992,7 +4502,9 @@ class QixGame:
             # recompute target after possible bounce
             nx = ox + dx
             ny = oy + dy
-            if get_grid_value(nx, ny) == 4 or (nx == self.player_x and ny == self.player_y):
+            if get_grid_value(nx, ny) == 4 or (
+                nx == self.player_x and ny == self.player_y
+            ):
                 global_score = int(self.occupied_percentage)
                 game_over = True
                 return
@@ -4006,7 +4518,9 @@ class QixGame:
             display.set_pixel(nx, ny, 255, 0, 0)
 
     def move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
 
@@ -4073,6 +4587,7 @@ class QixGame:
         game_over = False
         global_score = 0
         self.initialize_game()
+
         def step():
             global game_over, global_score
             c_button, _ = joystick.read_buttons()
@@ -4094,6 +4609,7 @@ class QixGame:
                     self.num_opponents = 8
                 self.initialize_game()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -4103,6 +4619,7 @@ class QixGame:
         if asyncio is None:
             return self.main_loop(joystick)
         await _run_game_loop_async(35, self._build_step(joystick))
+
 
 # ---------- Tetris ----------
 class TetrisGame:
@@ -4114,23 +4631,29 @@ class TetrisGame:
       - Up / Z: rotate piece
       - C: return to menu
     """
+
     GRID_WIDTH = 16
     GRID_HEIGHT = 13
     BLOCK_SIZE = 4
 
     COLORS = (
-        (0, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255),
-        (255, 255, 0), (255, 165, 0), (128, 0, 128),
+        (0, 255, 255),
+        (255, 0, 0),
+        (0, 255, 0),
+        (0, 0, 255),
+        (255, 255, 0),
+        (255, 165, 0),
+        (128, 0, 128),
     )
 
     TETRIMINOS = (
-        ((1,1,1,1),),                # I
-        ((1,1,1),(0,1,0)),          # T
-        ((1,1,0),(0,1,1)),          # S
-        ((0,1,1),(1,1,0)),          # Z
-        ((1,1),(1,1)),              # O
-        ((1,1,1),(1,0,0)),          # L
-        ((1,1,1),(0,0,1)),          # J
+        ((1, 1, 1, 1),),  # I
+        ((1, 1, 1), (0, 1, 0)),  # T
+        ((1, 1, 0), (0, 1, 1)),  # S
+        ((0, 1, 1), (1, 1, 0)),  # Z
+        ((1, 1), (1, 1)),  # O
+        ((1, 1, 1), (1, 0, 0)),  # L
+        ((1, 1, 1), (0, 0, 1)),  # J
     )
 
     class Piece:
@@ -4209,7 +4732,9 @@ class TetrisGame:
         y1 = gy * self.BLOCK_SIZE
         if isinstance(color, int):
             color = self.COLORS[(color - 1) % len(self.COLORS)]
-        draw_rectangle(x1, y1, x1 + self.BLOCK_SIZE - 1, y1 + self.BLOCK_SIZE - 1, *color)
+        draw_rectangle(
+            x1, y1, x1 + self.BLOCK_SIZE - 1, y1 + self.BLOCK_SIZE - 1, *color
+        )
 
     def render(self):
         display.clear()
@@ -4241,6 +4766,7 @@ class TetrisGame:
         self.last_input = ticks_ms()
         self.fall_ms = 520
         display_score_and_time(0, force=True)
+
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
@@ -4248,7 +4774,9 @@ class TetrisGame:
                 return False
             now = ticks_ms()
             if ticks_diff(now, self.last_input) >= self.input_ms:
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT and self.valid(self.current, dx=-1):
                     self.current.x -= 1
                 elif d == JOYSTICK_RIGHT and self.valid(self.current, dx=1):
@@ -4284,6 +4812,7 @@ class TetrisGame:
             self.render()
             display_score_and_time(self.score)
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -4294,6 +4823,7 @@ class TetrisGame:
             return self.main_loop(joystick)
         await _run_game_loop_async(35, self._build_step(joystick))
 
+
 # ---------- Maze ----------
 class MazeGame:
     """
@@ -4303,6 +4833,7 @@ class MazeGame:
       - Z: shoot
       - C: return to menu
     """
+
     WALL = 0
     PATH = 1
     PLAYER = 2
@@ -4340,7 +4871,12 @@ class MazeGame:
         visited[self._idx(start_x, start_y)] = 1
         set_grid_value(start_x, start_y, self.PATH)
 
-        dirs = ((0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0))
+        dirs = (
+            (0, self.MazeWaySize),
+            (0, -self.MazeWaySize),
+            (self.MazeWaySize, 0),
+            (-self.MazeWaySize, 0),
+        )
         dir_order = [0, 1, 2, 3]
 
         while stack:
@@ -4354,7 +4890,11 @@ class MazeGame:
             for di in dir_order:
                 dx, dy = dirs[di]
                 nx, ny = x + dx, y + dy
-                if self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER and not visited[self._idx(nx, ny)]:
+                if (
+                    self.BORDER <= nx < WIDTH - self.BORDER
+                    and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER
+                    and not visited[self._idx(nx, ny)]
+                ):
                     step_x = dx // self.MazeWaySize
                     step_y = dy // self.MazeWaySize
                     for k in range(self.MazeWaySize):
@@ -4373,7 +4913,12 @@ class MazeGame:
         self._add_extra_connections()
 
     def _add_extra_connections(self):
-        dirs = ((0, self.MazeWaySize), (0, -self.MazeWaySize), (self.MazeWaySize, 0), (-self.MazeWaySize, 0))
+        dirs = (
+            (0, self.MazeWaySize),
+            (0, -self.MazeWaySize),
+            (self.MazeWaySize, 0),
+            (-self.MazeWaySize, 0),
+        )
         added = 0
         attempts = 0
         target = 20 if not CONFIG_LOW_RAM_MODE else 12
@@ -4385,7 +4930,10 @@ class MazeGame:
                 continue
             dx, dy = dirs[random.randint(0, len(dirs) - 1)]
             nx, ny = x + dx, y + dy
-            if not (self.BORDER <= nx < WIDTH - self.BORDER and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER):
+            if not (
+                self.BORDER <= nx < WIDTH - self.BORDER
+                and self.BORDER <= ny < PLAY_HEIGHT - self.BORDER
+            ):
                 continue
             if get_grid_value(nx, ny) != self.PATH:
                 continue
@@ -4436,11 +4984,13 @@ class MazeGame:
     def get_visible_cells(self):
         vis = []
         seen = set()
+
         def add_vis(px, py):
             cell = (px, py)
             if cell not in seen:
                 seen.add(cell)
                 vis.append(cell)
+
         def add_side_peek(px, py, dx, dy):
             if abs(px - x) + abs(py - y) > 5:
                 return
@@ -4457,9 +5007,10 @@ class MazeGame:
                     add_vis(bx, by)
                     if v == self.ENEMY:
                         break
+
         x, y = self.player_x, self.player_y
         add_vis(x, y)
-        dirs = ((-1,0), (1,0), (0,-1), (0,1))
+        dirs = ((-1, 0), (1, 0), (0, -1), (0, 1))
         for dx, dy in dirs:
             nx, ny = x, y
             while True:
@@ -4507,7 +5058,9 @@ class MazeGame:
                 sp(x, y, 255, 255, 0)
 
     def move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
 
@@ -4532,9 +5085,9 @@ class MazeGame:
 
     def move_enemies(self):
         new_enemies = []
-        for (ex, ey) in self.enemies:
+        for ex, ey in self.enemies:
             moves = []
-            for dx, dy in [(0,-1),(0,1),(-1,0),(1,0)]:
+            for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
                 nx, ny = ex + dx, ey + dy
                 if in_bounds(nx, ny) and get_grid_value(nx, ny) == self.PATH:
                     moves.append((nx, ny))
@@ -4630,8 +5183,15 @@ class MazeGame:
             if not self.enemies and not self.gems:
                 set_game_over_score(self.score, won=True)
                 loop_iteration.won = True
-                show_center_message(("YOU", "WON"), start_y=18, line_height=15,
-                                    r=0, g=255, b=0, delay_ms=win_delay_ms)
+                show_center_message(
+                    ("YOU", "WON"),
+                    start_y=18,
+                    line_height=15,
+                    r=0,
+                    g=255,
+                    b=0,
+                    delay_ms=win_delay_ms,
+                )
                 return False
             return True
 
@@ -4649,6 +5209,7 @@ class MazeGame:
         if getattr(step, "won", False):
             await sleep_ms_async(1500)
 
+
 # ---------- FLAPPY ----------
 class FlappyGame:
     """
@@ -4657,6 +5218,7 @@ class FlappyGame:
       - Z / Up: flap
       - C: return to menu
     """
+
     def __init__(self):
         self.reset()
 
@@ -4715,7 +5277,9 @@ class FlappyGame:
                 draw_rectangle(x, 0, x + self.pipe_w - 1, top_end, 0, 200, 0)
             # bottom
             if bot_start < PLAY_HEIGHT - 1:
-                draw_rectangle(x, bot_start, x + self.pipe_w - 1, PLAY_HEIGHT - 1, 0, 200, 0)
+                draw_rectangle(
+                    x, bot_start, x + self.pipe_w - 1, PLAY_HEIGHT - 1, 0, 200, 0
+                )
 
         # bird (2x2)
         y = int(self.by)
@@ -4727,6 +5291,7 @@ class FlappyGame:
         global_score = 0
         self.reset()
         display_score_and_time(0, force=True)
+
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
@@ -4760,6 +5325,7 @@ class FlappyGame:
             self.draw()
             display_score_and_time(self.score)
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -4779,6 +5345,7 @@ class DodgeGame(FrameLoopGame):
       - Z: kurzer Dash in die letzte Richtung
       - C: zurück ins Menü
     """
+
     MAX_OBSTACLES = 12
     START_SPAWN_MS = 520
     FRAME_MS = 38
@@ -4792,11 +5359,11 @@ class DodgeGame(FrameLoopGame):
     def reset(self):
         self.player_x = float(WIDTH) / 2.0
         self.player_y = float(PLAY_HEIGHT) - 4.0
-        self.obstacles = []      # [x, y, w, h, vx, vy, color_hue]
+        self.obstacles = []  # [x, y, w, h, vx, vy, color_hue]
         self.score = 0
         self.last_dir = None
         self.last_spawn = ticks_ms()
-        self.spawn_ms = self.START_SPAWN_MS      # wird mit steigender Punktzahl schneller
+        self.spawn_ms = self.START_SPAWN_MS  # wird mit steigender Punktzahl schneller
         self.frame_ms = self.FRAME_MS
 
     def _spawn_obstacle(self):
@@ -4828,8 +5395,8 @@ class DodgeGame(FrameLoopGame):
     def _advance_obstacles(self):
         new_obs = []
         for o in self.obstacles:
-            o[0] += o[4] # x += vx
-            o[1] += o[5] # y += vy
+            o[0] += o[4]  # x += vx
+            o[1] += o[5]  # y += vy
             # bounce off walls
             if o[0] < 0:
                 o[0] = 0
@@ -4845,7 +5412,7 @@ class DodgeGame(FrameLoopGame):
         self.obstacles = new_obs
 
     def _collides(self):
-        # Spieler 3x3 Block 
+        # Spieler 3x3 Block
         px = int(self.player_x)
         py = int(self.player_y)
         px2 = px + 2
@@ -4867,7 +5434,7 @@ class DodgeGame(FrameLoopGame):
             oy = int(o[1])
             r, g, b = hsb_to_rgb(o[6], 1, 1)
             draw_rectangle(ox, oy, ox + o[2] - 1, oy + o[3] - 1, r, g, b)
-            
+
         # Spieler
         px = int(self.player_x)
         py = int(self.player_y)
@@ -4880,6 +5447,7 @@ class DodgeGame(FrameLoopGame):
         global_score = 0
         self.reset()
         display_score_and_time(0, force=True)
+
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
@@ -4889,7 +5457,10 @@ class DodgeGame(FrameLoopGame):
             if ticks_diff(now, self.last_spawn) >= self.spawn_ms:
                 self._spawn_obstacle()
                 self.last_spawn = now
-                if self.spawn_ms > self.MIN_SPAWN_MS and (self.score % self.DIFFICULTY_SCORE_INTERVAL) == 0:
+                if (
+                    self.spawn_ms > self.MIN_SPAWN_MS
+                    and (self.score % self.DIFFICULTY_SCORE_INTERVAL) == 0
+                ):
                     self.spawn_ms -= self.SPAWN_MS_DECREMENT
             self._move_player(joystick, z_button)
             self._advance_obstacles()
@@ -4900,6 +5471,7 @@ class DodgeGame(FrameLoopGame):
             global_score = self.score
             self._draw()
             return True
+
         return step
 
 
@@ -4911,6 +5483,7 @@ class InvaderGame(FrameLoopGame):
       - Z: fire
       - C: return to menu
     """
+
     FRAME_MS = 38
     ALIEN_COLS = 8
     ALIEN_ROWS = 5
@@ -5066,7 +5639,10 @@ class InvaderGame(FrameLoopGame):
             return
         now = ticks_ms()
         live_count = self._live_count()
-        interval = max(230, 900 - self.wave * 55 - (self.ALIEN_ROWS * self.ALIEN_COLS - live_count) * 8)
+        interval = max(
+            230,
+            900 - self.wave * 55 - (self.ALIEN_ROWS * self.ALIEN_COLS - live_count) * 8,
+        )
         if ticks_diff(now, self.last_bomb) < interval:
             return
         self.last_bomb = now
@@ -5149,13 +5725,49 @@ class InvaderGame(FrameLoopGame):
     def _draw_alien(self, x, y, typ):
         # Three tiny sprite silhouettes preserve the original row hierarchy.
         if typ == 0:
-            pts = ((2, 0), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (3, 2), (4, 2), (0, 3), (4, 3))
+            pts = (
+                (2, 0),
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (0, 2),
+                (1, 2),
+                (3, 2),
+                (4, 2),
+                (0, 3),
+                (4, 3),
+            )
             color = (200, 120, 255)
         elif typ < 3:
-            pts = ((1, 0), (3, 0), (0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (0, 2), (2, 2), (4, 2), (1, 3), (3, 3))
+            pts = (
+                (1, 0),
+                (3, 0),
+                (0, 1),
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (4, 1),
+                (0, 2),
+                (2, 2),
+                (4, 2),
+                (1, 3),
+                (3, 3),
+            )
             color = (0, 220, 80)
         else:
-            pts = ((0, 0), (4, 0), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (3, 2), (4, 2), (1, 3), (3, 3))
+            pts = (
+                (0, 0),
+                (4, 0),
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (0, 2),
+                (1, 2),
+                (3, 2),
+                (4, 2),
+                (1, 3),
+                (3, 3),
+            )
             color = (0, 180, 255)
         for px, py in pts:
             display.set_pixel(x + px, y + py, color[0], color[1], color[2])
@@ -5231,11 +5843,13 @@ class InvaderGame(FrameLoopGame):
     def _build_step(self, joystick):
         self.reset()
         begin_game(0)
+
         def step():
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
             return self._step(joystick, z_button)
+
         return step
 
 
@@ -5244,9 +5858,11 @@ class TronGame(FrameLoopGame):
     TRON LIGHT CYCLE (Endless)
     Controls:
       - Left/Right: 90° turn
-      - Z: Turbo (double step)
+      - P1: WASD + Shift turbo in 2P mode
+      - P2: Arrow keys + Z turbo in 2P mode
       - C: Back to menu
     """
+
     FRAME_MS = 62
     TURBO_STEP = 2
     HUE_STEP = 7
@@ -5284,13 +5900,13 @@ class TronGame(FrameLoopGame):
         self.head_x = WIDTH // 4
         self.head_y = PLAY_HEIGHT // 2
         self.direction = self.DIR_RIGHT
-        
+
         self.enemy_x = WIDTH - (WIDTH // 4)
         self.enemy_y = PLAY_HEIGHT // 2
         self.enemy_dir = self.DIR_LEFT
         self.enemy_alive = True
         self.enemy_score = 0
-        
+
         self.score = 0
         self._palette = TronGame._palette()
 
@@ -5335,7 +5951,7 @@ class TronGame(FrameLoopGame):
             if self._blocked(nx, ny):
                 break
             dist += 1
-            if dist > 8: # don't need to look too far
+            if dist > 8:  # don't need to look too far
                 break
         return dist
 
@@ -5366,7 +5982,7 @@ class TronGame(FrameLoopGame):
             ry = random.randint(4, PLAY_HEIGHT - 5)
             if self._blocked(rx, ry):
                 continue
-            # Keep the respawn readable and avoid spawning directly on top of the player.
+            # Keep respawns readable and away from the player's current position.
             if abs(rx - self.head_x) + abs(ry - self.head_y) < 14:
                 continue
             e_dir, clear = self._best_enemy_dir_from(rx, ry)
@@ -5402,7 +6018,7 @@ class TronGame(FrameLoopGame):
                         self.enemy_dir = l_dir
                     elif r_dist >= l_dist and r_dist > fwd_dist:
                         self.enemy_dir = r_dir
-            
+
             # Enemy moves 1 step per frame normally
             edx, edy = self._DIR_VECS[self.enemy_dir]
             enx, eny = self.enemy_x + edx, self.enemy_y + edy
@@ -5410,7 +6026,15 @@ class TronGame(FrameLoopGame):
                 self.enemy_alive = False
                 # Optionally add big score for killing enemy
                 self.score += 150
-                draw_rectangle(self.enemy_x - 2, self.enemy_y - 2, self.enemy_x + 2, self.enemy_y + 2, 255, 100, 0)
+                draw_rectangle(
+                    self.enemy_x - 2,
+                    self.enemy_y - 2,
+                    self.enemy_x + 2,
+                    self.enemy_y + 2,
+                    255,
+                    100,
+                    0,
+                )
             else:
                 self.enemy_x = enx
                 self.enemy_y = eny
@@ -5433,6 +6057,46 @@ class TronGame(FrameLoopGame):
             self._draw_head()
         return True
 
+    def _step_two_player(self, p1_turbo, p2_turbo):
+        """Advance both cycles from the same board state for fair collisions."""
+        p1_steps = self.TURBO_STEP if p1_turbo else 1
+        p2_steps = self.TURBO_STEP if p2_turbo else 1
+        for phase in range(max(p1_steps, p2_steps)):
+            p1_moves = phase < p1_steps
+            p2_moves = phase < p2_steps
+            p1_next = None
+            p2_next = None
+            p1_alive = True
+            p2_alive = True
+
+            if p1_moves:
+                dx, dy = self._DIR_VECS[self.direction]
+                p1_next = self.head_x + dx, self.head_y + dy
+                p1_alive = not self._blocked(p1_next[0], p1_next[1])
+            if p2_moves:
+                dx, dy = self._DIR_VECS[self.enemy_dir]
+                p2_next = self.enemy_x + dx, self.enemy_y + dy
+                p2_alive = not self._blocked(p2_next[0], p2_next[1])
+
+            # Reaching one free cell at the same time is a draw, regardless of
+            # whether player one or player two happens to be processed first.
+            if p1_moves and p2_moves and p1_next == p2_next:
+                return False, False
+            if not p1_alive or not p2_alive:
+                return p1_alive, p2_alive
+
+            if p1_moves:
+                self.head_x, self.head_y = p1_next
+                self.score += 1
+                self._occupy(self.head_x, self.head_y)
+                self._draw_head()
+            if p2_moves:
+                self.enemy_x, self.enemy_y = p2_next
+                self.enemy_score += 1
+                self._occupy(self.enemy_x, self.enemy_y)
+                self._draw_enemy()
+        return True, True
+
     def _draw_head(self, force=False):
         color = self._palette[self.score % len(self._palette)]
         r, g, b = color
@@ -5446,37 +6110,63 @@ class TronGame(FrameLoopGame):
         if force:
             display_flush()
 
+    def _draw_match_score(self):
+        if self.players_mode != "two":
+            display_score_and_time(self.score)
+            return
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, "1" + str(self.score), 80, 210, 255)
+        draw_text_small(23, PLAY_HEIGHT, "-", 255, 255, 255)
+        draw_text_small(30, PLAY_HEIGHT, "2" + str(self.enemy_score), 255, 90, 75)
+        display_flush()
+
     def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
         self.reset()
+
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
             if self.players_mode == "two":
-                _p1_back, p1_action = read_wasd_buttons()
-                turn = read_wasd_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
-                z_button = p1_action
+                turn, p1_action = read_wasd_input(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True
+                )
+                p2_turbo = z_button
             else:
                 turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                p2_turbo = False
             if turn:
                 self._turn(turn)
             if self.players_mode == "two":
                 p2_turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
                 if p2_turn:
                     self._turn_enemy(p2_turn)
-            alive = self._step(turbo=z_button)
+                p1_alive, p2_alive = self._step_two_player(p1_action, p2_turbo)
+                if not p1_alive or not p2_alive:
+                    if p1_alive:
+                        self.score += 150
+                    elif p2_alive:
+                        self.enemy_score += 150
+                    set_game_over_score(self.score, won=p1_alive and not p2_alive)
+                    return False
+            else:
+                if not self._step(turbo=z_button):
+                    game_over = True
+                    return False
             global_score = self.score
-            display_score_and_time(self.score)
-            if not alive:
-                game_over = True
-                return False
-            if not self.enemy_alive and random.randint(0, 15) == 0:
+            self._draw_match_score()
+            if (
+                self.players_mode != "two"
+                and not self.enemy_alive
+                and random.randint(0, 15) == 0
+            ):
                 self._try_respawn_enemy()
             return True
+
         return step
 
 
@@ -5488,6 +6178,7 @@ class RTypeGame:
       - Z: schießen
       - C: zurück ins Menü
     """
+
     # kleine Sinus-LUT (±4) für "wobble" Gegner ohne math.sin
     _SIN = (0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1)
     MAX_BULLETS = 6
@@ -5508,10 +6199,10 @@ class RTypeGame:
         self.py = PLAY_HEIGHT // 2
 
         # Projectiles
-        self.bullets = []     # [x,y]
-        self.ebullets = []    # [x,y]
+        self.bullets = []  # [x,y]
+        self.ebullets = []  # [x,y]
         self.fire_cd = 0
-        self.power_t = 0      # frames power-up active
+        self.power_t = 0  # frames power-up active
 
         # Enemies: [x, y, typ, hp, phase, cd, basey]
         self.enemies = []
@@ -5526,9 +6217,13 @@ class RTypeGame:
         # Stars background
         self.stars = []
         for _ in range(18):
-            self.stars.append([random.randint(0, WIDTH - 1),
-                               random.randint(0, PLAY_HEIGHT - 1),
-                               random.randint(1, 3)])
+            self.stars.append(
+                [
+                    random.randint(0, WIDTH - 1),
+                    random.randint(0, PLAY_HEIGHT - 1),
+                    random.randint(1, 3),
+                ]
+            )
 
         self.frame = 0
         self.last_logic = ticks_ms()
@@ -5595,7 +6290,10 @@ class RTypeGame:
                 continue
 
             # collect
-            if abs(p[0] - (self.px + self.pw // 2)) <= 2 and abs(p[1] - (self.py + 1)) <= 2:
+            if (
+                abs(p[0] - (self.px + self.pw // 2)) <= 2
+                and abs(p[1] - (self.py + 1)) <= 2
+            ):
                 self.power_t = 240  # roughly 8 seconds at the current tick speed
                 # small bonus
                 self.score += 5
@@ -5711,9 +6409,12 @@ class RTypeGame:
                     self.enemies.remove(hit)
                     # score
                     typ = hit[2]
-                    self.score += (10 + typ * 7)
+                    self.score += 10 + typ * 7
                     # chance for powerup
-                    if random.randint(0, 99) < 12 and len(self.powerups) < self.MAX_POWERUPS:
+                    if (
+                        random.randint(0, 99) < 12
+                        and len(self.powerups) < self.MAX_POWERUPS
+                    ):
                         self.powerups.append([hit[0], hit[1], 400])
                 else:
                     self.score += 1  # hit bonus
@@ -5805,7 +6506,9 @@ class RTypeGame:
                 self.power_t -= 1
 
             # input
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             step = 2
             if d == JOYSTICK_UP:
                 self.py -= step
@@ -5840,7 +6543,10 @@ class RTypeGame:
 
             # spawn
             self._difficulty_update()
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms and len(self.enemies) < self.MAX_ENEMIES:
+            if (
+                ticks_diff(now, self.last_spawn) >= self.spawn_ms
+                and len(self.enemies) < self.MAX_ENEMIES
+            ):
                 self.last_spawn = now
                 self._spawn_enemy()
 
@@ -5882,7 +6588,9 @@ class RTypeGame:
                 self.power_t -= 1
 
             # input
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             step = 2
             if d == JOYSTICK_UP:
                 self.py -= step
@@ -5918,7 +6626,10 @@ class RTypeGame:
             # spawn
             now = ticks_ms()
             self._difficulty_update()
-            if ticks_diff(now, self.last_spawn) >= self.spawn_ms and len(self.enemies) < self.MAX_ENEMIES:
+            if (
+                ticks_diff(now, self.last_spawn) >= self.spawn_ms
+                and len(self.enemies) < self.MAX_ENEMIES
+            ):
                 self.last_spawn = now
                 self._spawn_enemy()
 
@@ -5943,6 +6654,7 @@ class PacmanGame:
       - Stick: Richtung
       - C: zurück ins Menü
     """
+
     W = 16
     H = 14
     CELL = 4
@@ -6006,7 +6718,7 @@ class PacmanGame:
 
     # dirs: 0 U, 1 D, 2 L, 3 R
     DIRS = ((0, -1), (0, 1), (-1, 0), (1, 0))
-    OPP  = (1, 0, 3, 2)
+    OPP = (1, 0, 3, 2)
     GHOST_ACTIVE = 0
     GHOST_HIDDEN = 1
     GHOST_HARMLESS = 2
@@ -6022,8 +6734,8 @@ class PacmanGame:
 
     def _load_level(self):
         self.map = self.MAPS[self.level % len(self.MAPS)]
-        self.wall = bytearray(self.W * self.H)      # 1 if wall
-        self.pel = bytearray(self.W * self.H)       # 0 none, 1 pellet, 2 power
+        self.wall = bytearray(self.W * self.H)  # 1 if wall
+        self.pel = bytearray(self.W * self.H)  # 0 none, 1 pellet, 2 power
         self.wall_list = []
 
         self.px = 1
@@ -6060,7 +6772,9 @@ class PacmanGame:
                         self.px, self.py = x, y
                     elif ch == "G":
                         # ghost start
-                        self.ghosts.append([x, y, random.randint(0, 3), x, y, self.GHOST_ACTIVE, 0])
+                        self.ghosts.append(
+                            [x, y, random.randint(0, 3), x, y, self.GHOST_ACTIVE, 0]
+                        )
 
         if len(self.ghosts) < 2:
             # safety
@@ -6147,7 +6861,7 @@ class PacmanGame:
         best = moves[0]
         bestv = None
 
-        frightened = (self.power_timer > 0)
+        frightened = self.power_timer > 0
         for nd in moves:
             dx, dy = self.DIRS[nd]
             nx = x + dx
@@ -6281,7 +6995,7 @@ class PacmanGame:
         display.set_pixel(px + 1, py + 1, 255, 255, 120)
 
     def _draw_ghosts(self):
-        frightened = (self.power_timer > 0)
+        frightened = self.power_timer > 0
         for gi, g in enumerate(self.ghosts):
             if g[5] == self.GHOST_HIDDEN:
                 continue
@@ -6298,7 +7012,9 @@ class PacmanGame:
             eye = 140 if g[5] == self.GHOST_HARMLESS else 255
             display.set_pixel(gx + 1, gy + 1, eye, eye, eye)
             display.set_pixel(gx + 2, gy + 1, eye, eye, eye)
-            eye_col = (0, 0, 90) if frightened or g[5] == self.GHOST_HARMLESS else (0, 0, 0)
+            eye_col = (
+                (0, 0, 90) if frightened or g[5] == self.GHOST_HARMLESS else (0, 0, 0)
+            )
             display.set_pixel(gx + 1, gy + 2, *eye_col)
             display.set_pixel(gx + 2, gy + 2, *eye_col)
             if not frightened and g[5] == self.GHOST_ACTIVE:
@@ -6308,7 +7024,7 @@ class PacmanGame:
     def _draw_background(self):
         display.clear()
         # walls
-        for (x, y) in self.wall_list:
+        for x, y in self.wall_list:
             self._draw_wall_cell(x, y)
 
         # pellets
@@ -6340,7 +7056,7 @@ class PacmanGame:
             self._draw_background()
 
         # restore background for dirty cells first
-        for (x, y) in dirty:
+        for x, y in dirty:
             if 0 <= x < self.W and 0 <= y < self.H:
                 self._draw_bg_cell(x, y)
 
@@ -6372,7 +7088,9 @@ class PacmanGame:
             now = ticks_ms()
 
             # read input often
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             if d == JOYSTICK_UP:
                 self.want_dir = 0
             elif d == JOYSTICK_DOWN:
@@ -6407,13 +7125,31 @@ class PacmanGame:
                     self.score += 100 + self.level * 50
                     global_score = self.score
                     if self.level + 1 >= len(self.MAPS):
-                        show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score, delay_ms=1300)
+                        show_center_message(
+                            ("YOU", "WON"),
+                            start_y=18,
+                            line_height=15,
+                            r=0,
+                            g=255,
+                            b=0,
+                            score=global_score,
+                            delay_ms=1300,
+                        )
                         return
                     self.level += 1
                     self._load_level()
                     self._draw_background()
                     self._draw()
-                    show_center_message(("LVL", str(self.level + 1)), start_y=18, line_height=15, r=255, g=255, b=0, score=global_score, delay_ms=700)
+                    show_center_message(
+                        ("LVL", str(self.level + 1)),
+                        start_y=18,
+                        line_height=15,
+                        r=255,
+                        g=255,
+                        b=0,
+                        score=global_score,
+                        delay_ms=700,
+                    )
                     self.last_logic = ticks_ms()
                     self._drawn_bg = False
                     self._dirty = True
@@ -6423,9 +7159,11 @@ class PacmanGame:
 
                 # incremental redraw: old/new sprite cells without allocating a set
                 dirty = []
+
                 def add_dirty(cell):
                     if cell not in dirty:
                         dirty.append(cell)
+
                 add_dirty((old_px, old_py))
                 add_dirty((self.px, self.py))
                 for p in old_ghosts:
@@ -6475,7 +7213,9 @@ class PacmanGame:
             now = ticks_ms()
 
             # read input often
-            d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+            d = joystick.read_direction(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            )
             if d == JOYSTICK_UP:
                 self.want_dir = 0
             elif d == JOYSTICK_DOWN:
@@ -6510,14 +7250,30 @@ class PacmanGame:
                     self.score += 100 + self.level * 50
                     global_score = self.score
                     if self.level + 1 >= len(self.MAPS):
-                        show_center_message(("YOU", "WON"), start_y=18, line_height=15, r=0, g=255, b=0, score=global_score)
+                        show_center_message(
+                            ("YOU", "WON"),
+                            start_y=18,
+                            line_height=15,
+                            r=0,
+                            g=255,
+                            b=0,
+                            score=global_score,
+                        )
                         await asyncio.sleep(1.3)
                         return
                     self.level += 1
                     self._load_level()
                     self._draw_background()
                     self._draw()
-                    show_center_message(("LVL", str(self.level + 1)), start_y=18, line_height=15, r=255, g=255, b=0, score=global_score)
+                    show_center_message(
+                        ("LVL", str(self.level + 1)),
+                        start_y=18,
+                        line_height=15,
+                        r=255,
+                        g=255,
+                        b=0,
+                        score=global_score,
+                    )
                     await asyncio.sleep(0.7)
                     self.last_logic = ticks_ms()
                     self._drawn_bg = False
@@ -6528,9 +7284,11 @@ class PacmanGame:
 
                 # incremental redraw: old/new sprite cells without allocating a set
                 dirty = []
+
                 def add_dirty(cell):
                     if cell not in dirty:
                         dirty.append(cell)
+
                 add_dirty((old_px, old_py))
                 add_dirty((self.px, self.py))
                 for p in old_ghosts:
@@ -6565,6 +7323,7 @@ class CaveFlyGame:
       - Links/Rechts: seitlich durch die Höhle steuern
       - C: zurück ins Menü
     """
+
     def __init__(self):
         self.reset()
 
@@ -6593,7 +7352,10 @@ class CaveFlyGame:
             self._gen_row_at((self.head + y) % PLAY_HEIGHT)
 
         # Ensure player starts in the middle of the opening
-        mid = (int(self.left_wall[self._idx_row(self.by)]) + int(self.right_wall[self._idx_row(self.by)])) // 2
+        mid = (
+            int(self.left_wall[self._idx_row(self.by)])
+            + int(self.right_wall[self._idx_row(self.by)])
+        ) // 2
         self.bx = self._clamp(mid, 1, WIDTH - 3)
 
     def _clamp(self, v, lo, hi):
@@ -6610,7 +7372,9 @@ class CaveFlyGame:
 
         # center drift (keep within bounds)
         self.center += random.randint(-2, 2)
-        self.center = self._clamp(self.center, (self.gap // 2) + 3, WIDTH - (self.gap // 2) - 4)
+        self.center = self._clamp(
+            self.center, (self.gap // 2) + 3, WIDTH - (self.gap // 2) - 4
+        )
 
         left = self.center - (self.gap // 2)
         right = self.center + (self.gap // 2)
@@ -6671,6 +7435,7 @@ class CaveFlyGame:
         global_score = 0
         self.reset()
         display_score_and_time(0, force=True)
+
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
@@ -6691,6 +7456,7 @@ class CaveFlyGame:
                 return False
             self._draw()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -6728,6 +7494,7 @@ class CentipedeGame:
     Atari-inspired centipede shooter with mushrooms, segmented enemies, and
     wave progression on a compact 32x29 logical grid.
     """
+
     FRAME_MS = 34
     CELL = 2
     GW = WIDTH // CELL
@@ -6773,7 +7540,9 @@ class CentipedeGame:
         return None
 
     def _move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             self.px = clamp(self.px + dx, 1, self.GW - 2)
@@ -6841,7 +7610,15 @@ class CentipedeGame:
 
     def _draw(self):
         display.clear()
-        draw_line(0, self.PLAYER_MIN_Y * self.CELL - 1, WIDTH - 1, self.PLAYER_MIN_Y * self.CELL - 1, 25, 70, 25)
+        draw_line(
+            0,
+            self.PLAYER_MIN_Y * self.CELL - 1,
+            WIDTH - 1,
+            self.PLAYER_MIN_Y * self.CELL - 1,
+            25,
+            70,
+            25,
+        )
         for x, y, hp in self.mushrooms:
             col = (180, 80, 210) if hp > 1 else (90, 45, 120)
             self._draw_cell(x, y, col)
@@ -6851,7 +7628,15 @@ class CentipedeGame:
         for i, seg in enumerate(self.centipede):
             col = (255, 80, 50) if i == 0 else (255, 170, 30)
             self._draw_cell(seg[0], seg[1], col)
-        draw_rectangle(self.px * self.CELL - 1, self.py * self.CELL - 1, self.px * self.CELL + 1, self.py * self.CELL + 1, 70, 210, 255)
+        draw_rectangle(
+            self.px * self.CELL - 1,
+            self.py * self.CELL - 1,
+            self.px * self.CELL + 1,
+            self.py * self.CELL + 1,
+            70,
+            210,
+            255,
+        )
         draw_text_small(1, PLAY_HEIGHT, "W" + str(self.wave), 180, 180, 180)
         display_score_and_time(self.score)
 
@@ -6878,6 +7663,7 @@ class CentipedeGame:
                 self._new_wave(reset_player=False)
             self._draw()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -6901,6 +7687,7 @@ class ArtilleryGame:
       - C: return to menu
     Turn-based artillery duel with wind, terrain craters, and a CPU gunner.
     """
+
     FRAME_MS = 45
     GRAVITY = 0.075
 
@@ -6949,13 +7736,21 @@ class ArtilleryGame:
         rad = math.radians(angle)
         sign = 1 if owner == "player" else -1
         speed = power * 0.12
-        self.shell = [float(sx), float(sy), math.cos(rad) * speed * sign, -math.sin(rad) * speed, owner]
+        self.shell = [
+            float(sx),
+            float(sy),
+            math.cos(rad) * speed * sign,
+            -math.sin(rad) * speed,
+            owner,
+        ]
 
     def _crater(self, cx, cy):
         self.explosion = [int(cx), int(cy), 8]
         for x in range(max(0, int(cx) - 5), min(WIDTH, int(cx) + 6)):
             d = abs(x - int(cx))
-            self.terrain[x] = clamp(self.terrain[x] + max(1, 4 - d // 2), 25, PLAY_HEIGHT - 1)
+            self.terrain[x] = clamp(
+                self.terrain[x] + max(1, 4 - d // 2), 25, PLAY_HEIGHT - 1
+            )
 
     def _hit_tank(self, x, y, tank_x):
         tx, ty = self._tank_pos(tank_x)
@@ -7050,7 +7845,9 @@ class ArtilleryGame:
             if c_button:
                 return False
             if self.turn == "player" and not self.shell:
-                d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                d = joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                )
                 if d == JOYSTICK_UP:
                     self.angle = min(80, self.angle + 1)
                 elif d == JOYSTICK_DOWN:
@@ -7067,6 +7864,7 @@ class ArtilleryGame:
                 return False
             self._draw()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -7090,6 +7888,7 @@ class WormsGame(FrameLoopGame):
       - C: return to menu
     Tiny turn-based worms/artillery game with teams and destructible terrain.
     """
+
     FRAME_MS = 45
     GRAVITY = 0.080
 
@@ -7110,9 +7909,15 @@ class WormsGame(FrameLoopGame):
         self.last_fire = [False, False]
         self.cpu_wait = 26
         self.turns = 0
+        self._terrain_dirty = True
+        self._drawn_worms = []
+        self._drawn_aim_bounds = None
+        self._drawn_shell = None
+        self._drawn_explosion = None
         self._new_match()
 
     def _new_match(self):
+        self._terrain_dirty = True
         self.terrain = []
         base = 42
         for x in range(WIDTH):
@@ -7124,8 +7929,12 @@ class WormsGame(FrameLoopGame):
         for i in range(self.team_size):
             lx = left_slots[i]
             rx = right_slots[i]
-            self.worms[0].append({"x": float(lx), "y": float(self._ground_y(lx) - 2), "hp": 2})
-            self.worms[1].append({"x": float(rx), "y": float(self._ground_y(rx) - 2), "hp": 2})
+            self.worms[0].append(
+                {"x": float(lx), "y": float(self._ground_y(lx) - 2), "hp": 2}
+            )
+            self.worms[1].append(
+                {"x": float(rx), "y": float(self._ground_y(rx) - 2), "hp": 2}
+            )
         self._settle_all()
         self.turn_team = 0
         self.active = [0, 0]
@@ -7169,6 +7978,7 @@ class WormsGame(FrameLoopGame):
             d = abs(x - icx)
             cut = max(1, radius - d)
             self.terrain[x] = clamp(self.terrain[x] + cut, 22, PLAY_HEIGHT - 1)
+        self._terrain_dirty = True
         self._damage_worms(cx, cy, radius + 2)
         self._settle_all()
 
@@ -7193,7 +8003,9 @@ class WormsGame(FrameLoopGame):
             set_game_over_score(self.score + 250, won=True)
             return False
         self.turn_team = 1 - self.turn_team
-        self.active[self.turn_team] = (self.active[self.turn_team] + 1) % len(self.worms[self.turn_team])
+        self.active[self.turn_team] = (self.active[self.turn_team] + 1) % len(
+            self.worms[self.turn_team]
+        )
         self._select_alive(self.turn_team)
         self.wind = random.choice((-1, 1)) * random.randint(0, 5) * 0.006
         self.shell = None
@@ -7211,7 +8023,13 @@ class WormsGame(FrameLoopGame):
         sign = 1 if team == 0 else -1
         rad = math.radians(angle)
         speed = power * 0.12
-        self.shell = [w["x"], w["y"] - 3, math.cos(rad) * speed * sign, -math.sin(rad) * speed, team]
+        self.shell = [
+            w["x"],
+            w["y"] - 3,
+            math.cos(rad) * speed * sign,
+            -math.sin(rad) * speed,
+            team,
+        ]
 
     def _move_active(self, d):
         w = self._active_worm()
@@ -7279,6 +8097,30 @@ class WormsGame(FrameLoopGame):
         if w["hp"] > 1:
             display.set_pixel(x + 2, y, 255, 255, 255)
 
+    def _draw_terrain(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 10, 24)
+        for x, y in enumerate(self.terrain):
+            draw_line(x, y, x, PLAY_HEIGHT - 1, 60, 92, 45)
+            display.set_pixel(x, y, 120, 150, 70)
+
+    def _restore_terrain_region(self, x0, y0, x1, y1):
+        """Restore a dynamic sprite area from the unchanged terrain map."""
+        x0 = max(0, int(x0))
+        x1 = min(WIDTH - 1, int(x1))
+        y0 = max(0, int(y0))
+        y1 = min(PLAY_HEIGHT - 1, int(y1))
+        sp = display.set_pixel
+        for x in range(x0, x1 + 1):
+            ground_y = self.terrain[x]
+            for y in range(y0, y1 + 1):
+                if y < ground_y:
+                    sp(x, y, 0, 10, 24)
+                elif y == ground_y:
+                    sp(x, y, 120, 150, 70)
+                else:
+                    sp(x, y, 60, 92, 45)
+
     def _draw_aim(self):
         w = self._active_worm()
         sign = 1 if self.turn_team == 0 else -1
@@ -7288,24 +8130,45 @@ class WormsGame(FrameLoopGame):
         x1 = x0 + int(math.cos(rad) * 7 * sign)
         y1 = y0 - int(math.sin(rad) * 7)
         draw_line(x0, y0, x1, y1, 255, 255, 120)
+        return min(x0, x1) - 1, min(y0, y1) - 1, max(x0, x1) + 1, max(y0, y1) + 1
 
     def _draw(self):
-        display.clear()
-        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 10, 24)
-        for x, y in enumerate(self.terrain):
-            draw_line(x, y, x, PLAY_HEIGHT - 1, 60, 92, 45)
-            display.set_pixel(x, y, 120, 150, 70)
+        if self._terrain_dirty:
+            self._draw_terrain()
+            self._terrain_dirty = False
+        else:
+            for x, y in self._drawn_worms:
+                self._restore_terrain_region(x - 2, y - 4, x + 3, y + 2)
+            if self._drawn_aim_bounds is not None:
+                self._restore_terrain_region(*self._drawn_aim_bounds)
+            if self._drawn_shell is not None:
+                x, y = self._drawn_shell
+                self._restore_terrain_region(x, y, x, y)
+            if self._drawn_explosion is not None:
+                self._restore_terrain_region(*self._drawn_explosion)
+
+        drawn_worms = self._drawn_worms
+        del drawn_worms[:]
         for team in range(2):
             for i, w in enumerate(self.worms[team]):
-                self._draw_worm(w, team, team == self.turn_team and i == self.active[team])
+                self._draw_worm(
+                    w, team, team == self.turn_team and i == self.active[team]
+                )
+                if w["hp"] > 0:
+                    drawn_worms.append((int(w["x"]), int(w["y"])))
+        aim_bounds = None
         if not self.shell and (self.turn_team == 0 or self.players_mode == "two"):
-            self._draw_aim()
+            aim_bounds = self._draw_aim()
+        shell_pos = None
         if self.shell:
-            display.set_pixel(int(self.shell[0]), int(self.shell[1]), 255, 255, 180)
+            shell_pos = int(self.shell[0]), int(self.shell[1])
+            display.set_pixel(shell_pos[0], shell_pos[1], 255, 255, 180)
+        explosion_bounds = None
         if self.explosion:
             x, y, t = self.explosion
             col = (255, 220, 40) if t & 1 else (255, 70, 30)
             draw_rect_outline(x - 2, y - 2, x + 2, y + 2, *col)
+            explosion_bounds = x - 2, y - 2, x + 2, y + 2
             self.explosion[2] -= 1
             if self.explosion[2] <= 0:
                 self.explosion = None
@@ -7313,14 +8176,21 @@ class WormsGame(FrameLoopGame):
         draw_text_small(1, PLAY_HEIGHT, "A" + str(self.angle), 210, 210, 210)
         draw_text_small(19, PLAY_HEIGHT, "P" + str(self.power), 210, 210, 210)
         draw_text_small(43, PLAY_HEIGHT, "W" + str(int(self.wind * 100)), 180, 180, 180)
+        self._drawn_aim_bounds = aim_bounds
+        self._drawn_shell = shell_pos
+        self._drawn_explosion = explosion_bounds
         display_flush()
 
     def _read_turn_input(self, joystick, joystick_fire):
         if self.players_mode == "two" and self.turn_team == 0:
-            d = read_wasd_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
-            _back, fire = read_wasd_buttons()
+            d, fire = read_wasd_input(
+                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT],
+                debounce=True,
+            )
             return d, fire
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         return d, joystick_fire
 
     def _handle_player_turn(self, joystick, joystick_fire):
@@ -7337,7 +8207,11 @@ class WormsGame(FrameLoopGame):
                 self.power = clamp(self.power + delta, 6, 30)
             else:
                 self._move_active(d)
-        if fire and not self.last_fire[self.turn_team] and d not in (JOYSTICK_LEFT, JOYSTICK_RIGHT):
+        if (
+            fire
+            and not self.last_fire[self.turn_team]
+            and d not in (JOYSTICK_LEFT, JOYSTICK_RIGHT)
+        ):
             self._fire(self.turn_team, self.angle, self.power)
         self.last_fire[self.turn_team] = fire
 
@@ -7358,6 +8232,7 @@ class WormsGame(FrameLoopGame):
                 return False
             self._draw()
             return True
+
         return step
 
 
@@ -7371,6 +8246,7 @@ class BattlezoneGame:
       - C: return to menu
     Vector-style first-person tank combat with radar, shells, rocks, and waves.
     """
+
     FRAME_MS = 36
     FOV = 1.18
 
@@ -7408,7 +8284,9 @@ class BattlezoneGame:
         self.enemies = []
         self.rocks = []
         diff = self._difficulty_offset()
-        count = clamp(1 + (self.wave // 2) + (1 if diff > 0 and self.wave > 1 else 0), 1, 4)
+        count = clamp(
+            1 + (self.wave // 2) + (1 if diff > 0 and self.wave > 1 else 0), 1, 4
+        )
         for i in range(count):
             side = -1 if i % 2 == 0 else 1
             bearing = side * (0.25 + random.randint(0, 52) / 100.0)
@@ -7421,7 +8299,9 @@ class BattlezoneGame:
         if self.obstacles_enabled:
             rock_count = clamp(2 + self.wave // 3, 2, 5)
             for _ in range(rock_count):
-                bearing = random.choice((-1, 1)) * (0.18 + random.randint(0, 80) / 100.0)
+                bearing = random.choice((-1, 1)) * (
+                    0.18 + random.randint(0, 80) / 100.0
+                )
                 dist = 20.0 + random.randint(0, 52)
                 size = 1 + random.randint(0, 2)
                 self.rocks.append([bearing, dist, size])
@@ -7447,10 +8327,14 @@ class BattlezoneGame:
             if rock[1] < 8.0 and abs(rock[0]) < 0.15:
                 self._take_hit()
                 rock[1] = 46.0 + random.randint(0, 26)
-                rock[0] = random.choice((-1, 1)) * (0.45 + random.randint(0, 40) / 100.0)
+                rock[0] = random.choice((-1, 1)) * (
+                    0.45 + random.randint(0, 40) / 100.0
+                )
 
     def _move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if d == JOYSTICK_LEFT:
             self._rotate_view(0.095)
         elif d == JOYSTICK_RIGHT:
@@ -7482,7 +8366,9 @@ class BattlezoneGame:
                 enemy[5] -= 1
             if enemy[3] <= 0:
                 self.enemy_shells.append([enemy[0], enemy[1], 0])
-                enemy[3] = max(32, 105 - self.wave * 6 - diff * 17 + random.randint(0, 30))
+                enemy[3] = max(
+                    32, 105 - self.wave * 6 - diff * 17 + random.randint(0, 30)
+                )
         if self.wave_delay > 0:
             self.wave_delay -= 1
             if self.wave_delay <= 0:
@@ -7502,7 +8388,10 @@ class BattlezoneGame:
     def _hit_enemy(self, shot):
         for enemy in self.enemies:
             angular_window = 0.075 + clamp(7.0 / max(14.0, enemy[1]), 0.0, 0.22)
-            if abs(enemy[0] - shot[0]) <= angular_window and abs(enemy[1] - shot[1]) <= 4.5:
+            if (
+                abs(enemy[0] - shot[0]) <= angular_window
+                and abs(enemy[1] - shot[1]) <= 4.5
+            ):
                 enemy[5] = 5
                 self.score += 90 + self.wave * 20 + (40 if enemy[4] else 0)
                 self.enemies.remove(enemy)
@@ -7512,7 +8401,10 @@ class BattlezoneGame:
     def _hit_rock(self, shot):
         for rock in self.rocks:
             angular_window = 0.06 + rock[2] * 0.035
-            if abs(rock[0] - shot[0]) <= angular_window and abs(rock[1] - shot[1]) <= 4.0:
+            if (
+                abs(rock[0] - shot[0]) <= angular_window
+                and abs(rock[1] - shot[1]) <= 4.0
+            ):
                 self.rocks.remove(rock)
                 self.score += 8
                 return True
@@ -7535,7 +8427,9 @@ class BattlezoneGame:
                 kept_shots.append(shot)
         self.player_shots = kept_shots
         kept_shells = []
-        shell_speed = 2.0 + self.wave * 0.03 + (0.2 if self.difficulty == "hard" else 0.0)
+        shell_speed = (
+            2.0 + self.wave * 0.03 + (0.2 if self.difficulty == "hard" else 0.0)
+        )
         for shell in self.enemy_shells:
             shell[1] -= shell_speed
             shell[2] += 1
@@ -7663,6 +8557,7 @@ class BattlezoneGame:
                 return False
             self._draw()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -7685,6 +8580,7 @@ class KeenGame:
       - C: return to menu
     Compact Keen-style platformer with gems, keys, enemies, and exits.
     """
+
     FRAME_MS = 34
     CELL = 4
     VIEW_W = WIDTH
@@ -7774,7 +8670,13 @@ class KeenGame:
                     self.exit = (x, y)
                     row[x] = "."
                 elif ch == "S":
-                    self.enemies.append([float(x * self.CELL), float(y * self.CELL + 4), random.choice((-1, 1))])
+                    self.enemies.append(
+                        [
+                            float(x * self.CELL),
+                            float(y * self.CELL + 4),
+                            random.choice((-1, 1)),
+                        ]
+                    )
                     row[x] = "."
         self.vx = 0.0
         self.vy = 0.0
@@ -7842,7 +8744,9 @@ class KeenGame:
     def _collect_items(self):
         keep = []
         for x, y, kind in self.items:
-            if self._overlap(self.px, self.py, self.PLAYER_W, self.PLAYER_H, x, y, 2, 2):
+            if self._overlap(
+                self.px, self.py, self.PLAYER_W, self.PLAYER_H, x, y, 2, 2
+            ):
                 if kind == "key":
                     self.key = True
                     self.score += 50
@@ -7858,10 +8762,14 @@ class KeenGame:
             e[0] += e[2] * 0.45
             front_x = e[0] + (4 if e[2] > 0 else -1)
             foot_y = e[1] + 5
-            if self._rect_solid(e[0], e[1], 4, 4) or not self._solid_tile(int(front_x) // self.CELL, int(foot_y) // self.CELL):
+            if self._rect_solid(e[0], e[1], 4, 4) or not self._solid_tile(
+                int(front_x) // self.CELL, int(foot_y) // self.CELL
+            ):
                 e[0] -= e[2] * 0.45
                 e[2] = -e[2]
-            if self._overlap(self.px, self.py, self.PLAYER_W, self.PLAYER_H, e[0], e[1], 4, 4):
+            if self._overlap(
+                self.px, self.py, self.PLAYER_W, self.PLAYER_H, e[0], e[1], 4, 4
+            ):
                 if self.vy > 0.5 and self.py + self.PLAYER_H <= e[1] + 3:
                     self.score += 30
                     self.vy = -2.1
@@ -7876,7 +8784,16 @@ class KeenGame:
         ex, ey = self.exit
         if not self.key:
             return True
-        if self._overlap(self.px, self.py, self.PLAYER_W, self.PLAYER_H, ex * self.CELL, ey * self.CELL, 4, 7):
+        if self._overlap(
+            self.px,
+            self.py,
+            self.PLAYER_W,
+            self.PLAYER_H,
+            ex * self.CELL,
+            ey * self.CELL,
+            4,
+            7,
+        ):
             self.score += 150 + self.level * 50
             self.level += 1
             if self.level >= len(self.MAPS):
@@ -7897,7 +8814,13 @@ class KeenGame:
                     draw_rectangle(sx, sy, sx + 3, sy + 3, 45, 80, 120)
         ex, ey = self.exit
         door_col = (240, 240, 255) if self.key else (95, 55, 130)
-        draw_rect_outline(ex * self.CELL - self.camera_x, ey * self.CELL - 2, ex * self.CELL - self.camera_x + 4, ey * self.CELL + 6, *door_col)
+        draw_rect_outline(
+            ex * self.CELL - self.camera_x,
+            ey * self.CELL - 2,
+            ex * self.CELL - self.camera_x + 4,
+            ey * self.CELL + 6,
+            *door_col,
+        )
         for x, y, kind in self.items:
             sx = x - self.camera_x
             if -3 <= sx < WIDTH:
@@ -7909,7 +8832,9 @@ class KeenGame:
                 draw_rectangle(sx, int(y), sx + 3, int(y) + 3, 255, 70, 70)
         px = int(self.px) - self.camera_x
         py = int(self.py)
-        draw_rectangle(px, py, px + self.PLAYER_W - 1, py + self.PLAYER_H - 1, 240, 240, 230)
+        draw_rectangle(
+            px, py, px + self.PLAYER_W - 1, py + self.PLAYER_H - 1, 240, 240, 230
+        )
         display.set_pixel(px + 2, py + 1, 30, 30, 60)
         if self.key:
             draw_text_small(1, PLAY_HEIGHT, "KEY", 80, 230, 255)
@@ -7930,6 +8855,7 @@ class KeenGame:
                 return False
             self._draw()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -7951,6 +8877,7 @@ class PitfallGame:
       - Z oder Stick UP: springen
       - C: zurück ins Menü
     """
+
     def __init__(self):
         self.reset()
 
@@ -7983,7 +8910,6 @@ class PitfallGame:
         self._safe_distance = 30.0
 
     def _spawn_one(self, x_start):
-
         # At the start, spawn only treasures to avoid immediate frustration.
         if self.distance < self._safe_distance:
             kind = "TREASURE"
@@ -7992,7 +8918,11 @@ class PitfallGame:
             kind = "PIT" if r < 45 else ("SNAKE" if r < 75 else "TREASURE")
 
         # nicht zu viele pits hintereinander
-        if kind == "PIT" and self.last_spawn_kind == "PIT" and random.randint(0, 99) < 55:
+        if (
+            kind == "PIT"
+            and self.last_spawn_kind == "PIT"
+            and random.randint(0, 99) < 55
+        ):
             kind = "SNAKE"
 
         if kind == "PIT":
@@ -8003,7 +8933,16 @@ class PitfallGame:
             self.obstacles.append({"kind": "SNAKE", "x": float(x_start), "w": w})
         else:
             ty = self.ground_y - random.choice([12, 16, 20])
-            self.obstacles.append({"kind": "TREASURE", "x": float(x_start), "y": ty, "w": 2, "h": 2, "got": False})
+            self.obstacles.append(
+                {
+                    "kind": "TREASURE",
+                    "x": float(x_start),
+                    "y": ty,
+                    "w": 2,
+                    "h": 2,
+                    "got": False,
+                }
+            )
 
         self.last_spawn_kind = kind
 
@@ -8090,13 +9029,17 @@ class PitfallGame:
         display.clear()
 
         # Boden-Band
-        self._rect_play(0, self.ground_y, WIDTH, PLAY_HEIGHT - self.ground_y, 40, 90, 40)
+        self._rect_play(
+            0, self.ground_y, WIDTH, PLAY_HEIGHT - self.ground_y, 40, 90, 40
+        )
 
         # Pits (Löcher)
         for o in self.obstacles:
             if o["kind"] == "PIT":
                 x = int(o["x"])
-                self._rect_play(x, self.ground_y, o["w"], PLAY_HEIGHT - self.ground_y, 0, 0, 0)
+                self._rect_play(
+                    x, self.ground_y, o["w"], PLAY_HEIGHT - self.ground_y, 0, 0, 0
+                )
 
         # Schlangen
         for o in self.obstacles:
@@ -8160,11 +9103,15 @@ class PitfallGame:
                     o["x"] -= self.speed
 
                 # cleanup
-                self.obstacles = [o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2]
+                self.obstacles = [
+                    o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2
+                ]
                 self._ensure_obstacles()
 
                 # move
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT:
                     self.px = max(0, self.px - 2)
                 elif d == JOYSTICK_RIGHT:
@@ -8173,8 +9120,8 @@ class PitfallGame:
                 # jump with variable height
                 if self.jump_cd > 0:
                     self.jump_cd -= 1
-                
-                jump_pressed = (z_button or d == JOYSTICK_UP)
+
+                jump_pressed = z_button or d == JOYSTICK_UP
                 if jump_pressed and self.on_ground and self.jump_cd == 0:
                     if not self.jump_charging:
                         self.jump_charging = True
@@ -8253,6 +9200,7 @@ class PitfallGame:
 
         self.reset()
         self._ensure_obstacles()
+
         def loop_iteration():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
@@ -8271,7 +9219,9 @@ class PitfallGame:
                 o["x"] -= self.speed
 
             # cleanup
-            self.obstacles = [o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2]
+            self.obstacles = [
+                o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2
+            ]
             self._ensure_obstacles()
 
             # move
@@ -8285,7 +9235,7 @@ class PitfallGame:
             if self.jump_cd > 0:
                 self.jump_cd -= 1
 
-            jump_pressed = (z_button or d == JOYSTICK_UP)
+            jump_pressed = z_button or d == JOYSTICK_UP
             if jump_pressed and self.on_ground and self.jump_cd == 0:
                 if not self.jump_charging:
                     self.jump_charging = True
@@ -8345,6 +9295,7 @@ class PitfallGame:
             await _run_game_loop_async(33, loop_iteration)
         except RestartProgram:
             return
+
 
 class Game2048:
     """
@@ -9457,7 +10408,7 @@ class LocoMotionGame:
         self._abort_run()
 
     def _fail_derail(self):
-        """Handle a derail failure: display message and return to shared game-over flow."""
+        """Display a derail message and return to the shared game-over flow."""
         set_game_over_score(self.score, won=False)
         display.clear()
         draw_text(6, 18, "DERAIL", 255, 0, 0)
@@ -10510,7 +11461,12 @@ class SokobanGame:
                 self._last_input_ms = now
 
                 if self._is_solved():
-                    finish_score = max(1, 1000 - self.moves + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100)
+                    finish_score = max(
+                        1,
+                        1000
+                        - self.moves
+                        + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100,
+                    )
                     self.score += finish_score
                     global_score = self.score
                     display.clear()
@@ -10603,7 +11559,12 @@ class SokobanGame:
                 self._last_input_ms = now
 
                 if self._is_solved():
-                    finish_score = max(1, 1000 - self.moves + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100)
+                    finish_score = max(
+                        1,
+                        1000
+                        - self.moves
+                        + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100,
+                    )
                     self.score += finish_score
                     global_score = self.score
                     display.clear()
@@ -10735,13 +11696,23 @@ class BejeweledGame:
         y2 = min(PLAY_HEIGHT - 1, y_px + self.tile_h - 1)
         draw_rectangle(gx, y1, gx + self.tile_w - 1, y2, *col)
         if y1 <= y2:
-            draw_rectangle(gx, y1, gx + self.tile_w - 1, y1, min(255, col[0] + 35), min(255, col[1] + 35), min(255, col[2] + 35))
+            draw_rectangle(
+                gx,
+                y1,
+                gx + self.tile_w - 1,
+                y1,
+                min(255, col[0] + 35),
+                min(255, col[1] + 35),
+                min(255, col[2] + 35),
+            )
 
     def _draw_tile_value(self, x, y, value, empty_color=(20, 20, 20)):
         gx = x * self.tile_w
         gy = y * self.tile_h
         if value is None:
-            draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *empty_color)
+            draw_rectangle(
+                gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *empty_color
+            )
         else:
             col = self.COLORS[value % len(self.COLORS)]
             draw_rectangle(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, *col)
@@ -10812,18 +11783,27 @@ class BejeweledGame:
                         gy = ry * self.tile_h
                         v = self.grid[ry][rx]
                         if (rx, ry) in removed_coords:
-                            base = self.COLORS[v % len(self.COLORS)] if v is not None else (255, 255, 255)
+                            base = (
+                                self.COLORS[v % len(self.COLORS)]
+                                if v is not None
+                                else (255, 255, 255)
+                            )
                             for py in range(self.tile_h):
                                 for px in range(self.tile_w):
-                                    threshold = ((px * 5 + py * 3 + rx * 7 + ry * 11) % anim_frames)
+                                    threshold = (
+                                        px * 5 + py * 3 + rx * 7 + ry * 11
+                                    ) % anim_frames
                                     if threshold <= f:
                                         display.set_pixel(gx + px, gy + py, 12, 12, 14)
                                     else:
                                         glow = 30 if f < 3 else 0
-                                        display.set_pixel(gx + px, gy + py,
-                                                          min(255, base[0] + glow),
-                                                          min(255, base[1] + glow),
-                                                          min(255, base[2] + glow))
+                                        display.set_pixel(
+                                            gx + px,
+                                            gy + py,
+                                            min(255, base[0] + glow),
+                                            min(255, base[1] + glow),
+                                            min(255, base[2] + glow),
+                                        )
                         else:
                             self._draw_tile_value(rx, ry, v, empty_color=(16, 16, 16))
 
@@ -10839,7 +11819,9 @@ class BejeweledGame:
             # score: 10 per gem removed
             self.score += len(removed_coords) * 10
             # collapse and refill pixel by pixel, then loop to catch cascades
-            self._collapse_and_refill_animated(delay_ms=delay_ms // 4 if delay_ms > 0 else 0)
+            self._collapse_and_refill_animated(
+                delay_ms=delay_ms // 4 if delay_ms > 0 else 0
+            )
             self._full_redraw = True
 
         self._needs_redraw = True
@@ -10860,19 +11842,25 @@ class BejeweledGame:
             sx, sy = self.sel
             gx = sx * self.tile_w
             gy = sy * self.tile_h
-            draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
+            draw_rect_outline(
+                gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255
+            )
 
     def _draw_cell(self, x, y):
         self._draw_tile_value(x, y, self.grid[y][x])
         if self.sel == (x, y):
             gx = x * self.tile_w
             gy = y * self.tile_h
-            draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255)
+            draw_rect_outline(
+                gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 255, 255
+            )
 
     def _draw_cursor(self):
         gx = self.cursor_x * self.tile_w
         gy = self.cursor_y * self.tile_h
-        draw_rect_outline(gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 245, 0)
+        draw_rect_outline(
+            gx, gy, gx + self.tile_w - 1, gy + self.tile_h - 1, 255, 245, 0
+        )
 
     def _draw_hud(self, force=False):
         if not force and self.score == self._last_drawn_score:
@@ -10890,7 +11878,12 @@ class BejeweledGame:
             self._draw_hud(force=True)
         else:
             dirty = []
-            for cell in (self._prev_cursor, (self.cursor_x, self.cursor_y), self._prev_sel, self.sel):
+            for cell in (
+                self._prev_cursor,
+                (self.cursor_x, self.cursor_y),
+                self._prev_sel,
+                self.sel,
+            ):
                 if cell is None:
                     continue
                 if cell not in dirty:
@@ -11062,6 +12055,7 @@ class BejeweledGame:
 
 class CpuPlayerJoystick:
     """State-aware CPU controls for game attract demos."""
+
     def __init__(self, real_joystick, game_name, game, duration_ms=9000):
         self.real = real_joystick
         self.name = game_name
@@ -11077,7 +12071,9 @@ class CpuPlayerJoystick:
         c, z = self.real.read_buttons()
         if c or z or ticks_diff(ticks_ms(), self.end_ms) >= 0:
             return True
-        d = self.real.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN])
+        d = self.real.read_direction(
+            [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN]
+        )
         return d is not None
 
     def _toward_x(self, x, target, dead=1):
@@ -11135,8 +12131,17 @@ class CpuPlayerJoystick:
                             merge += v
                         elif nv:
                             smooth -= abs(v - nv) // 2
-            corner = max(g.grid[g._idx(0, g.GRID_H - 1)], g.grid[g._idx(g.GRID_W - 1, g.GRID_H - 1)])
-            score = empty * 900 + merge * 6 + corner * 3 + smooth + (60 if token in (JOYSTICK_DOWN, JOYSTICK_LEFT) else 0)
+            corner = max(
+                g.grid[g._idx(0, g.GRID_H - 1)],
+                g.grid[g._idx(g.GRID_W - 1, g.GRID_H - 1)],
+            )
+            score = (
+                empty * 900
+                + merge * 6
+                + corner * 3
+                + smooth
+                + (60 if token in (JOYSTICK_DOWN, JOYSTICK_LEFT) else 0)
+            )
             if score > best_score:
                 best_score = score
                 best_dir = token
@@ -11163,7 +12168,9 @@ class CpuPlayerJoystick:
             width = len(shape[0])
             for x in range(0, g.GRID_WIDTH - width + 1):
                 y = piece.y
-                while g.valid(piece, dx=x - piece.x, dy=(y + 1) - piece.y, rotated_shape=shape):
+                while g.valid(
+                    piece, dx=x - piece.x, dy=(y + 1) - piece.y, rotated_shape=shape
+                ):
                     y += 1
                 landing = y
                 holes = 0
@@ -11212,7 +12219,9 @@ class CpuPlayerJoystick:
                 y = lane[0]
                 for car in lane[2]:
                     cx = int(car[0] + lane[1] * 4)
-                    if rects_overlap(px, py, g.PLAYER_W, g.PLAYER_H, cx - 1, y, int(car[1]) + 2, 3):
+                    if rects_overlap(
+                        px, py, g.PLAYER_W, g.PLAYER_H, cx - 1, y, int(car[1]) + 2, 3
+                    ):
                         risk += 1000
             score = (PLAY_HEIGHT - py) * 10 - risk - abs(px - WIDTH // 2)
             if score > best_score:
@@ -11245,7 +12254,13 @@ class CpuPlayerJoystick:
             else:
                 bricks = getattr(g, "bricks", None)
                 if bricks:
-                    target = min(bricks, key=lambda b: abs((b[0] + BRICK_WIDTH // 2) - g.ball_x))[0] + BRICK_WIDTH // 2
+                    target = (
+                        min(
+                            bricks,
+                            key=lambda b: abs((b[0] + BRICK_WIDTH // 2) - g.ball_x),
+                        )[0]
+                        + BRICK_WIDTH // 2
+                    )
             d = self._toward_x(g.paddle_x + PADDLE_WIDTH // 2, int(target), 1)
         elif hasattr(g, "ball_position") and hasattr(g, "left_paddle_y"):
             target = int(g.ball_position[1])
@@ -11281,9 +12296,15 @@ class CpuPlayerJoystick:
             bottom = []
             for a in live:
                 col = (a[0] - 1) // 7
-                if not any(o[2] and ((o[0] - 1) // 7) == col and o[1] > a[1] for o in live):
+                if not any(
+                    o[2] and ((o[0] - 1) // 7) == col and o[1] > a[1] for o in live
+                ):
                     bottom.append(a)
-            target = min(bottom or live, key=lambda a: abs((a[0] + 2) - g.player_x))[0] + 2 if live else WIDTH // 2
+            target = (
+                min(bottom or live, key=lambda a: abs((a[0] + 2) - g.player_x))[0] + 2
+                if live
+                else WIDTH // 2
+            )
             for bomb in getattr(g, "bombs", []):
                 if bomb[1] > PLAY_HEIGHT - 18 and abs(bomb[0] - g.player_x) < 5:
                     target = 2 if g.player_x > WIDTH // 2 else WIDTH - 3
@@ -11293,8 +12314,13 @@ class CpuPlayerJoystick:
         elif n == "ASTRD" and hasattr(g, "asteroids"):
             if g.asteroids:
                 ship = g.ship
-                a = min(g.asteroids, key=lambda aa: (aa.x - ship.x) ** 2 + (aa.y - ship.y) ** 2)
-                target = (math.degrees(math.atan2(-(a.y - ship.y), a.x - ship.x)) + 360) % 360
+                a = min(
+                    g.asteroids,
+                    key=lambda aa: (aa.x - ship.x) ** 2 + (aa.y - ship.y) ** 2,
+                )
+                target = (
+                    math.degrees(math.atan2(-(a.y - ship.y), a.x - ship.x)) + 360
+                ) % 360
                 delta = ((target - ship.angle + 180) % 360) - 180
                 if abs(delta) < 18:
                     self._pulse_z(90)
@@ -11307,9 +12333,11 @@ class CpuPlayerJoystick:
             cur = g.direction
             left = g._LEFT_TURN[cur]
             right = g._RIGHT_TURN[cur]
-            options = ((g._clear_distance_from(g.head_x, g.head_y, cur), None),
-                       (g._clear_distance_from(g.head_x, g.head_y, left), JOYSTICK_LEFT),
-                       (g._clear_distance_from(g.head_x, g.head_y, right), JOYSTICK_RIGHT))
+            options = (
+                (g._clear_distance_from(g.head_x, g.head_y, cur), None),
+                (g._clear_distance_from(g.head_x, g.head_y, left), JOYSTICK_LEFT),
+                (g._clear_distance_from(g.head_x, g.head_y, right), JOYSTICK_RIGHT),
+            )
             d = max(options, key=lambda item: item[0])[1]
         elif n == "DOOMLT" and hasattr(g, "enemies"):
             alive = [e for e in g.enemies if e[2] > 0]
@@ -11343,7 +12371,11 @@ class CpuPlayerJoystick:
             else:
                 d = JOYSTICK_UP
             self._dir = d
-            self._z = bool(getattr(g, "energy", 0) > 28 and getattr(g, "speed", 0) > 0.75 and abs(g.lane) < 0.88)
+            self._z = bool(
+                getattr(g, "energy", 0) > 28
+                and getattr(g, "speed", 0) > 0.75
+                and abs(g.lane) < 0.88
+            )
             return
         elif n == "2048" and hasattr(g, "grid"):
             # Keep the board biased toward one corner, the standard simple 2048 CPU.
@@ -11396,15 +12428,76 @@ class DemosGame:
       - Left / Right: switch demo
       - C: return to menu
     """
+
     FRAME_MS = 35
+    TARGET_HEAVY_FRAME_MS = 45
+    HEAVY_EFFECTS = (
+        "MANDEL",
+        "BOIDS",
+        "NBODY",
+        "METAB",
+        "GRAV",
+        "RIPPLE",
+        "FIRWRK",
+        "PHYLLO",
+        "LISSAJO",
+        "PENDUL",
+        "WINMAZE",
+    )
+    MAX_RADAR_BLIPS = 18
+    MAX_FIREWORK_PARTICLES = 56 if CONFIG_LOW_RAM_MODE else 104
     GAME_DEMOS = (
-        "2048", "ARENA", "ARTILL", "ASTRD", "BEJWL", "BOMBER", "BRKOUT", "BTLZON",
-        "CAVEFL", "CENTI", "CGOLG", "CLIMB", "COLMNS", "DEFUSE",
-        "DOOMLT", "FLAPPY", "FROGGR", "GALAXY", "GOLF", "INVADR",
-        "KEEN", "LANDER", "LASER", "LOCO", "MAZE", "MINES", "ORBIT", "ORBTAL", "PACMAN",
-        "PAIRS", "PINBAL", "PITFAL", "PONG", "QIX", "RAYRCR", "REVRS", "RTYPE",
-        "SABOTR", "SIMON", "SNAKE", "SOCCER", "SOKO", "STACK", "TETRIS", "TRON", "TWRDEF",
-        "STKARC", "UFODEF", "AIRHKY",
+        "2048",
+        "ARENA",
+        "ARTILL",
+        "ASTRD",
+        "BEJWL",
+        "BOMBER",
+        "BRKOUT",
+        "BTLZON",
+        "CAVEFL",
+        "CENTI",
+        "CGOLG",
+        "CLIMB",
+        "COLMNS",
+        "DEFUSE",
+        "DIGDUG",
+        "DOOMLT",
+        "FLAPPY",
+        "FROGGR",
+        "GALAXY",
+        "GOLF",
+        "INVADR",
+        "JOUST",
+        "KEEN",
+        "LANDER",
+        "LASER",
+        "LOCO",
+        "MAZE",
+        "MINES",
+        "ORBIT",
+        "ORBTAL",
+        "PACMAN",
+        "PAIRS",
+        "PINBAL",
+        "PITFAL",
+        "PONG",
+        "QIX",
+        "RAYRCR",
+        "REVRS",
+        "RTYPE",
+        "SABOTR",
+        "SIMON",
+        "SNAKE",
+        "SOCCER",
+        "SOKO",
+        "STACK",
+        "TETRIS",
+        "TRON",
+        "TWRDEF",
+        "STKARC",
+        "UFODEF",
+        "AIRHKY",
     )
     GAME_CLASS_NAMES = {
         "2048": "Game2048",
@@ -11421,12 +12514,14 @@ class DemosGame:
         "CLIMB": "ClimberGame",
         "COLMNS": "ColumnsGame",
         "DEFUSE": "DefuseGame",
+        "DIGDUG": "DigDugGame",
         "DOOMLT": "DoomLiteGame",
         "FLAPPY": "FlappyGame",
         "FROGGR": "FroggerGame",
         "GALAXY": "GalaxyGame",
         "GOLF": "GolfGame",
         "INVADR": "InvaderGame",
+        "JOUST": "JoustGame",
         "KEEN": "KeenGame",
         "LANDER": "LunarLanderGame",
         "LASER": "LaserGame",
@@ -11472,31 +12567,69 @@ class DemosGame:
         # _reset_demo_state(), and dispatch init/step below. The low-RAM subset
         # avoids larger buffers and dense per-pixel math.
         effects = (
-            ("SNAKE", "LIFE", "CUBE", "VORTEX", "COMETS", "SPARK", "RINGS", "GRAV", "SPRING", "CRADLE")
+            (
+                "SNAKE",
+                "LIFE",
+                "CUBE",
+                "VORTEX",
+                "COMETS",
+                "SPARK",
+                "RINGS",
+                "GRAV",
+                "SPRING",
+                "CRADLE",
+            )
             if CONFIG_LOW_RAM_MODE
-            else ("SNAKE", "PLASMA", "CUBE", "ORBIT", "WARP", "BOUNCE",
-                  "VORTEX", "COMETS",
-                  "TUNNEL", "MYSTIFY", "LIFE", "ANTS", "FLOOD", "FIRE",
-                  "MATRIX", "STARS", "SPARK", "RINGS", "RADAR", "MANDEL",
-                  "BOIDS", "NBODY", "METAB", "GRAV", "RIPPLE", "FIRWRK",
-                  "SPRING", "CRADLE",
-                  "PHYLLO", "LISSAJO", "PENDUL", "ARCADE", "CRT", "WINMAZE")
+            else (
+                "SNAKE",
+                "PLASMA",
+                "CUBE",
+                "ORBIT",
+                "WARP",
+                "BOUNCE",
+                "VORTEX",
+                "COMETS",
+                "TUNNEL",
+                "MYSTIFY",
+                "LIFE",
+                "ANTS",
+                "FLOOD",
+                "FIRE",
+                "MATRIX",
+                "STARS",
+                "SPARK",
+                "RINGS",
+                "RADAR",
+                "MANDEL",
+                "BOIDS",
+                "NBODY",
+                "METAB",
+                "GRAV",
+                "RIPPLE",
+                "FIRWRK",
+                "SPRING",
+                "CRADLE",
+                "PHYLLO",
+                "LISSAJO",
+                "PENDUL",
+                "ARCADE",
+                "CRT",
+                "WINMAZE",
+            )
         )
         effects = tuple(
-            name for name in effects
+            name
+            for name in effects
             if _name_enabled(name, CONFIG_ENABLED_DEMOS, CONFIG_DISABLED_DEMOS)
         )
         game_demos = tuple(
-            "G:" + name for name in self.GAME_DEMOS
+            "G:" + name
+            for name in self.GAME_DEMOS
             if _name_enabled("G:" + name, CONFIG_ENABLED_DEMOS, CONFIG_DISABLED_DEMOS)
             and _name_enabled(name, CONFIG_ENABLED_GAMES, CONFIG_DISABLED_GAMES)
         )
 
-        self.demos = (
-            game_demos + effects
-            if CONFIG_ENABLE_GAME_DEMOS
-            else effects
-        )
+        self.demos = game_demos + effects if CONFIG_ENABLE_GAME_DEMOS else effects
         self.idx = 0
         if self.random_order and len(self.demos) > 1:
             self.idx = random.randint(0, len(self.demos) - 1)
@@ -11506,6 +12639,12 @@ class DemosGame:
         self._move_delay = 180
         self._game_demo_wait_ms = 850
         self._reset_demo_state()
+
+    def _frame_ms_for_demo(self, demo):
+        """Keep math-heavy effects responsive on constrained render targets."""
+        if demo in self.HEAVY_EFFECTS and (CONFIG_LOW_RAM_MODE or IS_WEB):
+            return self.TARGET_HEAVY_FRAME_MS
+        return self.FRAME_MS
 
     def _demo_clock_text(self):
         if not self.clock_enabled:
@@ -11587,15 +12726,15 @@ class DemosGame:
 
         # MATRIX (falling green rain)
         self._matrix_drops = []
-        
+
         # STARS (3d starfield)
         self._stars = []
-        
+
         # MYSTIFY (bouncing polygons/lines)
         self._mystify_pts = []
         self._mystify_history = []
         self._mystify_hue = 0.0
-        
+
         # PLASMA effect
         self._plasma_time = 0
         self._plasma_palette = []
@@ -11627,7 +12766,7 @@ class DemosGame:
         # SNAKE
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
         self._snake_length = 3
-        self._snake_dir = 'UP'
+        self._snake_dir = "UP"
         self._snake_score = 0
         self._snake_target = (WIDTH // 2, HEIGHT // 2)
         self._snake_green_targets = []  # list of (x,y,lifespan)
@@ -11643,6 +12782,7 @@ class DemosGame:
         # RADAR
         self._radar_phase = 0
         self._radar_blips = []
+        self._radar_rings = ()
 
         # MANDEL
         self._mandel_y = 0
@@ -11739,9 +12879,14 @@ class DemosGame:
                 xp1 = (x + 1) % w
                 i = row + x
                 n = (
-                    cur[rowm1 + xm1] + cur[rowm1 + x] + cur[rowm1 + xp1] +
-                    cur[row + xm1] + cur[row + xp1] +
-                    cur[rowp1 + xm1] + cur[rowp1 + x] + cur[rowp1 + xp1]
+                    cur[rowm1 + xm1]
+                    + cur[rowm1 + x]
+                    + cur[rowm1 + xp1]
+                    + cur[row + xm1]
+                    + cur[row + xp1]
+                    + cur[rowp1 + xm1]
+                    + cur[rowp1 + x]
+                    + cur[rowp1 + xp1]
                 )
                 if cur[i]:
                     nxt[i] = 1 if (n == 2 or n == 3) else 0
@@ -11817,8 +12962,12 @@ class DemosGame:
         cells = self._ants_cells
         ants = self._ants
 
-        prev_positions = []
-        changed = []
+        # These short-lived work lists are reused every frame. That is much
+        # friendlier to the MicroPython allocator than rebuilding them at 28 FPS.
+        prev_positions = self._ants_prev
+        changed = self._ants_changed
+        del prev_positions[:]
+        del changed[:]
 
         # 1) update ants + grid state
         for ant in ants:
@@ -11907,7 +13056,7 @@ class DemosGame:
         visited = self._flood_vis
 
         border = 24  # 48 @ 128 scaled to 64
-        step = 4      # 8 @ 128 scaled to 64
+        step = 4  # 8 @ 128 scaled to 64
 
         # Start near center like reference
         sx = random.randint(border // 2, min(w - 2, w - border // 2))
@@ -12128,79 +13277,73 @@ class DemosGame:
         w = self._demo_w
         self._matrix_drops = []
         for _ in range(12):
-            self._matrix_drops.append({
-                'x': random.randint(0, w - 1),
-                'y': random.randint(-20, 0),
-                'speed': random.randint(1, 3),
-                'len': random.randint(4, 12)
-            })
+            self._matrix_drops.append(
+                {
+                    "x": random.randint(0, w - 1),
+                    "y": random.randint(-20, 0),
+                    "speed": random.randint(1, 3),
+                    "len": random.randint(4, 12),
+                }
+            )
         display.clear()
 
     def _matrix_step(self):
         w = self._demo_w
         h = self._demo_h
-        
-        # darken screen
-        for y in range(h):
-            for x in range(w):
-                # We can't directly read pixels from software buffer easily in all configs.
-                # Just draw black with alpha effect conceptually.
-                pass
-                
-        # Better matrix approach without reading buffer:
-        # Just clear screen occasionally or redraw tails in black
+
+        # Framebuffer reads are not portable on all targets. Erasing each
+        # outgoing tail produces the same effect without a no-op full-screen
+        # traversal every frame.
         for drop in self._matrix_drops:
             # Erase tail
-            ty = drop['y'] - drop['len']
+            ty = drop["y"] - drop["len"]
             if 0 <= ty < h:
-                display.set_pixel(drop['x'], ty, 0, 0, 0)
-                
+                display.set_pixel(drop["x"], ty, 0, 0, 0)
+
             # Move
-            if self._frame % drop['speed'] == 0:
-                drop['y'] += 1
-                
+            if self._frame % drop["speed"] == 0:
+                drop["y"] += 1
+
             # Draw head
-            if 0 <= drop['y'] < h:
+            if 0 <= drop["y"] < h:
                 # White head
-                display.set_pixel(drop['x'], drop['y'], 200, 255, 200)
-                
+                display.set_pixel(drop["x"], drop["y"], 200, 255, 200)
+
             # Draw body (dim green)
-            by = drop['y'] - 1
+            by = drop["y"] - 1
             if 0 <= by < h:
-                display.set_pixel(drop['x'], by, 0, 200, 0)
-                
-            by = drop['y'] - 2
+                display.set_pixel(drop["x"], by, 0, 200, 0)
+
+            by = drop["y"] - 2
             if 0 <= by < h:
-                display.set_pixel(drop['x'], by, 0, 100, 0)
-                
-            by = drop['y'] - 3
+                display.set_pixel(drop["x"], by, 0, 100, 0)
+
+            by = drop["y"] - 3
             if 0 <= by < h:
-                display.set_pixel(drop['x'], by, 0, 50, 0)
-                
+                display.set_pixel(drop["x"], by, 0, 50, 0)
+
             # Reset
-            if drop['y'] - drop['len'] > h:
-                drop['x'] = random.randint(0, w - 1)
-                drop['y'] = random.randint(-10, 0)
-                drop['speed'] = random.randint(1, 3)
-                drop['len'] = random.randint(4, 12)
+            if drop["y"] - drop["len"] > h:
+                drop["x"] = random.randint(0, w - 1)
+                drop["y"] = random.randint(-10, 0)
+                drop["speed"] = random.randint(1, 3)
+                drop["len"] = random.randint(4, 12)
 
     # --- STARS ---
     def _stars_init(self):
         self._stars = []
         for _ in range(40):
             # x, y, z
-            self._stars.append([
-                random.uniform(-1, 1),
-                random.uniform(-1, 1),
-                random.uniform(0.1, 2.0)
-            ])
+            self._stars.append(
+                [random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(0.1, 2.0)]
+            )
         display.clear()
 
     def _stars_step(self):
         w = self._demo_w
         h = self._demo_h
         cx, cy = w // 2, h // 2
-        
+
         # Erase old
         for s in self._stars:
             pz = s[2]
@@ -12209,39 +13352,41 @@ class DemosGame:
                 py = int(s[1] / pz * cy + cy)
                 if 0 <= px < w and 0 <= py < h:
                     display.set_pixel(px, py, 0, 0, 0)
-                    
+
             # Move
             s[2] -= 0.05
-            
+
             # Reset if passed screen
             if s[2] < 0.05:
                 s[0] = random.uniform(-1, 1)
                 s[1] = random.uniform(-1, 1)
                 s[2] = 2.0
-                
+
             # Draw new
             nz = s[2]
             nx = int(s[0] / nz * cx + cx)
             ny = int(s[1] / nz * cy + cy)
-            
+
             if 0 <= nx < w and 0 <= ny < h:
-                bright = int(255 * (1.0 - nz/2.0))
+                bright = int(255 * (1.0 - nz / 2.0))
                 if bright < 0:
                     bright = 0
                 if bright > 255:
                     bright = 255
                 display.set_pixel(nx, ny, bright, bright, bright)
-                
+
     # --- MYSTIFY ---
     def _mystify_init(self):
         self._mystify_pts = []
-        for _ in range(4): # 4 points forming our shape
-            self._mystify_pts.append({
-                'x': float(random.randint(0, WIDTH-1)),
-                'y': float(random.randint(0, HEIGHT-1)),
-                'vx': random.choice([-1.5, -1.0, 1.0, 1.5]),
-                'vy': random.choice([-1.5, -1.0, 1.0, 1.5])
-            })
+        for _ in range(4):  # 4 points forming our shape
+            self._mystify_pts.append(
+                {
+                    "x": float(random.randint(0, WIDTH - 1)),
+                    "y": float(random.randint(0, HEIGHT - 1)),
+                    "vx": random.choice([-1.5, -1.0, 1.0, 1.5]),
+                    "vy": random.choice([-1.5, -1.0, 1.0, 1.5]),
+                }
+            )
         self._mystify_history = []
         self._mystify_hue = random.randint(0, 360)
         display.clear()
@@ -12250,38 +13395,38 @@ class DemosGame:
         for i in range(len(pts)):
             p1 = pts[i]
             p2 = pts[(i + 1) % len(pts)]
-            draw_line(int(p1['x']), int(p1['y']), int(p2['x']), int(p2['y']), r, g, b)
+            draw_line(int(p1["x"]), int(p1["y"]), int(p2["x"]), int(p2["y"]), r, g, b)
 
     def _mystify_step(self):
         # Add current to history
-        current_state = [{'x': p['x'], 'y': p['y']} for p in self._mystify_pts]
+        current_state = [{"x": p["x"], "y": p["y"]} for p in self._mystify_pts]
         self._mystify_history.append(current_state)
-        
+
         # Erase oldest if history too long (max 8 trailing lines)
         if len(self._mystify_history) > 8:
             oldest = self._mystify_history.pop(0)
             self._mystify_draw_poly(oldest, 0, 0, 0)
-            
+
         # Move points
         for p in self._mystify_pts:
-            p['x'] += p['vx']
-            p['y'] += p['vy']
-            
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+
             # Bounce
-            if p['x'] <= 0:
-                p['x'] = 0
-                p['vx'] *= -1
-            elif p['x'] >= WIDTH - 1:
-                p['x'] = WIDTH - 1
-                p['vx'] *= -1
-                
-            if p['y'] <= 0:
-                p['y'] = 0
-                p['vy'] *= -1
-            elif p['y'] >= HEIGHT - 1:
-                p['y'] = HEIGHT - 1
-                p['vy'] *= -1
-                
+            if p["x"] <= 0:
+                p["x"] = 0
+                p["vx"] *= -1
+            elif p["x"] >= WIDTH - 1:
+                p["x"] = WIDTH - 1
+                p["vx"] *= -1
+
+            if p["y"] <= 0:
+                p["y"] = 0
+                p["vy"] *= -1
+            elif p["y"] >= HEIGHT - 1:
+                p["y"] = HEIGHT - 1
+                p["vy"] *= -1
+
         # Draw new
         self._mystify_hue = (self._mystify_hue + 1.5) % 360
         r, g, b = hsb_to_rgb(self._mystify_hue, 1, 1)
@@ -12295,21 +13440,36 @@ class DemosGame:
         self._cube_pulse = 0.0
         # 8 vertices of a cube
         self._cube_vertices = [
-            (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
-            (-1, -1, 1),  (1, -1, 1),  (1, 1, 1),  (-1, 1, 1)
+            (-1, -1, -1),
+            (1, -1, -1),
+            (1, 1, -1),
+            (-1, 1, -1),
+            (-1, -1, 1),
+            (1, -1, 1),
+            (1, 1, 1),
+            (-1, 1, 1),
         ]
         # 12 edges (pairs of vertex indices)
         self._cube_edges = [
-            (0, 1), (1, 2), (2, 3), (3, 0), # Back face
-            (4, 5), (5, 6), (6, 7), (7, 4), # Front face
-            (0, 4), (1, 5), (2, 6), (3, 7)  # Connecting faces
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),  # Back face
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),  # Front face
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),  # Connecting faces
         ]
         self._cube_hue = 0.0
         display.clear()
 
     def _cube_step(self):
         display.clear()
-        
+
         # Increment angles
         self._cube_angle_x += 0.05
         self._cube_angle_y += 0.03
@@ -12317,12 +13477,12 @@ class DemosGame:
         self._cube_pulse += 0.065
         self._cube_hue = (self._cube_hue + 2) % 360
         pulse_scale = 8.5 + math.sin(self._cube_pulse) * 3.5
-        
+
         # Precompute sin/cos
         sx, cx = math.sin(self._cube_angle_x), math.cos(self._cube_angle_x)
         sy, cy = math.sin(self._cube_angle_y), math.cos(self._cube_angle_y)
         sz, cz = math.sin(self._cube_angle_z), math.cos(self._cube_angle_z)
-        
+
         projected = []
         for x, y, z in self._cube_vertices:
             # Rotate X
@@ -12334,13 +13494,13 @@ class DemosGame:
             # Rotate Z
             x3 = x2 * cz - y1 * sz
             y3 = x2 * sz + y1 * cz
-            
+
             # Projection (scale and center)
-            scale = 16 / (z2 + 3) # Perspective divide
+            scale = 16 / (z2 + 3)  # Perspective divide
             px = int(WIDTH // 2 + x3 * scale * pulse_scale)
             py = int(HEIGHT // 2 + y3 * scale * pulse_scale)
             projected.append((px, py))
-            
+
         # Draw edges
         r, g, b = hsb_to_rgb(self._cube_hue, 1, 1)
         for i, j in self._cube_edges:
@@ -12559,42 +13719,54 @@ class DemosGame:
 
         r, g, b = hsb_to_rgb(self._bounce_hue, 1, 1)
         draw_text(self._bounce_x, self._bounce_y, label, r, g, b)
-        draw_rectangle(self._bounce_x, self._bounce_y + 8, self._bounce_x + w - 1, self._bounce_y + 8, r // 3, g // 3, b // 3)
+        draw_rectangle(
+            self._bounce_x,
+            self._bounce_y + 8,
+            self._bounce_x + w - 1,
+            self._bounce_y + 8,
+            r // 3,
+            g // 3,
+            b // 3,
+        )
 
     # --- PLASMA ---
     def _plasma_init(self):
         self._plasma_time = 0
         if not self._plasma_palette:
-            self._plasma_palette = [hsb_to_rgb(i * 360 / 256.0, 1, 1) for i in range(256)]
+            self._plasma_palette = [
+                hsb_to_rgb(i * 360 / 256.0, 1, 1) for i in range(256)
+            ]
         if not self._plasma_sin:
-            self._plasma_sin = [int((math.sin(i * 3.14159 * 2 / 255.0) + 1) * 127) for i in range(256)]
+            self._plasma_sin = [
+                int((math.sin(i * 3.14159 * 2 / 255.0) + 1) * 127) for i in range(256)
+            ]
 
     def _plasma_step(self):
         self._plasma_time = (self._plasma_time + 4) % 256
         t = self._plasma_time
         sin = self._plasma_sin
         pal = self._plasma_palette
-        
+
         for y in range(0, HEIGHT, 2):
-            vy = sin[(y*4 + t) % 256]
+            vy = sin[(y * 4 + t) % 256]
             for x in range(0, WIDTH, 2):
-                vx = sin[(x*4 + t) % 256]
-                vc = sin[(x*2 + y*2 + t*2) % 256]
-                
-                dist = abs(x - (WIDTH//2)) + abs(y - (HEIGHT//2))
-                vd = sin[(dist*6 - t*3) % 256]
-                
+                vx = sin[(x * 4 + t) % 256]
+                vc = sin[(x * 2 + y * 2 + t * 2) % 256]
+
+                dist = abs(x - (WIDTH // 2)) + abs(y - (HEIGHT // 2))
+                vd = sin[(dist * 6 - t * 3) % 256]
+
                 v = (vy + vx + vc + vd) >> 2
-                
+
                 r, g, b = pal[v % 256]
-                draw_rectangle(x, y, x+2, y+2, r, g, b)
-        
+                draw_rectangle(x, y, x + 2, y + 2, r, g, b)
+
     # --- SNAKE (based on hub75/snake_on_hub75_zeroplayer.py) ---
     def _snake_restart(self):
         self._snake_score = 0
         self._snake = [(WIDTH // 2, HEIGHT // 2)]
         self._snake_length = 3
-        self._snake_dir = 'UP'
+        self._snake_dir = "UP"
         self._snake_green_targets = []
         self._snake_step_counter = 0
         self._snake_step_counter2 = 0
@@ -12668,31 +13840,31 @@ class DemosGame:
         head_x, head_y = self._snake[0]
         target_x, target_y = self._snake_find_nearest_target(head_x, head_y)
 
-        opposite = {'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT'}
+        opposite = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
         cur = self._snake_dir
         new_dir = cur
 
         if head_x == target_x:
-            if head_y < target_y and cur != 'UP':
-                new_dir = 'DOWN'
-            elif head_y > target_y and cur != 'DOWN':
-                new_dir = 'UP'
+            if head_y < target_y and cur != "UP":
+                new_dir = "DOWN"
+            elif head_y > target_y and cur != "DOWN":
+                new_dir = "UP"
         elif head_y == target_y:
-            if head_x < target_x and cur != 'LEFT':
-                new_dir = 'RIGHT'
-            elif head_x > target_x and cur != 'RIGHT':
-                new_dir = 'LEFT'
+            if head_x < target_x and cur != "LEFT":
+                new_dir = "RIGHT"
+            elif head_x > target_x and cur != "RIGHT":
+                new_dir = "LEFT"
         else:
             if abs(head_x - target_x) < abs(head_y - target_y):
-                if head_x < target_x and cur != 'LEFT':
-                    new_dir = 'RIGHT'
-                elif head_x > target_x and cur != 'RIGHT':
-                    new_dir = 'LEFT'
+                if head_x < target_x and cur != "LEFT":
+                    new_dir = "RIGHT"
+                elif head_x > target_x and cur != "RIGHT":
+                    new_dir = "LEFT"
             else:
-                if head_y < target_y and cur != 'UP':
-                    new_dir = 'DOWN'
-                elif head_y > target_y and cur != 'DOWN':
-                    new_dir = 'UP'
+                if head_y < target_y and cur != "UP":
+                    new_dir = "DOWN"
+                elif head_y > target_y and cur != "DOWN":
+                    new_dir = "UP"
 
         if new_dir == opposite.get(cur):
             new_dir = cur
@@ -12702,10 +13874,10 @@ class DemosGame:
         head_x, head_y = self._snake[0]
         body = self._snake[1:]
         potential = {
-            'UP': (head_x, (head_y - 1) % HEIGHT),
-            'DOWN': (head_x, (head_y + 1) % HEIGHT),
-            'LEFT': ((head_x - 1) % WIDTH, head_y),
-            'RIGHT': ((head_x + 1) % WIDTH, head_y)
+            "UP": (head_x, (head_y - 1) % HEIGHT),
+            "DOWN": (head_x, (head_y + 1) % HEIGHT),
+            "LEFT": ((head_x - 1) % WIDTH, head_y),
+            "RIGHT": ((head_x + 1) % WIDTH, head_y),
         }
         cur_next = potential[self._snake_dir]
         if cur_next in body:
@@ -12717,11 +13889,11 @@ class DemosGame:
 
     def _snake_update_position(self):
         head_x, head_y = self._snake[0]
-        if self._snake_dir == 'UP':
+        if self._snake_dir == "UP":
             head_y -= 1
-        elif self._snake_dir == 'DOWN':
+        elif self._snake_dir == "DOWN":
             head_y += 1
-        elif self._snake_dir == 'LEFT':
+        elif self._snake_dir == "LEFT":
             head_x -= 1
         else:
             head_x += 1
@@ -12785,13 +13957,16 @@ class DemosGame:
         for _ in range(30 if not CONFIG_LOW_RAM_MODE else 16):
             angle = random.randint(0, 359) * 3.14159 / 180.0
             speed = random.uniform(0.4, 1.8)
-            self._spark_particles.append([
-                float(cx), float(cy),
-                math.cos(angle) * speed,
-                math.sin(angle) * speed,
-                random.randint(18, 70),
-                random.randint(0, 359),
-            ])
+            self._spark_particles.append(
+                [
+                    float(cx),
+                    float(cy),
+                    math.cos(angle) * speed,
+                    math.sin(angle) * speed,
+                    random.randint(18, 70),
+                    random.randint(0, 359),
+                ]
+            )
         display.clear()
 
     def _spark_respawn(self, p):
@@ -12857,6 +14032,21 @@ class DemosGame:
     def _radar_init(self):
         self._radar_phase = random.randint(0, 255)
         self._radar_blips = []
+        cx = WIDTH // 2
+        cy = HEIGHT // 2
+        rings = []
+        for radius in (10, 18, 27):
+            points = []
+            for i in range(0, 64, 2):
+                angle = i * 6.28318 / 64.0
+                points.append(
+                    (
+                        int(cx + math.cos(angle) * radius),
+                        int(cy + math.sin(angle) * radius),
+                    )
+                )
+            rings.append(tuple(points))
+        self._radar_rings = tuple(rings)
         display.clear()
 
     def _radar_step(self):
@@ -12866,13 +14056,11 @@ class DemosGame:
         self._radar_phase = (self._radar_phase + 3) & 255
         phase = self._radar_phase
 
-        for radius in (10, 18, 27):
-            for i in range(0, 64, 2):
-                a = i * 6.28318 / 64.0
-                x = int(cx + math.cos(a) * radius)
-                y = int(cy + math.sin(a) * radius)
+        sp = display.set_pixel
+        for ring in self._radar_rings:
+            for x, y in ring:
                 if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                    display.set_pixel(x, y, 0, 45, 0)
+                    sp(x, y, 0, 45, 0)
         draw_line(cx, 4, cx, HEIGHT - 5, 0, 28, 0)
         draw_line(4, cy, WIDTH - 5, cy, 0, 28, 0)
 
@@ -12886,27 +14074,31 @@ class DemosGame:
             ty = int(cy + math.sin(a) * 29)
             draw_line(cx, cy, tx, ty, 0, 90 // i, 25 // i)
 
-        if (self._frame & 3) == 0 and random.randint(0, 99) < 70:
+        blips = self._radar_blips
+        if (
+            len(blips) < self.MAX_RADAR_BLIPS
+            and (self._frame & 3) == 0
+            and random.randint(0, 99) < 70
+        ):
             r = random.randint(7, 29)
             x = int(cx + math.cos(sweep) * r)
             y = int(cy + math.sin(sweep) * r)
             if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                self._radar_blips.append([x, y, 255])
+                blips.append([x, y, 255])
                 self._demo_sound("ping", r, 120)
 
-        active = []
-        for blip in self._radar_blips:
+        active_count = 0
+        for blip in blips:
             x, y, bright = blip
-            display.set_pixel(x, y, bright // 5, bright, bright // 8)
+            sp(x, y, bright // 5, bright, bright // 8)
             if bright > 170 and x + 1 < WIDTH:
-                display.set_pixel(x + 1, y, bright // 8, bright // 2, 0)
+                sp(x + 1, y, bright // 8, bright // 2, 0)
             bright -= 7
             if bright > 18:
                 blip[2] = bright
-                active.append(blip)
-        if len(active) > 18:
-            active = active[-18:]
-        self._radar_blips = active
+                blips[active_count] = blip
+                active_count += 1
+        del blips[active_count:]
 
     # --- MANDELBROT ---
     def _mandel_init(self):
@@ -12945,7 +14137,10 @@ class DemosGame:
                 cx = xs[x]
                 qx = cx - 0.25
                 q = qx * qx + cy * cy
-                if q * (q + qx) <= 0.25 * cy * cy or (cx + 1.0) * (cx + 1.0) + cy * cy <= 0.0625:
+                if (
+                    q * (q + qx) <= 0.25 * cy * cy
+                    or (cx + 1.0) * (cx + 1.0) + cy * cy <= 0.0625
+                ):
                     sp(x, y, 0, 0, 0)
                     continue
                 zx = 0.0
@@ -12970,13 +14165,15 @@ class DemosGame:
         n = 18
         for i in range(n):
             a = random.randint(0, 359) * 3.14159 / 180.0
-            self._boids.append([
-                random.uniform(4, WIDTH - 5),
-                random.uniform(4, HEIGHT - 5),
-                math.cos(a) * 0.7,
-                math.sin(a) * 0.7,
-                (i * 360) // n,
-            ])
+            self._boids.append(
+                [
+                    random.uniform(4, WIDTH - 5),
+                    random.uniform(4, HEIGHT - 5),
+                    math.cos(a) * 0.7,
+                    math.sin(a) * 0.7,
+                    (i * 360) // n,
+                ]
+            )
         display.clear()
 
     def _boids_step(self):
@@ -13054,14 +14251,16 @@ class DemosGame:
             a = i * 6.28318 / 10.0
             radius = 6.0 + (i % 4) * 3.5
             mass = 0.45 + (i % 3) * 0.22
-            self._nbody.append([
-                cx + math.cos(a) * radius,
-                cy + math.sin(a) * radius,
-                -math.sin(a) * (0.35 + i * 0.015),
-                math.cos(a) * (0.35 + i * 0.015),
-                mass,
-                (i * 36) % 360,
-            ])
+            self._nbody.append(
+                [
+                    cx + math.cos(a) * radius,
+                    cy + math.sin(a) * radius,
+                    -math.sin(a) * (0.35 + i * 0.015),
+                    math.cos(a) * (0.35 + i * 0.015),
+                    mass,
+                    (i * 36) % 360,
+                ]
+            )
         display.clear()
 
     def _nbody_step(self):
@@ -13113,14 +14312,16 @@ class DemosGame:
         count = 5 if not CONFIG_LOW_RAM_MODE else 3
         for i in range(count):
             angle = (i * 6.28318) / count
-            self._metab_balls.append([
-                WIDTH / 2.0 + math.cos(angle) * 16.0,
-                HEIGHT / 2.0 + math.sin(angle) * 12.0,
-                math.cos(angle + 1.7) * (0.34 + i * 0.025),
-                math.sin(angle + 0.9) * (0.30 + i * 0.020),
-                58.0 + i * 9.0,
-                (i * 58) % 360,
-            ])
+            self._metab_balls.append(
+                [
+                    WIDTH / 2.0 + math.cos(angle) * 16.0,
+                    HEIGHT / 2.0 + math.sin(angle) * 12.0,
+                    math.cos(angle + 1.7) * (0.34 + i * 0.025),
+                    math.sin(angle + 0.9) * (0.30 + i * 0.020),
+                    58.0 + i * 9.0,
+                    (i * 58) % 360,
+                ]
+            )
         display.clear()
 
     def _metab_step(self):
@@ -13170,13 +14371,15 @@ class DemosGame:
         for i in range(count):
             a = (i * 6.28318) / count
             radius = 6.0 + (i % 7) * 3.2
-            self._grav_particles.append([
-                cx + math.cos(a) * radius,
-                cy + math.sin(a) * radius,
-                -math.sin(a) * 0.62,
-                math.cos(a) * 0.62,
-                (i * 360) // count,
-            ])
+            self._grav_particles.append(
+                [
+                    cx + math.cos(a) * radius,
+                    cy + math.sin(a) * radius,
+                    -math.sin(a) * 0.62,
+                    math.cos(a) * 0.62,
+                    (i * 360) // count,
+                ]
+            )
         display.clear()
 
     def _grav_step(self):
@@ -13189,12 +14392,18 @@ class DemosGame:
         a = phase * 6.28318 / 256.0
         wells = (
             (cx + math.cos(a) * 12.0, cy + math.sin(a * 1.25) * 10.0, 0.95),
-            (cx + math.cos(a + 3.14159) * 14.0, cy + math.sin(a * 0.85 + 2.0) * 12.0, 0.70),
+            (
+                cx + math.cos(a + 3.14159) * 14.0,
+                cy + math.sin(a * 0.85 + 2.0) * 12.0,
+                0.70,
+            ),
         )
 
         display.clear()
         for wx, wy, _mass in wells:
-            draw_rectangle(int(wx) - 1, int(wy) - 1, int(wx) + 1, int(wy) + 1, 255, 255, 255)
+            draw_rectangle(
+                int(wx) - 1, int(wy) - 1, int(wx) + 1, int(wy) + 1, 255, 255, 255
+            )
 
         for p in self._grav_particles:
             px = p[0]
@@ -13243,14 +14452,16 @@ class DemosGame:
         cx = WIDTH / 2.0
         cy = 8.0
         for i in range(count):
-            self._spring_nodes.append([
-                cx + random.uniform(-0.8, 0.8),
-                cy + (i + 1) * self._spring_rest,
-                random.uniform(-0.15, 0.15),
-                random.uniform(-0.15, 0.15),
-                1.0 + i * 0.18,
-                (i * 360) // count,
-            ])
+            self._spring_nodes.append(
+                [
+                    cx + random.uniform(-0.8, 0.8),
+                    cy + (i + 1) * self._spring_rest,
+                    random.uniform(-0.15, 0.15),
+                    random.uniform(-0.15, 0.15),
+                    1.0 + i * 0.18,
+                    (i * 360) // count,
+                ]
+            )
         display.clear()
 
     def _spring_pull(self, ax, ay, node, rest, k):
@@ -13288,7 +14499,9 @@ class DemosGame:
         for _ in range(3):
             self._spring_pull(anchor_x, anchor_y, nodes[0], self._spring_rest, 0.12)
             for i in range(len(nodes) - 1):
-                self._spring_pull(nodes[i][0], nodes[i][1], nodes[i + 1], self._spring_rest, 0.09)
+                self._spring_pull(
+                    nodes[i][0], nodes[i][1], nodes[i + 1], self._spring_rest, 0.09
+                )
 
             dx = nodes[0][0] - anchor_x
             dy = nodes[0][1] - anchor_y
@@ -13339,13 +14552,25 @@ class DemosGame:
                 node[1] = HEIGHT - radius - 2
                 node[3] = -abs(node[3]) * 0.65
 
-        draw_rectangle(int(anchor_x) - 2, int(anchor_y) - 1, int(anchor_x) + 2, int(anchor_y), 255, 255, 255)
+        draw_rectangle(
+            int(anchor_x) - 2,
+            int(anchor_y) - 1,
+            int(anchor_x) + 2,
+            int(anchor_y),
+            255,
+            255,
+            255,
+        )
         px, py = anchor_x, anchor_y
         for i, node in enumerate(nodes):
             hue = (self._frame * 3 + i * 40) % 360
             r, g, b = hsb_to_rgb(hue, 1, 1)
-            draw_line(int(px), int(py), int(node[0]), int(node[1]), r // 2, g // 2, b // 2)
-            self._demo_disc(int(node[0]), int(node[1]), 2 if i < len(nodes) - 1 else 3, (r, g, b))
+            draw_line(
+                int(px), int(py), int(node[0]), int(node[1]), r // 2, g // 2, b // 2
+            )
+            self._demo_disc(
+                int(node[0]), int(node[1]), 2 if i < len(nodes) - 1 else 3, (r, g, b)
+            )
             px, py = node[0], node[1]
 
     # --- CRADLE (Newton's cradle) ---
@@ -13365,7 +14590,9 @@ class DemosGame:
             y = anchor_y + math.cos(angle) * self._cradle_length
             vx = 0.9 if i == 0 else 0.0
             vy = 0.0
-            self._cradle_bobs.append([x, y, vx, vy, anchor_x, anchor_y, self._cradle_length, (i * 56) % 360])
+            self._cradle_bobs.append(
+                [x, y, vx, vy, anchor_x, anchor_y, self._cradle_length, (i * 56) % 360]
+            )
         display.clear()
 
     def _cradle_constrain(self, bob):
@@ -13450,8 +14677,14 @@ class DemosGame:
         self._crt_phase = (self._crt_phase + 1) & 255
         phase = self._crt_phase
         bars = (
-            (255, 255, 255), (255, 255, 0), (0, 255, 255), (0, 255, 0),
-            (255, 0, 255), (255, 0, 0), (0, 0, 255), (20, 20, 20)
+            (255, 255, 255),
+            (255, 255, 0),
+            (0, 255, 255),
+            (0, 255, 0),
+            (255, 0, 255),
+            (255, 0, 0),
+            (0, 0, 255),
+            (20, 20, 20),
         )
         for x in range(WIDTH):
             r, g, b = bars[(x * len(bars)) // WIDTH]
@@ -13459,7 +14692,9 @@ class DemosGame:
                 dim = 160 if ((y + phase) & 7) == 0 else 255
                 if y & 1:
                     dim = (dim * 3) // 5
-                display.set_pixel(x, y, (r * dim) // 255, (g * dim) // 255, (b * dim) // 255)
+                display.set_pixel(
+                    x, y, (r * dim) // 255, (g * dim) // 255, (b * dim) // 255
+                )
         for y in range(34, HEIGHT):
             for x in range(WIDTH):
                 v = 30 + ((x * 5 + y * 3 + phase) & 31)
@@ -13559,15 +14794,24 @@ class DemosGame:
 
     def _firwrk_burst(self, x, y, hue):
         n = 14 if CONFIG_LOW_RAM_MODE else 26
+        available = self.MAX_FIREWORK_PARTICLES - len(self._fw_particles)
+        if available <= 0:
+            return
+        n = min(n, available)
         for _ in range(n):
             a = random.randint(0, 359) * 0.0174533
             speed = random.uniform(0.4, 1.7)
             phue = (hue + random.randint(-25, 25)) % 360
-            self._fw_particles.append([
-                float(x), float(y),
-                math.cos(a) * speed, math.sin(a) * speed,
-                random.randint(20, 38), phue,
-            ])
+            self._fw_particles.append(
+                [
+                    float(x),
+                    float(y),
+                    math.cos(a) * speed,
+                    math.sin(a) * speed,
+                    random.randint(20, 38),
+                    phue,
+                ]
+            )
         self._demo_sound("bounce", hue, 80)
 
     def _firwrk_step(self):
@@ -13577,7 +14821,8 @@ class DemosGame:
             self._firwrk_launch()
 
         sp = display.set_pixel
-        rockets = []
+        rockets = self._fw_rockets
+        active_rockets = 0
         for rk in self._fw_rockets:
             rk[1] += rk[2]
             rk[2] += 0.03  # gravity slows the ascent
@@ -13593,15 +14838,17 @@ class DemosGame:
                 ty = y + 1
                 if ty < HEIGHT:
                     sp(x, ty, r // 3, g // 3, b // 4)
-            rockets.append(rk)
-        self._fw_rockets = rockets
+            rockets[active_rockets] = rk
+            active_rockets += 1
+        del rockets[active_rockets:]
 
-        alive = []
+        particles = self._fw_particles
+        active_particles = 0
         for p in self._fw_particles:
             p[0] += p[2]
             p[1] += p[3]
             p[3] += 0.045  # gravity pulls sparks down
-            p[2] *= 0.985   # air drag
+            p[2] *= 0.985  # air drag
             p[4] -= 1
             x = int(p[0])
             y = int(p[1])
@@ -13612,8 +14859,9 @@ class DemosGame:
                 bright = 100
             r, g, b = hsb_to_rgb(p[5], 1, bright / 100.0)
             sp(x, y, r, g, b)
-            alive.append(p)
-        self._fw_particles = alive
+            particles[active_particles] = p
+            active_particles += 1
+        del particles[active_particles:]
 
     # --- PHYLLO (phyllotaxis sunflower spiral) ---
     def _phyllo_init(self):
@@ -13710,7 +14958,9 @@ class DemosGame:
                 - 2 * sin(da) * m2 * (w2 * w2 * l2 + w1 * w1 * l1 * cos(da))
             ) / (l1 * den)
             a2_acc = (
-                2 * sin(da) * (
+                2
+                * sin(da)
+                * (
                     w1 * w1 * l1 * (m1 + m2)
                     + g * (m1 + m2) * cos(a1)
                     + w2 * w2 * l2 * m2 * cos(da)
@@ -13734,11 +14984,12 @@ class DemosGame:
         y2 = y1 + l2 * math.cos(a2)
 
         # Record the tip path; old points fade out.
-        self._pend_trail.append((x2, y2))
-        if len(self._pend_trail) > 48:
-            self._pend_trail = self._pend_trail[-48:]
-        n = len(self._pend_trail)
-        for i, (tx, ty) in enumerate(self._pend_trail):
+        trail = self._pend_trail
+        trail.append((x2, y2))
+        if len(trail) > 48:
+            del trail[:-48]
+        n = len(trail)
+        for i, (tx, ty) in enumerate(trail):
             ix = int(tx)
             iy = int(ty)
             if 0 <= ix < WIDTH and 0 <= iy < HEIGHT:
@@ -13766,7 +15017,9 @@ class DemosGame:
     def _arcade_init(self, joystick=None):
         self._arc_game = BreakoutGame({"settings": {"powerups": True}})
         self._arc_game.paddle_speed = 1
-        self._arc_cpu = CpuPlayerJoystick(joystick, "BRKOUT", self._arc_game, duration_ms=24 * 60 * 60 * 1000)
+        self._arc_cpu = CpuPlayerJoystick(
+            joystick, "BRKOUT", self._arc_game, duration_ms=24 * 60 * 60 * 1000
+        )
         self._arc_game._start_round(show_hud=False)
 
     def _arcade_step(self, joystick=None):
@@ -13993,7 +15246,9 @@ class DemosGame:
         if demo == "LIFE":
             self._life_step(self._life_w, self._life_h, self._life_cur, self._life_nxt)
             self._life_cur, self._life_nxt = self._life_nxt, self._life_cur
-            self._life_draw_diffs(self._life_w, self._life_h, self._life_cur, self._life_prev)
+            self._life_draw_diffs(
+                self._life_w, self._life_h, self._life_cur, self._life_prev
+            )
         elif demo == "ANTS":
             self._ants_step()
         elif demo == "FLOOD":
@@ -14078,7 +15333,6 @@ class DemosGame:
 
     def main_loop(self, joystick):
         self._prepare_demo_loop()
-        frame_ms = self.FRAME_MS
         last_frame = ticks_ms()
 
         while True:
@@ -14095,6 +15349,7 @@ class DemosGame:
                 sleep_ms(10)
                 continue
 
+            frame_ms = self._frame_ms_for_demo(demo)
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 sleep_ms(1)
@@ -14112,7 +15367,6 @@ class DemosGame:
             return self.main_loop(joystick)
 
         self._prepare_demo_loop()
-        frame_ms = self.FRAME_MS
         last_frame = ticks_ms()
 
         while True:
@@ -14129,6 +15383,7 @@ class DemosGame:
                 await asyncio.sleep(0.010)
                 continue
 
+            frame_ms = self._frame_ms_for_demo(demo)
             now = ticks_ms()
             if ticks_diff(now, last_frame) < frame_ms:
                 await asyncio.sleep(0.001)
@@ -14151,6 +15406,7 @@ class LunarLanderGame:
       - C: zurück ins Menü
     Ziel: weich & gerade auf dem grünen Pad landen.
     """
+
     _STEP = 5
     _LUT = None
     # pad_x, pad_w, pad_y, terrain control points, fuel, gravity, thrust.
@@ -14174,7 +15430,12 @@ class LunarLanderGame:
         lut = []
         step = cls._STEP
         for a in range(0, 360, step):
-            lut.append((int(math.cos(math.radians(a)) * 256), int(math.sin(math.radians(a)) * 256)))
+            lut.append(
+                (
+                    int(math.cos(math.radians(a)) * 256),
+                    int(math.sin(math.radians(a)) * 256),
+                )
+            )
         cls._LUT = lut
 
     def __init__(self, ctx=None):
@@ -14188,7 +15449,7 @@ class LunarLanderGame:
         if not keep_level:
             self.level = 1
             self.total_score = 0
-        
+
         profile = self.LEVELS[(self.level - 1) % len(self.LEVELS)]
         cycle = (self.level - 1) // len(self.LEVELS)
         self.terrain = self._make_terrain(profile, cycle)
@@ -14337,7 +15598,13 @@ class LunarLanderGame:
 
     def _make_v2_terrain(self):
         t = [PLAY_HEIGHT - 8] * self.world_w
-        pad_specs = ((18, 11, 47), (82, 10, 43), (145, 9, 39), (214, 9, 44), (284, 8, 36))
+        pad_specs = (
+            (18, 11, 47),
+            (82, 10, 43),
+            (145, 9, 39),
+            (214, 9, 44),
+            (284, 8, 36),
+        )
         for x in range(self.world_w):
             base = PLAY_HEIGHT - 10
             wave = int(math.sin(x * 0.075) * 7 + math.sin(x * 0.021 + 1.7) * 5)
@@ -14581,7 +15848,9 @@ class LunarLanderGame:
                         self.points -= 1
 
                 # input
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT:
                     self.angle = (self.angle + 5) % 360
                 elif d == JOYSTICK_RIGHT:
@@ -14630,37 +15899,43 @@ class LunarLanderGame:
                 ix = int(self.x)
                 gy = self.terrain[ix]
                 if self.y >= gy - 1:
-                    on_pad = (self.pad_x <= ix <= (self.pad_x + self.pad_w - 1))
-                    soft = (abs(self.vx) < 0.65 and abs(self.vy) < 1.2)
-                    upright = (self._angle_diff(self.angle, 90) <= 25)
+                    on_pad = self.pad_x <= ix <= (self.pad_x + self.pad_w - 1)
+                    soft = abs(self.vx) < 0.65 and abs(self.vy) < 1.2
+                    upright = self._angle_diff(self.angle, 90) <= 25
 
                     if on_pad and soft and upright:
                         # Successful landing: award points and advance level
-                        level_bonus = self.points + int(self.fuel) + 200 + (self.level * 150)
+                        level_bonus = (
+                            self.points + int(self.fuel) + 200 + (self.level * 150)
+                        )
                         self.total_score += level_bonus
                         global_score = self.total_score
-                        
+
                         display.clear()
                         draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
                         draw_text(2, 24, "DONE", 0, 255, 0)
                         display_score_and_time(global_score)
                         sleep_ms(1800)
-                        
+
                         # Next level
                         self.level += 1
                         self.reset(keep_level=True)
-                        
+
                         # Short preview of new terrain
                         display.clear()
                         self._draw_terrain()
                         draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
                         display_score_and_time(global_score)
                         sleep_ms(1500)
-                        
+
                         last_frame = ticks_ms()
                         continue
                     else:
-                        global_score = self.total_score if hasattr(self, 'total_score') else self.points
+                        global_score = (
+                            self.total_score
+                            if hasattr(self, "total_score")
+                            else self.points
+                        )
                         game_over = True
                         return
 
@@ -14714,7 +15989,9 @@ class LunarLanderGame:
                         self.points -= 1
 
                 # input
-                d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP])
+                d = joystick.read_direction(
+                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
+                )
                 if d == JOYSTICK_LEFT:
                     self.angle = (self.angle + 5) % 360
                 elif d == JOYSTICK_RIGHT:
@@ -14763,37 +16040,43 @@ class LunarLanderGame:
                 ix = int(self.x)
                 gy = self.terrain[ix]
                 if self.y >= gy - 1:
-                    on_pad = (self.pad_x <= ix <= (self.pad_x + self.pad_w - 1))
-                    soft = (abs(self.vx) < 0.65 and abs(self.vy) < 1.2)
-                    upright = (self._angle_diff(self.angle, 90) <= 25)
+                    on_pad = self.pad_x <= ix <= (self.pad_x + self.pad_w - 1)
+                    soft = abs(self.vx) < 0.65 and abs(self.vy) < 1.2
+                    upright = self._angle_diff(self.angle, 90) <= 25
 
                     if on_pad and soft and upright:
                         # Successful landing: award points and advance level
-                        level_bonus = self.points + int(self.fuel) + 200 + (self.level * 150)
+                        level_bonus = (
+                            self.points + int(self.fuel) + 200 + (self.level * 150)
+                        )
                         self.total_score += level_bonus
                         global_score = self.total_score
-                        
+
                         display.clear()
                         draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
                         draw_text(2, 24, "DONE", 0, 255, 0)
                         display_score_and_time(global_score)
                         await asyncio.sleep(1.8)
-                        
+
                         # Next level
                         self.level += 1
                         self.reset(keep_level=True)
-                        
+
                         # Short preview of new terrain
                         display.clear()
                         self._draw_terrain()
                         draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
                         display_score_and_time(global_score)
                         await asyncio.sleep(1.5)
-                        
+
                         last_frame = ticks_ms()
                         continue
                     else:
-                        global_score = self.total_score if hasattr(self, 'total_score') else self.points
+                        global_score = (
+                            self.total_score
+                            if hasattr(self, "total_score")
+                            else self.points
+                        )
                         game_over = True
                         return
 
@@ -14824,6 +16107,7 @@ class KerbalGame(FrameLoopGame):
       - C: return to menu
     Arcade orbital flight: launch, circularize, optionally return and land.
     """
+
     FRAME_MS = 35
     PLANET_R = 18.0
     MU = 34.0
@@ -14884,7 +16168,9 @@ class KerbalGame(FrameLoopGame):
         return alt_ok and speed_ok and radial_ok, alt, target, radial, tangent
 
     def _screen(self, wx, wy):
-        return int(WIDTH // 2 + wx * self.SCALE), int(PLAY_HEIGHT // 2 + wy * self.SCALE)
+        return int(WIDTH // 2 + wx * self.SCALE), int(
+            PLAY_HEIGHT // 2 + wy * self.SCALE
+        )
 
     def _draw_planet(self):
         px, py = self._screen(0, 0)
@@ -14904,8 +16190,10 @@ class KerbalGame(FrameLoopGame):
 
     def _draw_orbit_band(self):
         px, py = self._screen(0, 0)
-        for rr, col in ((int((self.PLANET_R + 8.0) * self.SCALE), (25, 70, 25)),
-                        (int((self.PLANET_R + 24.0) * self.SCALE), (25, 70, 25))):
+        for rr, col in (
+            (int((self.PLANET_R + 8.0) * self.SCALE), (25, 70, 25)),
+            (int((self.PLANET_R + 24.0) * self.SCALE), (25, 70, 25)),
+        ):
             for deg in range(0, 360, 18):
                 a = math.radians(deg)
                 x = px + int(math.cos(a) * rr)
@@ -14953,10 +16241,14 @@ class KerbalGame(FrameLoopGame):
         sx, sy = self._screen(self.x, self.y)
         c, s = self._cos_sin(self.angle)
         nose = (sx + int(c * 4), sy - int(s * 4))
-        left = (sx + int(math.cos(math.radians(self.angle + 140)) * 3),
-                sy - int(math.sin(math.radians(self.angle + 140)) * 3))
-        right = (sx + int(math.cos(math.radians(self.angle - 140)) * 3),
-                 sy - int(math.sin(math.radians(self.angle - 140)) * 3))
+        left = (
+            sx + int(math.cos(math.radians(self.angle + 140)) * 3),
+            sy - int(math.sin(math.radians(self.angle + 140)) * 3),
+        )
+        right = (
+            sx + int(math.cos(math.radians(self.angle - 140)) * 3),
+            sy - int(math.sin(math.radians(self.angle - 140)) * 3),
+        )
         draw_line(nose[0], nose[1], left[0], left[1], 255, 255, 255)
         draw_line(nose[0], nose[1], right[0], right[1], 255, 255, 255)
         draw_line(left[0], left[1], right[0], right[1], 255, 255, 255)
@@ -14983,7 +16275,9 @@ class KerbalGame(FrameLoopGame):
             hold_w = int(17 * min(110, self.orbit_hold) / 110)
             draw_rectangle(25, PLAY_HEIGHT + 4, 42, PLAY_HEIGHT + 4, 28, 28, 28)
             if hold_w > 0:
-                draw_rectangle(25, PLAY_HEIGHT + 4, 24 + hold_w, PLAY_HEIGHT + 4, 80, 255, 120)
+                draw_rectangle(
+                    25, PLAY_HEIGHT + 4, 24 + hold_w, PLAY_HEIGHT + 4, 80, 255, 120
+                )
 
     def _draw(self, thrust_on, alt, target_speed, radial, tangent):
         display.clear()
@@ -15003,7 +16297,9 @@ class KerbalGame(FrameLoopGame):
         c_button, z_button = joystick.read_buttons()
         if c_button:
             return False
-        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP], debounce=False)
+        d = joystick.read_direction(
+            [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP], debounce=False
+        )
         if d == JOYSTICK_LEFT:
             self.angle = (self.angle + 4) % 360
         elif d == JOYSTICK_RIGHT:
@@ -15096,7 +16392,12 @@ class KerbalGame(FrameLoopGame):
                 set_game_over_score(self.score)
             return False
 
-        if self._radius() > 58 or self.fuel <= 0 and self._surface_alt() > 32 and not ok:
+        if (
+            self._radius() > 58
+            or self.fuel <= 0
+            and self._surface_alt() > 32
+            and not ok
+        ):
             set_game_over_score(self.score)
             return False
 
@@ -15107,8 +16408,10 @@ class KerbalGame(FrameLoopGame):
     def _build_step(self, joystick):
         self.reset()
         begin_game(0)
+
         def step():
             return self._step(joystick)
+
         return step
 
 
@@ -15120,11 +16423,18 @@ class UFODefenseGame:
       - Z: Rakete starten
       - C: zurück ins Menü
     """
+
     FRAME_MS = 35
     TURRETS = (4, 32, 59)
     DIRS_8 = (
-        JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-        JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT,
+        JOYSTICK_UP,
+        JOYSTICK_DOWN,
+        JOYSTICK_LEFT,
+        JOYSTICK_RIGHT,
+        JOYSTICK_UP_LEFT,
+        JOYSTICK_UP_RIGHT,
+        JOYSTICK_DOWN_LEFT,
+        JOYSTICK_DOWN_RIGHT,
     )
 
     def __init__(self, ctx=None):
@@ -15189,7 +16499,9 @@ class UFODefenseGame:
         if self.launcher_mode == "base":
             targets.append(self.base_x)
         if not targets:
-            targets = [self.base_x] if self.launcher_mode == "base" else list(self.TURRETS)
+            targets = (
+                [self.base_x] if self.launcher_mode == "base" else list(self.TURRETS)
+            )
         return targets
 
     def _spawn_enemy(self):
@@ -15214,16 +16526,22 @@ class UFODefenseGame:
             vx = dx / dist * spd
             vy = dy / dist * spd
 
-        self.enemy_missiles.append({
-            "x": float(sx), "y": float(sy),
-            "px": float(sx), "py": float(sy),
-            "tx": float(tx), "ty": float(ty),
-            "vx": vx, "vy": vy
-        })
+        self.enemy_missiles.append(
+            {
+                "x": float(sx),
+                "y": float(sy),
+                "px": float(sx),
+                "py": float(sy),
+                "tx": float(tx),
+                "ty": float(ty),
+                "vx": vx,
+                "vy": vy,
+            }
+        )
 
     def _enemy_cap(self, now):
         # time-based caps: 0-60s -> 2, 60-180s -> 4, 180-300s -> 6, afterwards 6
-        elapsed = ticks_diff(now, getattr(self, 'start_ms', now))
+        elapsed = ticks_diff(now, getattr(self, "start_ms", now))
         if elapsed < 60_000:
             return 2
         if elapsed < 180_000:
@@ -15252,15 +16570,23 @@ class UFODefenseGame:
         vx = dx / dist * spd
         vy = dy / dist * spd
 
-        self.player_missiles.append({
-            "x": float(sx), "y": float(sy),
-            "px": float(sx), "py": float(sy),
-            "tx": float(tx), "ty": float(ty),
-            "vx": vx, "vy": vy
-        })
+        self.player_missiles.append(
+            {
+                "x": float(sx),
+                "y": float(sy),
+                "px": float(sx),
+                "py": float(sy),
+                "tx": float(tx),
+                "ty": float(ty),
+                "vx": vx,
+                "vy": vy,
+            }
+        )
 
     def _add_explosion(self, x, y, max_r, color):
-        self.explosions.append({"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color})
+        self.explosions.append(
+            {"x": float(x), "y": float(y), "r": 0, "dr": 1, "max": max_r, "col": color}
+        )
 
     def _draw_explosion(self, ex):
         r = ex["r"]
@@ -15314,11 +16640,16 @@ class UFODefenseGame:
                 if dx * dx + dy * dy <= r2:
                     self.score += 10
                     if self.chain_reactions:
-                        chain_explosions.append({
-                            "x": float(em["x"]), "y": float(em["y"]),
-                            "r": 0, "dr": 1, "max": 5,
-                            "col": (255, 110, 30),
-                        })
+                        chain_explosions.append(
+                            {
+                                "x": float(em["x"]),
+                                "y": float(em["y"]),
+                                "r": 0,
+                                "dr": 1,
+                                "max": 5,
+                                "col": (255, 110, 30),
+                            }
+                        )
                     continue
                 keep_enemy.append(em)
             self.enemy_missiles = keep_enemy
@@ -15337,7 +16668,12 @@ class UFODefenseGame:
             dx = m["x"] - m["tx"]
             dy = m["y"] - m["ty"]
             if dx * dx + dy * dy <= 7.0:
-                self._add_explosion(m["tx"], m["ty"], 7 if self.blast_style == "filled" else 6, (255, 180, 0))
+                self._add_explosion(
+                    m["tx"],
+                    m["ty"],
+                    7 if self.blast_style == "filled" else 6,
+                    (255, 180, 0),
+                )
                 continue
             elif m["y"] < 0 or m["y"] >= PLAY_HEIGHT:
                 continue
@@ -15371,7 +16707,10 @@ class UFODefenseGame:
 
     def _advance_spawning(self, now):
         if self.spawn_mode == "wave":
-            if self.to_spawn > 0 and ticks_diff(now, self.last_spawn) >= self.wave_spawn_ms:
+            if (
+                self.to_spawn > 0
+                and ticks_diff(now, self.last_spawn) >= self.wave_spawn_ms
+            ):
                 self._spawn_enemy()
                 self.to_spawn -= 1
                 self.last_spawn = now
@@ -15390,7 +16729,9 @@ class UFODefenseGame:
                 self._spawn_enemy()
             self.level += 1
             self.spawn_ms = max(self.min_spawn_ms, 850 - self.level * 10)
-            self.enemy_speed = min(self.max_enemy_speed, self.base_enemy_speed + self.level * 0.01)
+            self.enemy_speed = min(
+                self.max_enemy_speed, self.base_enemy_speed + self.level * 0.01
+            )
 
     def _move_crosshair(self, joystick, now):
         d = joystick.read_direction(self.DIRS_8, debounce=False)
@@ -15550,6 +16891,7 @@ class UFODefenseGame:
             except RestartProgram:
                 return
 
+
 # -----------------------------
 # DOOM-LITE / RAYCASTER GAME
 # -----------------------------
@@ -15577,125 +16919,143 @@ class DoomLiteGame:
     # Playfield ohne Score-Leiste
     PLAY_H = HEIGHT - 6
 
-    # Maps: 16x16, '#' = wall, '.' = floor, 'D' = door, 'K' = key, 'Q' = quad, 'X' = exit
+    # Maps: 16x16; '#' wall, '.' floor, 'D' door, 'K' key, 'Q' quad, 'X' exit.
     MAP_W = 16
     MAP_H = 16
-    MAPS = ((
-        b"################",
-        b"#.....K........#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#......D.......#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#..####..####..#",
-        b"#.Q..........X.#",
-        b"#....######....#",
-        b"################",
-    ), (
-        b"################",
-        b"#.....#........#",
-        b"#.###.#.######.#",
-        b"#.#...#......#.#",
-        b"#.#.####.###.#.#",
-        b"#.#......#...#.#",
-        b"#.######.#.###.#",
-        b"#........#.....#",
-        b"#.####.#####.#.#",
-        b"#....#.....#.#.#",
-        b"####.#####.#.#.#",
-        b"#....#.....#...#",
-        b"#.##.#.#######.#",
-        b"#....#.........#",
-        b"#.###########..#",
-        b"################",
-    ), (
-        b"################",
-        b"#........#.....#",
-        b"#.######.#.###.#",
-        b"#.#......#...#.#",
-        b"#.#.########.#.#",
-        b"#.#..........#.#",
-        b"#.####.#######.#",
-        b"#......#.......#",
-        b"#.######.#####.#",
-        b"#.#......#.....#",
-        b"#.#.####.#.###.#",
-        b"#.#....#.#...#.#",
-        b"#.####.#.###.#.#",
-        b"#......#.....#.#",
-        b"#..#########...#",
-        b"################",
-    ), (
-        b"################",
-        b"#..............#",
-        b"#.####.##.####.#",
-        b"#.#....##....#.#",
-        b"#.#.##.##.##.#.#",
-        b"#...##....##...#",
-        b"###.########.###",
-        b"#..............#",
-        b"#.####....####.#",
-        b"#....#.##.#....#",
-        b"####.#.##.#.####",
-        b"#....#....#....#",
-        b"#.##.######.##.#",
-        b"#..............#",
-        b"#..##########..#",
-        b"################",
-    ), (
-        b"################",
-        b"#..............#",
-        b"#.##.######.##.#",
-        b"#.#..........#.#",
-        b"#.#.###..###.#.#",
-        b"#...#......#...#",
-        b"###.#.####.#.###",
-        b"#.....#..#.....#",
-        b"#.###.#..#.###.#",
-        b"#...#......#...#",
-        b"#.#.########.#.#",
-        b"#.#..........#.#",
-        b"#.##.######.##.#",
-        b"#..............#",
-        b"#..##########..#",
-        b"################",
-    ), (
-        b"################",
-        b"#..............#",
-        b"#.####....####.#",
-        b"#....#.##.#....#",
-        b"####.#.##.#.####",
-        b"#....#....#....#",
-        b"#.##.######.##.#",
-        b"#.#..........#.#",
-        b"#.#.###..###.#.#",
-        b"#...#......#...#",
-        b"###.#.####.#.###",
-        b"#.....#..#.....#",
-        b"#.###.#..#.###.#",
-        b"#..............#",
-        b"#..##########..#",
-        b"################",
-    ))
+    MAPS = (
+        (
+            b"################",
+            b"#.....K........#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#......D.......#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#..####..####..#",
+            b"#.Q..........X.#",
+            b"#....######....#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#.....#........#",
+            b"#.###.#.######.#",
+            b"#.#...#......#.#",
+            b"#.#.####.###.#.#",
+            b"#.#......#...#.#",
+            b"#.######.#.###.#",
+            b"#........#.....#",
+            b"#.####.#####.#.#",
+            b"#....#.....#.#.#",
+            b"####.#####.#.#.#",
+            b"#....#.....#...#",
+            b"#.##.#.#######.#",
+            b"#....#.........#",
+            b"#.###########..#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#........#.....#",
+            b"#.######.#.###.#",
+            b"#.#......#...#.#",
+            b"#.#.########.#.#",
+            b"#.#..........#.#",
+            b"#.####.#######.#",
+            b"#......#.......#",
+            b"#.######.#####.#",
+            b"#.#......#.....#",
+            b"#.#.####.#.###.#",
+            b"#.#....#.#...#.#",
+            b"#.####.#.###.#.#",
+            b"#......#.....#.#",
+            b"#..#########...#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#.####.##.####.#",
+            b"#.#....##....#.#",
+            b"#.#.##.##.##.#.#",
+            b"#...##....##...#",
+            b"###.########.###",
+            b"#..............#",
+            b"#.####....####.#",
+            b"#....#.##.#....#",
+            b"####.#.##.#.####",
+            b"#....#....#....#",
+            b"#.##.######.##.#",
+            b"#..............#",
+            b"#..##########..#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#.##.######.##.#",
+            b"#.#..........#.#",
+            b"#.#.###..###.#.#",
+            b"#...#......#...#",
+            b"###.#.####.#.###",
+            b"#.....#..#.....#",
+            b"#.###.#..#.###.#",
+            b"#...#......#...#",
+            b"#.#.########.#.#",
+            b"#.#..........#.#",
+            b"#.##.######.##.#",
+            b"#..............#",
+            b"#..##########..#",
+            b"################",
+        ),
+        (
+            b"################",
+            b"#..............#",
+            b"#.####....####.#",
+            b"#....#.##.#....#",
+            b"####.#.##.#.####",
+            b"#....#....#....#",
+            b"#.##.######.##.#",
+            b"#.#..........#.#",
+            b"#.#.###..###.#.#",
+            b"#...#......#...#",
+            b"###.#.####.#.###",
+            b"#.....#..#.....#",
+            b"#.###.#..#.###.#",
+            b"#..............#",
+            b"#..##########..#",
+            b"################",
+        ),
+    )
     STARTS = ((2.5, 2.5), (1.5, 1.5), (2.5, 13.5), (1.5, 7.5), (1.5, 1.5), (1.5, 13.5))
 
     # Raycaster Parameter
-    ANGLE_MAX = 256               # 0..255 entspricht 0..360°
-    FOV = 48                      # ~67.5° (48/256 * 360)
+    ANGLE_MAX = 256  # 0..255 entspricht 0..360°
+    FOV = 48  # ~67.5° (48/256 * 360)
     HALF_FOV = FOV // 2
     MAX_STEPS = 36
     MAX_DIST = 32.0
-    NOISE_RADIUS2 = 56.25         # 7.5 tiles squared
+    NOISE_RADIUS2 = 56.25  # 7.5 tiles squared
     SHOT_MIN_DIST2 = 0.01
     ENEMY_MIN_SHOOT_DIST2 = 0.25
     CONTACT_DAMAGE_DIST2 = 0.20
     ENEMY_SHOOT_RANGE2 = (49.0, 67.24, 88.36)
+    QUAD_SPREAD = (-3, 0, 3)
+    INPUT_DIRECTIONS = (
+        JOYSTICK_UP,
+        JOYSTICK_DOWN,
+        JOYSTICK_LEFT,
+        JOYSTICK_RIGHT,
+        JOYSTICK_UP_LEFT,
+        JOYSTICK_UP_RIGHT,
+        JOYSTICK_DOWN_LEFT,
+        JOYSTICK_DOWN_RIGHT,
+    )
 
     # These thresholds are stored as squared distances because the hot paths
     # only compare ranges. Keeping them squared avoids sqrt on every enemy.
@@ -15719,8 +17079,8 @@ class DoomLiteGame:
             pass
 
         if CONFIG_LOW_RAM_MODE and array:
-            cos_lut = array('h')
-            sin_lut = array('h')
+            cos_lut = array("h")
+            sin_lut = array("h")
             for i in range(256):
                 ang = 2 * math.pi * i / 256
                 cos_lut.append(int(math.cos(ang) * 1024))
@@ -15728,8 +17088,8 @@ class DoomLiteGame:
             cls._COS = cos_lut
             cls._SIN = sin_lut
         elif array:
-            cos_lut = array('f')
-            sin_lut = array('f')
+            cos_lut = array("f")
+            sin_lut = array("f")
             for i in range(256):
                 ang = 2 * math.pi * i / 256
                 cos_lut.append(math.cos(ang))
@@ -15792,15 +17152,23 @@ class DoomLiteGame:
         self.bob_phase = 0
         self.quad_timer = 0
         self.wave_announce = 0  # frames left to show wave banner
-        self.hit_flash = 0      # frames left to flash crosshair on hit
-        self.dmg_flash = 0      # frames left to flash screen red when damaged
+        self.hit_flash = 0  # frames left to flash crosshair on hit
+        self.dmg_flash = 0  # frames left to flash screen red when damaged
         self.key_flash = 0
+        self.weapon_heat = 0
+
+        # Keep the physical matrix and browser renderer coarse, but use native
+        # columns for the desktop emulator where drawing a full 64-pixel view
+        # is inexpensive and wall detail is more legible.
+        self.render_stride = 1 if IS_DESKTOP else 2
 
         self.enemies = []
         self._spawn_wave(self.wave)
 
         self.last_frame = ticks_ms()
-        self.frame_ms = 45 if CONFIG_LOW_RAM_MODE else CONFIG_FRAME_MS_DEFAULT  # ~22-28 fps
+        self.frame_ms = (
+            45 if CONFIG_LOW_RAM_MODE else CONFIG_FRAME_MS_DEFAULT
+        )  # ~22-28 fps
         self.frame = 0
 
     # --- helpers ---
@@ -15860,14 +17228,16 @@ class DoomLiteGame:
             for n in range(len(fallback_open)):
                 qx, qy = fallback_open[(qstart + n) % len(fallback_open)]
                 if (
-                    (qx, qy) != self.key_pos and
-                    (qx, qy) != self.exit_pos and
-                    (qx, qy) not in self.closed_doors
+                    (qx, qy) != self.key_pos
+                    and (qx, qy) != self.exit_pos
+                    and (qx, qy) not in self.closed_doors
                 ):
                     self.quad_pos = (qx, qy)
                     break
         if not self.closed_doors and fallback_open:
-            dx, dy = fallback_open[(idx * 7 + len(fallback_open) // 2) % len(fallback_open)]
+            dx, dy = fallback_open[
+                (idx * 7 + len(fallback_open) // 2) % len(fallback_open)
+            ]
             if (dx, dy) != self.key_pos and (dx, dy) != self.exit_pos:
                 self.closed_doors.add((dx, dy))
         self.lamps = self._make_lamps(idx)
@@ -15881,8 +17251,10 @@ class DoomLiteGame:
                 if self.MAP[my][mx] == 35:
                     continue
                 wall_near = (
-                    self.MAP[my - 1][mx] == 35 or self.MAP[my + 1][mx] == 35 or
-                    self.MAP[my][mx - 1] == 35 or self.MAP[my][mx + 1] == 35
+                    self.MAP[my - 1][mx] == 35
+                    or self.MAP[my + 1][mx] == 35
+                    or self.MAP[my][mx - 1] == 35
+                    or self.MAP[my][mx + 1] == 35
                 )
                 if wall_near and ((mx * 7 + my * 11 + map_idx * 5) % 19) == 0:
                     lamps.append((mx + 0.5, my + 0.5, 150))
@@ -15904,7 +17276,11 @@ class DoomLiteGame:
                 display.set_pixel(mx, my, 190, 120, 20)
             elif self.key_pos == (mx, my) and not self.key_taken:
                 display.set_pixel(mx, my, 255, 230, 40)
-            elif self.quad_pos == (mx, my) and not self.quad_taken and self.quad_timer <= 0:
+            elif (
+                self.quad_pos == (mx, my)
+                and not self.quad_taken
+                and self.quad_timer <= 0
+            ):
                 display.set_pixel(mx, my, 150, 70, 255)
             elif self.exit_pos == (mx, my):
                 display.set_pixel(mx, my, 0, 180, 90 if self.key_taken else 40)
@@ -15971,8 +17347,8 @@ class DoomLiteGame:
         dir_dx = (1, 0, -1, 0)
         dir_dy = (0, -1, 0, 1)
         centered = (
-            abs(self.px - (int(self.px) + 0.5)) < 0.045 and
-            abs(self.py - (int(self.py) + 0.5)) < 0.045
+            abs(self.px - (int(self.px) + 0.5)) < 0.045
+            and abs(self.py - (int(self.py) + 0.5)) < 0.045
         )
         if centered:
             self.px = int(self.px) + 0.5
@@ -16018,10 +17394,10 @@ class DoomLiteGame:
             return False
         margin = 0.20
         return (
-            not self._is_wall_pos(x - margin, y) and
-            not self._is_wall_pos(x + margin, y) and
-            not self._is_wall_pos(x, y - margin) and
-            not self._is_wall_pos(x, y + margin)
+            not self._is_wall_pos(x - margin, y)
+            and not self._is_wall_pos(x + margin, y)
+            and not self._is_wall_pos(x, y - margin)
+            and not self._is_wall_pos(x, y + margin)
         )
 
     def _front_tile(self, reach=1.05):
@@ -16188,8 +17564,12 @@ class DoomLiteGame:
 
             # Inline _is_wall_tile to avoid per-step method call overhead.
             if (
-                map_x < 0 or map_x >= MAP_W or map_y < 0 or map_y >= MAP_H or
-                MAP[map_y][map_x] == 35 or (map_x, map_y) in closed_doors
+                map_x < 0
+                or map_x >= MAP_W
+                or map_y < 0
+                or map_y >= MAP_H
+                or MAP[map_y][map_x] == 35
+                or (map_x, map_y) in closed_doors
             ):
                 if side == 0:
                     dist = side_x - delta_x
@@ -16210,7 +17590,7 @@ class DoomLiteGame:
         if n > 7:
             n = 7
         self.enemies = []
-        
+
         # Precompute all valid spawn points
         valid_spawns = []
         sx, sy = self._player_start_for_level()
@@ -16218,7 +17598,9 @@ class DoomLiteGame:
             for y in range(1, self.MAP_H - 1):
                 if not self._is_wall_tile(x, y):
                     # nicht direkt am Start
-                    if abs(x + 0.5 - sx) + abs(y + 0.5 - sy) >= 4 and self._is_enemy_clear_pos(x + 0.5, y + 0.5):
+                    if abs(x + 0.5 - sx) + abs(
+                        y + 0.5 - sy
+                    ) >= 4 and self._is_enemy_clear_pos(x + 0.5, y + 0.5):
                         valid_spawns.append((x + 0.5, y + 0.5))
 
         # Shuffle or random choice valid spawns
@@ -16227,7 +17609,7 @@ class DoomLiteGame:
                 break
             spawn = random.choice(valid_spawns)
             valid_spawns.remove(spawn)
-            
+
             if wave >= 7 and random.randint(0, 99) < 25:
                 typ = 2
             elif wave >= 3 and random.randint(0, 99) < 45:
@@ -16238,19 +17620,32 @@ class DoomLiteGame:
             hp = 1 + typ
             if wave >= 8 and typ > 0:
                 hp += 1
-            # x, y, hp, cooldown, type, animation phase, alert x/y/timer
-            self.enemies.append([
-                spawn[0], spawn[1], hp, random.randint(20, 90), typ,
-                random.randint(0, 31), 0.0, 0.0, 0
-            ])
-            
+            # x, y, hp, cooldown, type, animation phase, alert x/y/timer,
+            # strafe direction, muzzle flash. The final two fields give ranged
+            # enemies distinct behavior without a separate object allocation.
+            self.enemies.append(
+                [
+                    spawn[0],
+                    spawn[1],
+                    hp,
+                    random.randint(20, 90),
+                    typ,
+                    random.randint(0, 31),
+                    0.0,
+                    0.0,
+                    0,
+                    -1 if random.randint(0, 1) else 1,
+                    0,
+                ]
+            )
+
         self.wave_announce = 60  # show wave banner for ~2 s
 
     def _alert_enemies_to_noise(self, wx, wy):
         radius2 = self.NOISE_RADIUS2
         for e in self.enemies:
             # Older save/attract states may still have the pre-alert enemy shape.
-            while len(e) < 9:
+            while len(e) < 11:
                 e.append(0)
             if e[2] <= 0:
                 continue
@@ -16265,55 +17660,62 @@ class DoomLiteGame:
                 e[8] = 90 + int((radius2 - d2) * 0.8)
 
     def _shoot(self):
-        # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
+        """Fire a hitscan burst and return the number of enemies hit."""
         if self._try_use_door():
             self.weapon_recoil = 2
-            return
-        self.muzzle_flash = 6
-        self.weapon_recoil = 5
+            return 0
+
+        quad_active = self.quad_timer > 0
+        shot_angles = self.QUAD_SPREAD if quad_active else (0,)
+        damage = 2 if quad_active else 1
+        aim_tolerance = 3 if quad_active else 4
+        hit_indices = []
+        hits = 0
+
+        self.muzzle_flash = 8 if quad_active else 6
+        self.weapon_recoil = 6 if quad_active else 5
+        self.weapon_heat = min(12, self.weapon_heat + 3)
         play_sound("zap", self.wave)
         self._alert_enemies_to_noise(self.px, self.py)
-        wall_dist, _ = self._cast_ray(self.ang)
 
-        best_i = -1
-        best_d2 = 999.0
-        # The ray gives a true wall distance; convert the accepted range to a
-        # squared value so every enemy can be tested without sqrt.
-        wall_limit = wall_dist + 0.2
-        wall_limit2 = wall_limit * wall_limit
+        for angle_offset in shot_angles:
+            shot_ang = (self.ang + angle_offset) & 255
+            wall_dist, _ = self._cast_ray(shot_ang)
+            wall_limit = wall_dist + 0.2
+            wall_limit2 = wall_limit * wall_limit
+            best_i = -1
+            best_d2 = 999.0
 
-        for i, e in enumerate(self.enemies):
-            if e[2] <= 0:
+            for i, enemy in enumerate(self.enemies):
+                if i in hit_indices or enemy[2] <= 0:
+                    continue
+                dx = enemy[0] - self.px
+                dy = enemy[1] - self.py
+                dist2 = dx * dx + dy * dy
+                if dist2 <= self.SHOT_MIN_DIST2 or dist2 >= wall_limit2:
+                    continue
+                enemy_ang = self._angle_to_units(dx, dy)
+                if abs(self._angle_delta(enemy_ang, shot_ang)) > aim_tolerance:
+                    continue
+                if dist2 < best_d2:
+                    best_d2 = dist2
+                    best_i = i
+
+            if best_i < 0:
                 continue
-            dx = e[0] - self.px
-            dy = e[1] - self.py
-            dist2 = dx * dx + dy * dy
-            if dist2 <= self.SHOT_MIN_DIST2:
-                continue
 
-            if dist2 >= wall_limit2:
-                continue
-
-            a = self._angle_to_units(dx, dy)
-            delta = self._angle_delta(a, self.ang)
-
-            # nur wenn nahe an der Mitte (Crosshair) -> leicht großzügiger für Arcade-Stick
-            if abs(delta) > 4:
-                continue
-
-            if dist2 < best_d2:
-                best_d2 = dist2
-                best_i = i
-
-        if best_i >= 0:
-            damage = 4 if self.quad_timer > 0 else 1
-            self.enemies[best_i][2] -= damage
-            self.hit_flash = 8  # flash crosshair on hit
-            if self.enemies[best_i][2] <= 0:
-                typ = self.enemies[best_i][4] if len(self.enemies[best_i]) > 4 else 0
-                self.score += 50 + typ * 25 + (25 if self.quad_timer > 0 else 0)
+            hit_indices.append(best_i)
+            enemy = self.enemies[best_i]
+            enemy[2] -= damage
+            self.hit_flash = 10
+            hits += 1
+            typ = enemy[4] if len(enemy) > 4 else 0
+            if enemy[2] <= 0:
+                self.score += 50 + typ * 25 + (25 if quad_active else 0)
             else:
-                self.score += 15 + (10 if self.quad_timer > 0 else 0)
+                self.score += 15 + (10 if quad_active else 0)
+
+        return hits
 
     def _update_enemies(self):
         global game_over, global_score
@@ -16322,12 +17724,12 @@ class DoomLiteGame:
         if (self.frame & 1) == 1:
             return
 
-        for e in self.enemies:
+        for enemy_index, e in enumerate(self.enemies):
             if len(e) < 4:
                 e.append(0)  # upgrade legacy states to support cooldowns
-            while len(e) < 9:
+            while len(e) < 11:
                 e.append(0)
-                
+
             if e[2] <= 0:
                 continue
 
@@ -16349,12 +17751,18 @@ class DoomLiteGame:
 
             typ = e[4]
             e[5] = (e[5] + 1) & 31
+            if e[10] > 0:
+                e[10] -= 1
 
             # Enemies might shoot back occasionally if wave > 2
-            if self.wave > 2 and e[3] <= 0:
+            should_check_los = ((self.frame + enemy_index) & 3) == 0
+            if self.wave > 2 and e[3] <= 0 and should_check_los:
                 # First do cheap squared range checks. Only visible candidates
                 # pay for sqrt, because the ray result is a true distance.
-                if dist2 > self.ENEMY_MIN_SHOOT_DIST2 and dist2 < self.ENEMY_SHOOT_RANGE2[typ]:
+                if (
+                    dist2 > self.ENEMY_MIN_SHOOT_DIST2
+                    and dist2 < self.ENEMY_SHOOT_RANGE2[typ]
+                ):
                     dist = math.sqrt(dist2)
                     a = self._angle_to_units(dx, dy)
                     ray_dist, _ = self._cast_ray(a)
@@ -16368,13 +17776,14 @@ class DoomLiteGame:
                             game_over = True
                             return
                         self.px, self.py = self._player_start_for_level()
+                        e[10] = 5
                         # Reload enemy weapon
                         e[3] = random.randint(90, 210) - typ * 15
                         if e[3] < 55:
                             e[3] = 55
                         return
                     else:
-                        e[3] = 30 # retry sooner if blocked
+                        e[3] = 30  # retry sooner if blocked
             elif e[3] > 0:
                 e[3] -= 1
 
@@ -16393,10 +17802,18 @@ class DoomLiteGame:
                 else:
                     e[8] = 0
 
-            # Move toward target
+            # Archetypes: basic enemies stalk, orange enemies strafe while
+            # shooting, and purple enemies close distance more aggressively.
             step = 0.05 + (self.wave * 0.002) + typ * 0.006
+            if typ == 2:
+                step += 0.014
             if step > 0.09:
                 step = 0.09
+
+            strafe = typ == 1 and dist2 < 28.0 and e[8] <= 0
+            if strafe:
+                strafe_dir = e[9] if e[9] else 1
+                move_dx, move_dy = -dy * strafe_dir, dx * strafe_dir
 
             # axis-priority move
             if abs(move_dx) > abs(move_dy):
@@ -16405,6 +17822,8 @@ class DoomLiteGame:
                 if self._is_enemy_clear_pos(nx, e[1]):
                     e[0] = nx
                 else:
+                    if strafe:
+                        e[9] = -strafe_dir
                     sy = step if move_dy > 0 else -step
                     ny = e[1] + sy
                     if self._is_enemy_clear_pos(e[0], ny):
@@ -16415,6 +17834,8 @@ class DoomLiteGame:
                 if self._is_enemy_clear_pos(e[0], ny):
                     e[1] = ny
                 else:
+                    if strafe:
+                        e[9] = -strafe_dir
                     sx = step if move_dx > 0 else -step
                     nx = e[0] + sx
                     if self._is_enemy_clear_pos(nx, e[1]):
@@ -16429,7 +17850,9 @@ class DoomLiteGame:
             return (255, 45, 180, 255, 220, 40)
         return (230, 35, 35, 255, 230, 40)
 
-    def _draw_enemy_sprite(self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim, light=255):
+    def _draw_enemy_sprite(
+        self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim, light=255, firing=0
+    ):
         body_r, body_g, body_b, eye_r, eye_g, eye_b = self._enemy_palette(typ, hp)
         h = y1 - y0 + 1
         w = x1 - x0 + 1
@@ -16480,6 +17903,9 @@ class DoomLiteGame:
                         continue
                     rr, gg, bb = body_r // 2, body_g // 2, body_b // 2
 
+                if firing and rel_y == h // 2 and rel_x == center:
+                    rr, gg, bb = 255, 235, 90
+
                 if light < 255:
                     rr = (rr * light) // 255
                     gg = (gg * light) // 255
@@ -16502,6 +17928,11 @@ class DoomLiteGame:
         set_pixel_clipped(cx - 1, base_y - 1, 170, 170, 180)
         set_pixel_clipped(cx, base_y - 2, 190, 190, 200)
         set_pixel_clipped(cx + 1, base_y - 1, 170, 170, 180)
+        if self.weapon_heat > 0:
+            heat = min(255, 80 + self.weapon_heat * 14)
+            set_pixel_clipped(cx - 1, base_y + 1, heat, heat // 3, 20)
+            set_pixel_clipped(cx, base_y, 255, heat, 30)
+            set_pixel_clipped(cx + 1, base_y + 1, heat, heat // 3, 20)
         if self.quad_timer > 0:
             set_pixel_clipped(cx - 3, base_y + 2, 120, 70, 255)
             set_pixel_clipped(cx + 3, base_y + 2, 120, 70, 255)
@@ -16535,9 +17966,11 @@ class DoomLiteGame:
         # reduces the dirty-pixel mask modifications and saves CPU time.
         minimap_w = self.MAP_W + 2 if self.render_minimap else 0
         minimap_h = self.MAP_H + 2 if self.render_minimap else 0
-        
-        # ray angles: fixedpoint, damit FOV/64 sauber läuft
-        col_step = 2
+
+        # Ray stride is target-aware: desktop renders native 64 columns while
+        # browser and matrix targets retain paired columns for stable timing.
+        col_step = self.render_stride
+        draw_pair = col_step == 2
         angle_step_fp = (self.FOV << 16) // WIDTH
         # Positive angle points upward in map coordinates, so screen-left is
         # ang + HALF_FOV and screen-right is ang - HALF_FOV.
@@ -16551,8 +17984,9 @@ class DoomLiteGame:
             zbuf[x] = dist
             # The renderer draws two screen columns per ray. Mirror the depth so
             # sprite clipping still works at native screen-column granularity.
-            x2 = x + 1
-            zbuf[x2] = dist
+            x2 = x + 1 if draw_pair else x
+            if draw_pair:
+                zbuf[x2] = dist
 
             ray_dx = COS[ray_ang]
             ray_dy = -SIN[ray_ang]
@@ -16600,27 +18034,27 @@ class DoomLiteGame:
                 b = 18
             if b > 255:
                 b = 255
-            
+
             wr = b if side == 0 else (b * 3) // 4
-            
+
             # Apply theme color to wall
-            if theme == 0:   # Brown
+            if theme == 0:  # Brown
                 wg = wr * 3 // 5
                 wb = wr // 4
-            elif theme == 1: # Blue
+            elif theme == 1:  # Blue
                 wb = wr
                 wg = wr * 3 // 5
                 wr = wr // 4
-            elif theme == 2: # Greenish
+            elif theme == 2:  # Greenish
                 wg = wr
                 wb = wr // 3
                 wr = wr // 3
-            else:            # Purple
+            else:  # Purple
                 wb = wr
                 wg = wr // 4
             if is_door:
                 wr, wg, wb = min(255, b + 20), (b * 3) // 4, max(15, b // 5)
-                
+
             # Base sky and floor colors depending on theme
             if theme == 0:
                 sky_r, sky_g, sky_b = 0, 0, 14 + muzzle_flash * 4
@@ -16648,6 +18082,7 @@ class DoomLiteGame:
             # low contrast so lighting remains the main depth cue.
             wall_u = hit_y if side == 0 else hit_x
             pattern_base = int(wall_u * 8)
+            wall_style = (hit_mx * 3 + hit_my * 5 + theme) & 3
             # The minimap owns the top-left overlay. Starting below it avoids a
             # branch for every pixel in the inner loops.
             skip_top = minimap_h if x < minimap_w else 0
@@ -16656,13 +18091,18 @@ class DoomLiteGame:
             # Draw sky, wall, and floor in order!
             for y in range(skip_top, start):
                 sp(x, y, sky_r, sky_g, sky_b)
-                sp(x2, y, sky_r, sky_g, sky_b)
-            
+                if draw_pair:
+                    sp(x2, y, sky_r, sky_g, sky_b)
+
             wall_start = start if start > skip_top else skip_top
             for y in range(wall_start, end + 1):
                 pattern = (pattern_base + ((y - start) >> 1)) & 15
                 if is_door and ((pattern_base + y) & 3) == 0:
                     pr, pg, pb = min(255, wr + 18), min(255, wg + 12), wb
+                elif wall_style == 1 and (pattern_base & 3) == 0:
+                    pr, pg, pb = (wr * 3) // 4, (wg * 3) // 4, (wb * 3) // 4
+                elif wall_style == 2 and ((y - start) & 3) == 0:
+                    pr, pg, pb = min(255, wr + 8), min(255, wg + 8), min(255, wb + 8)
                 elif pattern == 0:
                     pr, pg, pb = min(255, wr + 12), min(255, wg + 12), min(255, wb + 12)
                 elif pattern == 8:
@@ -16670,14 +18110,16 @@ class DoomLiteGame:
                 else:
                     pr, pg, pb = wr, wg, wb
                 sp(x, y, pr, pg, pb)
-                sp(x2, y, pr, pg, pb)
-                    
+                if draw_pair:
+                    sp(x2, y, pr, pg, pb)
+
             floor_start = end + 1
             if floor_start < skip_top:
                 floor_start = skip_top
             for y in range(floor_start, PLAY_H):
                 sp(x, y, fl_r, fl_g, fl_b)
-                sp(x2, y, fl_r, fl_g, fl_b)
+                if draw_pair:
+                    sp(x2, y, fl_r, fl_g, fl_b)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -16730,6 +18172,7 @@ class DoomLiteGame:
 
                 typ = e[4] if len(e) > 4 else 0
                 anim = e[5] if len(e) > 5 else 0
+                firing = e[10] if len(e) > 10 else 0
                 sprite_light = 62
                 for li, (lx, ly, strength) in enumerate(lamps):
                     ldx = e[0] - lx
@@ -16741,14 +18184,33 @@ class DoomLiteGame:
                     sprite_light += max(0, muzzle_flash * 20 - int(dist * 12))
                 if sprite_light > 255:
                     sprite_light = 255
-                self._draw_enemy_sprite(sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim, sprite_light)
+                self._draw_enemy_sprite(
+                    sp,
+                    x0,
+                    x1,
+                    y0,
+                    y1,
+                    dist,
+                    zbuf,
+                    typ,
+                    e[2],
+                    anim,
+                    sprite_light,
+                    firing,
+                )
 
         if self.key_pos is not None and not self.key_taken:
-            self._draw_world_marker(sp, self.key_pos[0] + 0.5, self.key_pos[1] + 0.5, "key", zbuf)
+            self._draw_world_marker(
+                sp, self.key_pos[0] + 0.5, self.key_pos[1] + 0.5, "key", zbuf
+            )
         if self.quad_pos is not None and not self.quad_taken and self.quad_timer <= 0:
-            self._draw_world_marker(sp, self.quad_pos[0] + 0.5, self.quad_pos[1] + 0.5, "quad", zbuf)
+            self._draw_world_marker(
+                sp, self.quad_pos[0] + 0.5, self.quad_pos[1] + 0.5, "quad", zbuf
+            )
         if self.exit_pos is not None:
-            self._draw_world_marker(sp, self.exit_pos[0] + 0.5, self.exit_pos[1] + 0.5, "exit", zbuf)
+            self._draw_world_marker(
+                sp, self.exit_pos[0] + 0.5, self.exit_pos[1] + 0.5, "exit", zbuf
+            )
 
         if self.render_minimap:
             # minimap overlay: keep the background static and only refresh markers.
@@ -16760,16 +18222,30 @@ class DoomLiteGame:
                     sp(mx, my, 190, 120, 20)
                 if self.key_pos is not None and not self.key_taken:
                     sp(self.key_pos[0], self.key_pos[1], 255, 230, 40)
-                if self.quad_pos is not None and not self.quad_taken and self.quad_timer <= 0:
+                if (
+                    self.quad_pos is not None
+                    and not self.quad_taken
+                    and self.quad_timer <= 0
+                ):
                     sp(self.quad_pos[0], self.quad_pos[1], 150, 70, 255)
                 if self.exit_pos is not None:
-                    sp(self.exit_pos[0], self.exit_pos[1], 0, 180, 90 if self.key_taken else 40)
+                    sp(
+                        self.exit_pos[0],
+                        self.exit_pos[1],
+                        0,
+                        180,
+                        90 if self.key_taken else 40,
+                    )
                 self._minimap_initialized = True
             else:
                 if self._minimap_prev_player is not None:
-                    self._restore_minimap_cell(self._minimap_prev_player[0], self._minimap_prev_player[1])
+                    self._restore_minimap_cell(
+                        self._minimap_prev_player[0], self._minimap_prev_player[1]
+                    )
                 if self._minimap_prev_aim is not None:
-                    self._restore_minimap_cell(self._minimap_prev_aim[0], self._minimap_prev_aim[1])
+                    self._restore_minimap_cell(
+                        self._minimap_prev_aim[0], self._minimap_prev_aim[1]
+                    )
                 for ex, ey in self._minimap_prev_enemies:
                     self._restore_minimap_cell(ex, ey)
 
@@ -16840,227 +18316,125 @@ class DoomLiteGame:
         if self.render_hud:
             display_score_and_time(self.score)
 
+    def _advance_game_frame(self, joystick):
+        """Advance one game frame; shared by sync and browser runtime loops."""
+        global game_over, global_score
+
+        c_button, z_button = joystick.read_buttons()
+        if c_button:
+            return False
+
+        self.frame += 1
+        if self.wave_announce > 0:
+            self.wave_announce -= 1
+        if self.hit_flash > 0:
+            self.hit_flash -= 1
+        if self.muzzle_flash > 0:
+            self.muzzle_flash -= 1
+        if self.weapon_recoil > 0:
+            self.weapon_recoil -= 1
+        if self.weapon_heat > 0:
+            self.weapon_heat -= 1
+        if self.quad_timer > 0:
+            self.quad_timer -= 1
+        if self.key_flash > 0:
+            self.key_flash -= 1
+        if self.dmg_flash > 0:
+            self.dmg_flash -= 1
+
+        direction = joystick.read_direction(self.INPUT_DIRECTIONS, debounce=False)
+        turn_x, move_y = direction_to_delta_8way(direction)
+        if turn_x < 0:
+            self.ang = (self.ang + 5) & 255
+        elif turn_x > 0:
+            self.ang = (self.ang - 5) & 255
+
+        move = 0.0
+        if move_y < 0:
+            move = 0.12
+        elif move_y > 0:
+            move = -0.10
+        if move:
+            self.bob_phase = (self.bob_phase + 2) & 31
+            cos_ang, sin_ang = self._cos_sin(self.ang)
+            next_x = self.px + cos_ang * move
+            next_y = self.py - sin_ang * move
+            if not self._is_wall_pos(next_x, self.py):
+                self.px = next_x
+            if not self._is_wall_pos(self.px, next_y):
+                self.py = next_y
+            if self._update_pickups_and_exit():
+                global_score = self.score
+                self._render()
+                return True
+
+        if self.shot_cd > 0:
+            self.shot_cd -= 1
+        if z_button and self.shot_cd == 0:
+            self._shoot()
+            self.shot_cd = 10
+
+        self._update_enemies()
+        if game_over:
+            global_score = self.score
+            return False
+
+        alive = 0
+        for enemy in self.enemies:
+            if enemy[2] > 0:
+                alive += 1
+        if alive == 0:
+            self.score += 100
+            self.wave += 1
+            self._spawn_wave(self.wave)
+            self.px, self.py = self._player_start_for_level()
+            self.ang = 0
+
+        global_score = self.score
+        self._render()
+        if (self.frame % 80) == 0:
+            gc.collect()
+        return True
+
     def main_loop(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0)
 
         while not game_over:
             try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
                 now = ticks_ms()
                 if ticks_diff(now, self.last_frame) < self.frame_ms:
                     sleep_ms(2)
                     continue
                 self.last_frame = now
-                self.frame += 1
-                if self.wave_announce > 0:
-                    self.wave_announce -= 1
-                if self.hit_flash > 0:
-                    self.hit_flash -= 1
-                if self.muzzle_flash > 0:
-                    self.muzzle_flash -= 1
-                if self.weapon_recoil > 0:
-                    self.weapon_recoil -= 1
-                if self.quad_timer > 0:
-                    self.quad_timer -= 1
-                if self.key_flash > 0:
-                    self.key_flash -= 1
-                if self.dmg_flash > 0:
-                    self.dmg_flash -= 1
-
-                # input
-                d = joystick.read_direction([
-                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-                ], debounce=False)
-
-                # rotate
-                tx, ty = direction_to_delta_8way(d)
-                rot = 0
-                if tx < 0:
-                    rot = 5
-                elif tx > 0:
-                    rot = -5
-                if rot:
-                    self.ang = (self.ang + rot) & 255
-
-                # move
-                move = 0.0
-                if ty < 0:
-                    move = 0.12
-                elif ty > 0:
-                    move = -0.10
-
-                if move != 0.0:
-                    self.bob_phase = (self.bob_phase + 2) & 31
-                    c, s = self._cos_sin(self.ang)
-                    dx = c * move
-                    dy = -s * move
-
-                    nx = self.px + dx
-                    ny = self.py + dy
-
-                    # axis-separate collision
-                    if not self._is_wall_pos(nx, self.py):
-                        self.px = nx
-                    if not self._is_wall_pos(self.px, ny):
-                        self.py = ny
-                    if self._update_pickups_and_exit():
-                        self._render()
-                        continue
-
-                # shoot
-                if self.shot_cd > 0:
-                    self.shot_cd -= 1
-                if z_button and self.shot_cd == 0:
-                    self._shoot()
-                    self.shot_cd = 10
-
-                # enemy update / collision
-                self._update_enemies()
-                if game_over:
-                    global_score = self.score
+                if not self._advance_game_frame(joystick):
                     return
-
-                # next wave?
-                alive = 0
-                for e in self.enemies:
-                    if e[2] > 0:
-                        alive += 1
-                if alive == 0:
-                    self.score += 100
-                    self.wave += 1
-                    self._spawn_wave(self.wave)
-                    self.px, self.py = self._player_start_for_level()
-                    self.ang = 0
-
-                global_score = self.score
-                self._render()
-
-                if (self.frame % 80) == 0:
-                    gc.collect()
-
             except RestartProgram:
                 return
 
     async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
+        """Async version for pygbag: yields between shared simulation frames."""
         if asyncio is None:
             return self.main_loop(joystick)
 
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0)
 
         while not game_over:
             try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
                 now = ticks_ms()
                 if ticks_diff(now, self.last_frame) < self.frame_ms:
                     await asyncio.sleep(0.002)
                     continue
                 self.last_frame = now
-                self.frame += 1
-                if self.wave_announce > 0:
-                    self.wave_announce -= 1
-                if self.hit_flash > 0:
-                    self.hit_flash -= 1
-                if self.muzzle_flash > 0:
-                    self.muzzle_flash -= 1
-                if self.weapon_recoil > 0:
-                    self.weapon_recoil -= 1
-                if self.quad_timer > 0:
-                    self.quad_timer -= 1
-                if self.key_flash > 0:
-                    self.key_flash -= 1
-                if self.dmg_flash > 0:
-                    self.dmg_flash -= 1
-
-                # input
-                d = joystick.read_direction([
-                    JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                    JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-                ], debounce=False)
-
-                # rotate
-                tx, ty = direction_to_delta_8way(d)
-                rot = 0
-                if tx < 0:
-                    rot = 5
-                elif tx > 0:
-                    rot = -5
-                if rot:
-                    self.ang = (self.ang + rot) & 255
-
-                # move
-                move = 0.0
-                if ty < 0:
-                    move = 0.12
-                elif ty > 0:
-                    move = -0.10
-
-                if move != 0.0:
-                    self.bob_phase = (self.bob_phase + 2) & 31
-                    c, s = self._cos_sin(self.ang)
-                    dx = c * move
-                    dy = -s * move
-
-                    nx = self.px + dx
-                    ny = self.py + dy
-
-                    # axis-separate collision
-                    if not self._is_wall_pos(nx, self.py):
-                        self.px = nx
-                    if not self._is_wall_pos(self.px, ny):
-                        self.py = ny
-                    if self._update_pickups_and_exit():
-                        self._render()
-                        continue
-
-                # shoot
-                if self.shot_cd > 0:
-                    self.shot_cd -= 1
-                if z_button and self.shot_cd == 0:
-                    self._shoot()
-                    self.shot_cd = 10
-
-                # enemy update / collision
-                self._update_enemies()
-                if game_over:
-                    global_score = self.score
+                if not self._advance_game_frame(joystick):
                     return
-
-                # next wave?
-                alive = 0
-                for e in self.enemies:
-                    if e[2] > 0:
-                        alive += 1
-                if alive == 0:
-                    self.score += 100
-                    self.wave += 1
-                    self._spawn_wave(self.wave)
-                    self.px, self.py = self._player_start_for_level()
-                    self.ang = 0
-
-                global_score = self.score
-                self._render()
-
-                if (self.frame % 80) == 0:
-                    gc.collect()
-
             except RestartProgram:
                 return
 
@@ -17075,6 +18449,7 @@ class CityChaseGame(FrameLoopGame):
       - C: return to menu
     Top-down city chase inspired by early overhead open-world crime games.
     """
+
     FRAME_MS = 38
     WORLD = 256
     BLOCK = 32
@@ -17168,7 +18543,9 @@ class CityChaseGame(FrameLoopGame):
         for _ in range(count):
             px, py = self._random_road_point(28)
             dirs = self._valid_dirs(px, py)
-            self.entities.append([px, py, random.choice(dirs), 0, random.randint(0, 30)])
+            self.entities.append(
+                [px, py, random.choice(dirs), 0, random.randint(0, 30)]
+            )
 
     def _spawn_police(self):
         target = 0
@@ -17181,7 +18558,9 @@ class CityChaseGame(FrameLoopGame):
         while current < target:
             px, py = self._random_road_point(62)
             dirs = self._valid_dirs(px, py)
-            self.entities.append([px, py, random.choice(dirs), 1, random.randint(0, 15)])
+            self.entities.append(
+                [px, py, random.choice(dirs), 1, random.randint(0, 15)]
+            )
             current += 1
 
     def _choose_police_dir(self, e):
@@ -17201,7 +18580,11 @@ class CityChaseGame(FrameLoopGame):
         kept = []
         for e in self.entities:
             e[4] += 1
-            if e[3] == 1 and self.heat <= 2 and self._dist2_to_player(e[0], e[1]) > 70 * 70:
+            if (
+                e[3] == 1
+                and self.heat <= 2
+                and self._dist2_to_player(e[0], e[1]) > 70 * 70
+            ):
                 continue
             if self._is_intersection(e[0], e[1]) and e[4] > 12:
                 if e[3] == 1:
@@ -17365,7 +18748,15 @@ class CityChaseGame(FrameLoopGame):
         py = int(PLAY_HEIGHT // 2 + dy * scale)
         px = clamp(px, 3, WIDTH - 4)
         py = clamp(py, 8, PLAY_HEIGHT - 8)
-        draw_line(WIDTH // 2, PLAY_HEIGHT // 2, px, py, color[0] // 2, color[1] // 2, color[2] // 2)
+        draw_line(
+            WIDTH // 2,
+            PLAY_HEIGHT // 2,
+            px,
+            py,
+            color[0] // 2,
+            color[1] // 2,
+            color[2] // 2,
+        )
         draw_rect_outline(px - 2, py - 2, px + 2, py + 2, *color)
         set_pixel_clipped(px, py, 255, 255, 255)
 
@@ -17382,7 +18773,9 @@ class CityChaseGame(FrameLoopGame):
 
     def _draw_hud(self):
         draw_rectangle(0, 0, WIDTH - 1, 6, 0, 0, 0)
-        draw_text_small(1, 1, "J" + str(self.jobs_done) + "/" + str(self.target_jobs), 255, 255, 255)
+        draw_text_small(
+            1, 1, "J" + str(self.jobs_done) + "/" + str(self.target_jobs), 255, 255, 255
+        )
         heat_w = int(self.heat * 17 / 100)
         cond_w = int(self.condition * 17 / 100)
         draw_rectangle(25, 1, 42, 2, 25, 25, 25)
@@ -17430,14 +18823,24 @@ class CityChaseGame(FrameLoopGame):
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-            ], debounce=False)
+            d = joystick.read_direction(
+                [
+                    JOYSTICK_UP,
+                    JOYSTICK_DOWN,
+                    JOYSTICK_LEFT,
+                    JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT,
+                    JOYSTICK_UP_RIGHT,
+                    JOYSTICK_DOWN_LEFT,
+                    JOYSTICK_DOWN_RIGHT,
+                ],
+                debounce=False,
+            )
             if not self._update(d, z_button):
                 return False
             self._draw()
             return True
+
         return step
 
 
@@ -17451,6 +18854,7 @@ class TopDownRacerGame(FrameLoopGame):
       - C: return to menu
     Top-down circuit racer with scrolling road, traffic, boost, and lap finish.
     """
+
     FRAME_MS = 34
     CAR_Y = PLAY_HEIGHT - 14
     ROAD_HALF = 17
@@ -17477,11 +18881,7 @@ class TopDownRacerGame(FrameLoopGame):
         self._spawn_until(self.world_y + 190.0)
 
     def _track_center(self, z):
-        return (
-            WIDTH // 2
-            + math.sin(z * 0.028) * 12.0
-            + math.sin(z * 0.010 + 1.8) * 7.0
-        )
+        return WIDTH // 2 + math.sin(z * 0.028) * 12.0 + math.sin(z * 0.010 + 1.8) * 7.0
 
     def _sample_world_for_row(self, row):
         return self.world_y + (self.CAR_Y - row) * 2.15
@@ -17554,7 +18954,11 @@ class TopDownRacerGame(FrameLoopGame):
             rel = rival[0] - self.world_y
             sx = self._rival_x(rival)
             sy = self.CAR_Y - rel / 2.15
-            if -12.0 <= rel <= 9.0 and abs(sy - self.CAR_Y) <= 6.0 and abs(sx - self.player_x) <= 5.0:
+            if (
+                -12.0 <= rel <= 9.0
+                and abs(sy - self.CAR_Y) <= 6.0
+                and abs(sx - self.player_x) <= 5.0
+            ):
                 self.energy -= 18.0 if rival[2] == 0 else 24.0
                 self.speed *= 0.43
                 self.bump_flash = 12
@@ -17617,7 +19021,14 @@ class TopDownRacerGame(FrameLoopGame):
 
     def _draw_hud(self):
         draw_rectangle(0, 0, WIDTH - 1, 6, 0, 0, 0)
-        draw_text_small(1, 1, "L" + str(min(self.lap, self.target_laps)) + "/" + str(self.target_laps), 255, 255, 255)
+        draw_text_small(
+            1,
+            1,
+            "L" + str(min(self.lap, self.target_laps)) + "/" + str(self.target_laps),
+            255,
+            255,
+            255,
+        )
         bar_w = int(22 * self.energy / 100.0)
         draw_rectangle(WIDTH - 25, 1, WIDTH - 3, 3, 25, 25, 25)
         if bar_w > 0:
@@ -17647,7 +19058,15 @@ class TopDownRacerGame(FrameLoopGame):
             body = (235, 235, 245)
         self._draw_car(self.player_x, self.CAR_Y, body, (255, 40, 210), player=True)
         if self.boost_flash:
-            draw_rectangle(int(self.player_x) - 1, self.CAR_Y + 4, int(self.player_x) + 1, self.CAR_Y + 6, 40, 170, 255)
+            draw_rectangle(
+                int(self.player_x) - 1,
+                self.CAR_Y + 4,
+                int(self.player_x) + 1,
+                self.CAR_Y + 6,
+                40,
+                170,
+                255,
+            )
         self._draw_hud()
         display_score_and_time(self.score)
 
@@ -17659,14 +19078,24 @@ class TopDownRacerGame(FrameLoopGame):
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-            ], debounce=False)
+            d = joystick.read_direction(
+                [
+                    JOYSTICK_UP,
+                    JOYSTICK_DOWN,
+                    JOYSTICK_LEFT,
+                    JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT,
+                    JOYSTICK_UP_RIGHT,
+                    JOYSTICK_DOWN_LEFT,
+                    JOYSTICK_DOWN_RIGHT,
+                ],
+                debounce=False,
+            )
             if not self._update(d, z_button):
                 return False
             self._draw()
             return True
+
         return step
 
 
@@ -17727,9 +19156,9 @@ class RayRacerGame:
     def _track_curve(self, z):
         # Three broad waves create readable F-Zero-like sweepers without maps.
         return (
-            math.sin(z * 0.013) * 18.0 +
-            math.sin(z * 0.027 + 1.7) * 7.0 +
-            math.sin(z * 0.006) * 24.0
+            math.sin(z * 0.013) * 18.0
+            + math.sin(z * 0.027 + 1.7) * 7.0
+            + math.sin(z * 0.006) * 24.0
         )
 
     def _object_lane(self, obj):
@@ -17754,11 +19183,11 @@ class RayRacerGame:
             lane = random.choice((-0.72, -0.28, 0.28, 0.72))
             roll = random.randint(0, 99)
             if roll < 17:
-                kind = 2      # energy gate
+                kind = 2  # energy gate
             elif roll < 42:
-                kind = 1      # heavy rival
+                kind = 1  # heavy rival
             else:
-                kind = 0      # fast rival
+                kind = 0  # fast rival
             self.objects.append([far, lane, kind, random.randint(0, 127)])
 
     def _update(self, direction, boost):
@@ -17935,7 +19364,12 @@ class RayRacerGame:
             depth = self.row_depth[y]
             p = (y - self.HORIZON + 1) / (self.PLAY_H - self.HORIZON)
             curve = self._track_curve(self.pos + depth)
-            center = WIDTH // 2 + int((curve - base_curve) * 0.72) - int(self.lane * p * 28.0) + shake
+            center = (
+                WIDTH // 2
+                + int((curve - base_curve) * 0.72)
+                - int(self.lane * p * 28.0)
+                + shake
+            )
             half = 3 + int(p * p * 34.0)
             self.row_center[y] = center
             self.row_half[y] = half
@@ -17944,9 +19378,15 @@ class RayRacerGame:
             stripe = int((self.pos + depth) * 0.23) & 1
             for x in range(WIDTH):
                 if left <= x <= right:
-                    edge = (x == left or x == right or x == left + 1 or x == right - 1)
-                    lane_mark = abs(x - center) <= 1 and (int((self.pos + depth) * 0.45) & 3) < 2
-                    side_mark = (abs(x - (center - half // 2)) <= 1 or abs(x - (center + half // 2)) <= 1) and stripe
+                    edge = x == left or x == right or x == left + 1 or x == right - 1
+                    lane_mark = (
+                        abs(x - center) <= 1
+                        and (int((self.pos + depth) * 0.45) & 3) < 2
+                    )
+                    side_mark = (
+                        abs(x - (center - half // 2)) <= 1
+                        or abs(x - (center + half // 2)) <= 1
+                    ) and stripe
                     if edge:
                         if self.boost_flash:
                             sp(x, y, 255, 80, 255)
@@ -18032,10 +19472,19 @@ class RayRacerGame:
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
-            d = joystick.read_direction([
-                JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT,
-                JOYSTICK_UP_LEFT, JOYSTICK_UP_RIGHT, JOYSTICK_DOWN_LEFT, JOYSTICK_DOWN_RIGHT
-            ], debounce=False)
+            d = joystick.read_direction(
+                [
+                    JOYSTICK_UP,
+                    JOYSTICK_DOWN,
+                    JOYSTICK_LEFT,
+                    JOYSTICK_RIGHT,
+                    JOYSTICK_UP_LEFT,
+                    JOYSTICK_UP_RIGHT,
+                    JOYSTICK_DOWN_LEFT,
+                    JOYSTICK_DOWN_RIGHT,
+                ],
+                debounce=False,
+            )
             self._update(d, z_button)
             if game_over:
                 return False
@@ -18043,6 +19492,7 @@ class RayRacerGame:
             if (self.frame % 90) == 0:
                 gc.collect()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -18060,7 +19510,6 @@ class RayRacerGame:
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
-
 class StackerGame:
     """
     STACKER
@@ -18069,6 +19518,7 @@ class StackerGame:
       - C: return to menu
     Stack each moving layer on top of the previous one. Missing overlap ends the run.
     """
+
     FRAME_MS = 45
     LAYER_H = 3
     OVERLAP_GRACE = 2
@@ -18100,10 +19550,15 @@ class StackerGame:
             r, g, b = self._color(n)
             draw_rectangle(x, y, x + w - 1, y + self.LAYER_H - 1, r, g, b)
         r, g, b = self._color(self.score + 3)
-        draw_rectangle(self.bar_x, self.bar_y,
-                       self.bar_x + self.bar_w - 1,
-                       self.bar_y + self.LAYER_H - 1,
-                       r, g, b)
+        draw_rectangle(
+            self.bar_x,
+            self.bar_y,
+            self.bar_x + self.bar_w - 1,
+            self.bar_y + self.LAYER_H - 1,
+            r,
+            g,
+            b,
+        )
         display_score_and_time(self.score)
 
     def _drop(self):
@@ -18119,7 +19574,10 @@ class StackerGame:
         if right <= ox:
             set_game_over_score(self.score, won=False)
             return False
-        if right - ox < self.bar_w and (self.bar_w - (right - ox)) <= self.OVERLAP_GRACE:
+        if (
+            right - ox < self.bar_w
+            and (self.bar_w - (right - ox)) <= self.OVERLAP_GRACE
+        ):
             ox = max(0, ox - 1)
             right = min(WIDTH, right + 1)
         self.bar_x = ox
@@ -18173,17 +19631,32 @@ class StackerGame:
     def main_loop(self, joystick):
         _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
         if self.won:
-            show_center_message(("YOU", "WON"), start_y=18, line_height=15,
-                                r=0, g=255, b=0, score=global_score, delay_ms=900)
+            show_center_message(
+                ("YOU", "WON"),
+                start_y=18,
+                line_height=15,
+                r=0,
+                g=255,
+                b=0,
+                score=global_score,
+                delay_ms=900,
+            )
 
     async def main_loop_async(self, joystick):
         if asyncio is None:
             return self.main_loop(joystick)
         await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
         if self.won:
-            await show_center_message_async(("YOU", "WON"), start_y=18, line_height=15,
-                                            r=0, g=255, b=0, score=global_score,
-                                            delay_ms=900)
+            await show_center_message_async(
+                ("YOU", "WON"),
+                start_y=18,
+                line_height=15,
+                r=0,
+                g=255,
+                b=0,
+                score=global_score,
+                delay_ms=900,
+            )
 
 
 class FroggerGame(FrameLoopGame):
@@ -18194,6 +19667,7 @@ class FroggerGame(FrameLoopGame):
       - C: return to menu
     Cross traffic lanes. Each successful crossing makes the next level harder.
     """
+
     FRAME_MS = 48
     PLAYER_W = 3
     PLAYER_H = 3
@@ -18238,7 +19712,9 @@ class FroggerGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < self.move_ms:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
         dx, dy = direction_to_delta(d)
@@ -18281,10 +19757,15 @@ class FroggerGame(FrameLoopGame):
                 x = int(car[0])
                 w = int(car[1])
                 draw_rectangle(x, y, x + w - 1, y + 2, r, g, b)
-        draw_rectangle(self.player_x, self.player_y,
-                       self.player_x + self.PLAYER_W - 1,
-                       self.player_y + self.PLAYER_H - 1,
-                       0, 255, 80)
+        draw_rectangle(
+            self.player_x,
+            self.player_y,
+            self.player_x + self.PLAYER_W - 1,
+            self.player_y + self.PLAYER_H - 1,
+            0,
+            255,
+            80,
+        )
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -18326,6 +19807,7 @@ class CatchGame(FrameLoopGame):
       - C: return to menu
     Catch stars, avoid bombs, and do not miss too many stars.
     """
+
     FRAME_MS = 36
     MAX_DROPS = 9
 
@@ -18367,7 +19849,9 @@ class CatchGame(FrameLoopGame):
             x = drop[0]
             y = drop[1]
             is_bomb = drop[3]
-            caught = (y >= by - 1 and self.basket_x <= x <= self.basket_x + self.basket_w - 1)
+            caught = (
+                y >= by - 1 and self.basket_x <= x <= self.basket_x + self.basket_w - 1
+            )
             if caught:
                 if is_bomb:
                     global_score = self.score
@@ -18400,9 +19884,15 @@ class CatchGame(FrameLoopGame):
                 display.set_pixel(x, y, r, g, b)
                 if y > 0:
                     display.set_pixel(x, y - 1, r // 3, g // 3, b // 3)
-        draw_rectangle(self.basket_x, PLAY_HEIGHT - 2,
-                       self.basket_x + self.basket_w - 1, PLAY_HEIGHT - 1,
-                       0, 180, 255)
+        draw_rectangle(
+            self.basket_x,
+            PLAY_HEIGHT - 2,
+            self.basket_x + self.basket_w - 1,
+            PLAY_HEIGHT - 1,
+            0,
+            180,
+            255,
+        )
         for i in range(self.missed):
             display.set_pixel(WIDTH - 1 - i, 0, 255, 40, 0)
         display_score_and_time(self.score)
@@ -18433,6 +19923,7 @@ class CatchGame(FrameLoopGame):
 
         return step
 
+
 class MinesGame(GridCursorGame):
     """
     MINES
@@ -18442,6 +19933,7 @@ class MinesGame(GridCursorGame):
       - C: return to menu
     Reveal every safe field without stepping on a mine.
     """
+
     FRAME_MS = 45
     GRID_W = 8
     GRID_H = 7
@@ -18457,7 +19949,9 @@ class MinesGame(GridCursorGame):
         self.score = 0
         self.last_move = ticks_ms()
         self.last_z = False
-        self.revealed = [[False for _x in range(self.GRID_W)] for _y in range(self.GRID_H)]
+        self.revealed = [
+            [False for _x in range(self.GRID_W)] for _y in range(self.GRID_H)
+        ]
         self.mines = [[False for _x in range(self.GRID_W)] for _y in range(self.GRID_H)]
         placed = 0
         while placed < self.MINES:
@@ -18471,7 +19965,11 @@ class MinesGame(GridCursorGame):
         n = 0
         for yy in range(y - 1, y + 2):
             for xx in range(x - 1, x + 2):
-                if 0 <= xx < self.GRID_W and 0 <= yy < self.GRID_H and self.mines[yy][xx]:
+                if (
+                    0 <= xx < self.GRID_W
+                    and 0 <= yy < self.GRID_H
+                    and self.mines[yy][xx]
+                ):
                     n += 1
         return n
 
@@ -18485,7 +19983,11 @@ class MinesGame(GridCursorGame):
         if self._count(x, y) == 0:
             for yy in range(y - 1, y + 2):
                 for xx in range(x - 1, x + 2):
-                    if 0 <= xx < self.GRID_W and 0 <= yy < self.GRID_H and not self.revealed[yy][xx]:
+                    if (
+                        0 <= xx < self.GRID_W
+                        and 0 <= yy < self.GRID_H
+                        and not self.revealed[yy][xx]
+                    ):
                         if not self.mines[yy][xx]:
                             self._reveal(xx, yy)
         return True
@@ -18513,7 +20015,9 @@ class MinesGame(GridCursorGame):
                         draw_rectangle(px, py, px + 5, py + 5, 18, 30, 38)
                         n = self._count(x, y)
                         if n:
-                            draw_text_small(px + 1, py, str(n), 40 + n * 25, 220, 255 - n * 18)
+                            draw_text_small(
+                                px + 1, py, str(n), 40 + n * 25, 220, 255 - n * 18
+                            )
                 else:
                     draw_rectangle(px, py, px + 5, py + 5, 24, 58, 78)
             display.set_pixel(0, 0, 0, 0, 0)
@@ -18558,6 +20062,7 @@ class ClimberGame(FrameLoopGame):
       - C: return to menu
     Jump from platform to platform while the tower scrolls down.
     """
+
     FRAME_MS = 35
 
     def __init__(self):
@@ -18570,7 +20075,9 @@ class ClimberGame(FrameLoopGame):
         self.score = 0
         self.platforms = []
         for i in range(8):
-            self.platforms.append([random.randint(2, WIDTH - 16), PLAY_HEIGHT - i * 8, 14])
+            self.platforms.append(
+                [random.randint(2, WIDTH - 16), PLAY_HEIGHT - i * 8, 14]
+            )
 
     def _move(self, joystick, z_button):
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
@@ -18593,7 +20100,12 @@ class ClimberGame(FrameLoopGame):
         px = int(self.x)
         py = int(self.y)
         for p in self.platforms:
-            if py + 3 >= p[1] and py + 3 <= p[1] + 2 and px + 3 >= p[0] and px <= p[0] + p[2]:
+            if (
+                py + 3 >= p[1]
+                and py + 3 <= p[1] + 2
+                and px + 3 >= p[0]
+                and px <= p[0] + p[2]
+            ):
                 self.vy = -3.4
                 self.score += 1
                 break
@@ -18616,7 +20128,9 @@ class ClimberGame(FrameLoopGame):
                 if p[1] < top:
                     top = p[1]
             w = max(7, 14 - self.score // 80)
-            self.platforms.append([random.randint(1, WIDTH - w - 1), top - random.randint(7, 10), w])
+            self.platforms.append(
+                [random.randint(1, WIDTH - w - 1), top - random.randint(7, 10), w]
+            )
 
     def _draw(self):
         display.clear()
@@ -18624,7 +20138,9 @@ class ClimberGame(FrameLoopGame):
             hue = (120 + p[1] * 3) % 360
             r, g, b = hsb_to_rgb(hue, 1, 1)
             draw_rectangle(p[0], int(p[1]), p[0] + p[2], int(p[1]) + 1, r, g, b)
-        draw_rectangle(int(self.x), int(self.y), int(self.x) + 3, int(self.y) + 3, 255, 255, 255)
+        draw_rectangle(
+            int(self.x), int(self.y), int(self.x) + 3, int(self.y) + 3, 255, 255, 255
+        )
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -18657,6 +20173,7 @@ class ArenaGame(FrameLoopGame):
       - C: return to menu
     Survive enemy waves in a small arena.
     """
+
     FRAME_MS = 38
     INVINCIBLE_MS = 1200
 
@@ -18673,7 +20190,7 @@ class ArenaGame(FrameLoopGame):
         self.frame = 0
         self.enemies = []
         self.shots = []
-        self.sparks = []   # [x, y, dx, dy, ttl]
+        self.sparks = []  # [x, y, dx, dy, ttl]
         self.last_shot = 0
         self.invincible_until = 0
         self.flash_until = 0
@@ -18697,7 +20214,9 @@ class ArenaGame(FrameLoopGame):
             self.enemies.append([x, y, speed])
 
     def _move_player(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             self.dir = d
@@ -18782,7 +20301,9 @@ class ArenaGame(FrameLoopGame):
         border_r = 255 if flashing else 28
         border_g = 255 if flashing else 28
         border_b = 42
-        draw_rect_outline(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, border_r, border_g, border_b)
+        draw_rect_outline(
+            0, 0, WIDTH - 1, PLAY_HEIGHT - 1, border_r, border_g, border_b
+        )
         for sp in self.sparks:
             display.set_pixel(int(sp[0]), int(sp[1]), 255, 160, 0)
         for s in self.shots:
@@ -18833,9 +20354,16 @@ class DefuseGame(FrameLoopGame):
       - C: return to menu
     Memorize and cut wire colors in the requested order before the timer expires.
     """
+
     FRAME_MS = 45
     WIRE_X = (6, 19, 32, 45, 58)
-    WIRE_COLORS = ((255, 0, 0), (0, 180, 255), (255, 230, 0), (0, 255, 70), (255, 0, 210))
+    WIRE_COLORS = (
+        (255, 0, 0),
+        (0, 180, 255),
+        (255, 230, 0),
+        (0, 255, 70),
+        (255, 0, 210),
+    )
 
     def __init__(self):
         self.reset()
@@ -18847,7 +20375,7 @@ class DefuseGame(FrameLoopGame):
         self.last_move = ticks_ms()
         self.last_z = False
         self.wrong_flash_until = 0
-        self.wrong_strikes = 0   # strikes per bomb; 2nd wrong = game over
+        self.wrong_strikes = 0  # strikes per bomb; 2nd wrong = game over
         self._new_bomb()
 
     def _new_bomb(self):
@@ -18892,7 +20420,9 @@ class DefuseGame(FrameLoopGame):
         self.cut_index += 1
         self.score += 5
         if self.cut_index >= len(self.sequence):
-            self.score += max(1, (self.limit_ms - ticks_diff(ticks_ms(), self.started)) // 200)
+            self.score += max(
+                1, (self.limit_ms - ticks_diff(ticks_ms(), self.started)) // 200
+            )
             self.round += 1
             self._new_bomb()
         return True
@@ -18908,7 +20438,15 @@ class DefuseGame(FrameLoopGame):
         for i, idx in enumerate(self.sequence):
             r, g, b = self.WIRE_COLORS[idx]
             dim = i < self.cut_index
-            draw_rectangle(8 + i * 10, 7, 13 + i * 10, 10, r // 3 if dim else r, g // 3 if dim else g, b // 3 if dim else b)
+            draw_rectangle(
+                8 + i * 10,
+                7,
+                13 + i * 10,
+                10,
+                r // 3 if dim else r,
+                g // 3 if dim else g,
+                b // 3 if dim else b,
+            )
             if i == self.cut_index:
                 draw_rect_outline(7 + i * 10, 6, 14 + i * 10, 11, 255, 255, 255)
         wrong_flash = ticks_diff(now, self.wrong_flash_until) < 0
@@ -18918,9 +20456,20 @@ class DefuseGame(FrameLoopGame):
                 draw_rectangle(x - 2, 18, x + 2, 46, 30, 30, 30)
                 draw_line(x - 3, 31, x + 3, 26, 255, 255, 255)
             else:
-                is_next = (self.cut_index < len(self.sequence) and self.sequence[self.cut_index] == i)
+                is_next = (
+                    self.cut_index < len(self.sequence)
+                    and self.sequence[self.cut_index] == i
+                )
                 if is_next and (now // 200) % 2 == 0:
-                    draw_rectangle(x - 1, 16, x + 1, 49, min(255, r + 80), min(255, g + 80), min(255, b + 80))
+                    draw_rectangle(
+                        x - 1,
+                        16,
+                        x + 1,
+                        49,
+                        min(255, r + 80),
+                        min(255, g + 80),
+                        min(255, b + 80),
+                    )
                 else:
                     draw_rectangle(x - 1, 16, x + 1, 49, r, g, b)
         x = self.WIRE_X[self.cursor]
@@ -18965,6 +20514,7 @@ class BilliardsGame(FrameLoopGame):
       - C: return to menu
     Compact billiards with Pool/Snooker setups, pockets, rails, and ball physics.
     """
+
     FRAME_MS = 34
     LEFT = 4
     RIGHT = WIDTH - 5
@@ -18998,7 +20548,9 @@ class BilliardsGame(FrameLoopGame):
 
     def _rack(self):
         self.balls = []
-        self.balls.append(self._ball(16, (self.TOP + self.BOTTOM) // 2, (245, 245, 245), 0))
+        self.balls.append(
+            self._ball(16, (self.TOP + self.BOTTOM) // 2, (245, 245, 245), 0)
+        )
         if self.rules == "snooker":
             reds = ((43, 25), (46, 23), (46, 27), (49, 21), (49, 25), (49, 29))
             for x, y in reds:
@@ -19028,8 +20580,12 @@ class BilliardsGame(FrameLoopGame):
     def _pockets(self):
         mid_x = WIDTH // 2
         return (
-            (self.LEFT, self.TOP), (mid_x, self.TOP), (self.RIGHT, self.TOP),
-            (self.LEFT, self.BOTTOM), (mid_x, self.BOTTOM), (self.RIGHT, self.BOTTOM),
+            (self.LEFT, self.TOP),
+            (mid_x, self.TOP),
+            (self.RIGHT, self.TOP),
+            (self.LEFT, self.BOTTOM),
+            (mid_x, self.BOTTOM),
+            (self.RIGHT, self.BOTTOM),
         )
 
     def _moving(self):
@@ -19106,7 +20662,9 @@ class BilliardsGame(FrameLoopGame):
         # Aim needs raw per-frame hold detection. The default debounce would
         # drop repeated held directions and prevent the fast-step mode from
         # ever kicking in reliably.
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False
+        )
         if d == JOYSTICK_LEFT:
             if self.aim_hold_dir == d:
                 self.aim_hold_count += 1
@@ -19253,7 +20811,9 @@ class BilliardsGame(FrameLoopGame):
         draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 44, 24, 10)
         draw_rectangle(self.LEFT, self.TOP, self.RIGHT, self.BOTTOM, 8, 95, 36)
         draw_rect_outline(self.LEFT, self.TOP, self.RIGHT, self.BOTTOM, 95, 58, 24)
-        draw_rect_outline(self.LEFT - 1, self.TOP - 1, self.RIGHT + 1, self.BOTTOM + 1, 130, 78, 32)
+        draw_rect_outline(
+            self.LEFT - 1, self.TOP - 1, self.RIGHT + 1, self.BOTTOM + 1, 130, 78, 32
+        )
         for px, py in self._pockets():
             self._draw_disc(px, py, 3.0, (0, 0, 0))
 
@@ -19311,6 +20871,7 @@ class BilliardsGame(FrameLoopGame):
                 return False
             self._draw()
             return True
+
         return step
 
 
@@ -19324,6 +20885,7 @@ class GolfGame(FrameLoopGame):
       - C: return to menu
     Put the ball into the hole across compact obstacle courses.
     """
+
     FRAME_MS = 36
 
     def __init__(self):
@@ -19341,7 +20903,7 @@ class GolfGame(FrameLoopGame):
         self.ball_y = float(PLAY_HEIGHT - 8 - (seed % 6))
         self.vx = 0.0
         self.vy = 0.0
-        self.angle = -45   # degrees, full 360° allowed
+        self.angle = -45  # degrees, full 360° allowed
         self.power = 4
         self.strokes = 0
         self.par = 3 + min(2, self.hole // 4)
@@ -19352,7 +20914,9 @@ class GolfGame(FrameLoopGame):
         if self.hole % 2:
             gap_y = 16 + (seed % 22)
             self.obstacles.append([28, 5, 2, max(4, gap_y - 6), 2])
-            self.obstacles.append([28, gap_y + 8, 2, max(4, PLAY_HEIGHT - gap_y - 13), 2])
+            self.obstacles.append(
+                [28, gap_y + 8, 2, max(4, PLAY_HEIGHT - gap_y - 13), 2]
+            )
         else:
             gap_x = 20 + (seed % 22)
             self.obstacles.append([10, 27, max(4, gap_x - 10), 2, 2])
@@ -19362,15 +20926,17 @@ class GolfGame(FrameLoopGame):
             ox = 14 + i * 7 + ((seed + i * 13) % 5)
             oy = 4 + ((seed * (i + 1) * 7) % 42)
             kind = i % 3
-            if kind == 0:   # tree: small square
+            if kind == 0:  # tree: small square
                 self.obstacles.append([ox, oy, 4, 4, 0])
-            elif kind == 1: # bunker: wide, short
+            elif kind == 1:  # bunker: wide, short
                 self.obstacles.append([ox - 1, oy, 6, 3, 1])
-            else:           # wall: narrow, tall
+            else:  # wall: narrow, tall
                 self.obstacles.append([ox, oy, 2, 8, 2])
 
     def _aim(self, joystick):
-        d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN])
+        d = joystick.read_direction(
+            [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN]
+        )
         if d == JOYSTICK_LEFT:
             self.angle -= 5
         elif d == JOYSTICK_RIGHT:
@@ -19446,7 +21012,11 @@ class GolfGame(FrameLoopGame):
             self.vy = 0.0
 
     def _in_hole(self):
-        return abs(self.ball_x - self.hole_x) <= 2 and abs(self.ball_y - self.hole_y) <= 2 and self._ball_speed() < 0.6
+        return (
+            abs(self.ball_x - self.hole_x) <= 2
+            and abs(self.ball_y - self.hole_y) <= 2
+            and self._ball_speed() < 0.6
+        )
 
     def _draw(self):
         display.clear()
@@ -19456,15 +21026,21 @@ class GolfGame(FrameLoopGame):
         draw_rect_outline(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 10, 55, 16)
         # Obstacles
         for o in self.obstacles:
-            if o[4] == 0:   # tree: dark green with brown centre
+            if o[4] == 0:  # tree: dark green with brown centre
                 draw_rectangle(o[0], o[1], o[0] + o[2] - 1, o[1] + o[3] - 1, 10, 65, 10)
                 display.set_pixel(o[0] + 1, o[1] + 1, 100, 60, 20)
-            elif o[4] == 1: # bunker: sandy
-                draw_rectangle(o[0], o[1], o[0] + o[2] - 1, o[1] + o[3] - 1, 210, 185, 110)
-            else:           # wall: grey
-                draw_rectangle(o[0], o[1], o[0] + o[2] - 1, o[1] + o[3] - 1, 110, 110, 110)
+            elif o[4] == 1:  # bunker: sandy
+                draw_rectangle(
+                    o[0], o[1], o[0] + o[2] - 1, o[1] + o[3] - 1, 210, 185, 110
+                )
+            else:  # wall: grey
+                draw_rectangle(
+                    o[0], o[1], o[0] + o[2] - 1, o[1] + o[3] - 1, 110, 110, 110
+                )
         # Hole: dark cup with yellow flag dot
-        draw_rectangle(self.hole_x - 2, self.hole_y - 2, self.hole_x + 2, self.hole_y + 2, 0, 0, 0)
+        draw_rectangle(
+            self.hole_x - 2, self.hole_y - 2, self.hole_x + 2, self.hole_y + 2, 0, 0, 0
+        )
         display.set_pixel(self.hole_x + 2, self.hole_y - 3, 255, 220, 0)
         # Aim indicator when stationary
         if not self._moving():
@@ -19474,8 +21050,18 @@ class GolfGame(FrameLoopGame):
             draw_line(int(self.ball_x) + 1, int(self.ball_y) + 1, ax, ay, 255, 255, 0)
             draw_rectangle(1, 1, self.power * 4, 2, 255, 180, 0)
         # Ball
-        draw_rectangle(int(self.ball_x), int(self.ball_y), int(self.ball_x) + 1, int(self.ball_y) + 1, 255, 255, 255)
-        draw_text_small(1, 52, "H" + str(self.hole) + " P" + str(self.par), 200, 200, 200)
+        draw_rectangle(
+            int(self.ball_x),
+            int(self.ball_y),
+            int(self.ball_x) + 1,
+            int(self.ball_y) + 1,
+            255,
+            255,
+            255,
+        )
+        draw_text_small(
+            1, 52, "H" + str(self.hole) + " P" + str(self.par), 200, 200, 200
+        )
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -19496,7 +21082,9 @@ class GolfGame(FrameLoopGame):
                     self._shoot()
             last_z = z_button
             if self._in_hole():
-                self.score += max(1, 26 - self.strokes * 3 + self.par * 2) + self.hole * 2
+                self.score += (
+                    max(1, 26 - self.strokes * 3 + self.par * 2) + self.hole * 2
+                )
                 self.hole += 1
                 self._new_hole()
             if self.strokes >= self.par + 6:
@@ -19507,6 +21095,7 @@ class GolfGame(FrameLoopGame):
 
         return step
 
+
 class LaserGame(FrameLoopGame):
     """
     LASER
@@ -19516,6 +21105,7 @@ class LaserGame(FrameLoopGame):
       - C: return to menu
     Rotate mirrors until the beam reaches the target.
     """
+
     FRAME_MS = 40
     GRID_W = 8
     GRID_H = 7
@@ -19561,7 +21151,7 @@ class LaserGame(FrameLoopGame):
             next_y = cur_y
             while next_y == cur_y:
                 next_y = random.randint(0, self.GRID_H - 1)
-            # mirror 2 (\) deflects rightward beam downward; mirror 1 (/) deflects upward
+            # Mirror 2 (\) redirects rightward beams down; mirror 1 (/) redirects up.
             going_down = next_y > cur_y
             kind = 2 if going_down else 1
             # first turn mirror — deflects horizontal beam to vertical
@@ -19609,7 +21199,7 @@ class LaserGame(FrameLoopGame):
             self.grid[my][mx] = 3 - correct_kind  # flip: 1<->2
 
         # Store solution for hint display (how many mirrors still wrong)
-        self.solution_mirrors = solution_mirrors   # [(x, y, correct_kind), ...]
+        self.solution_mirrors = solution_mirrors  # [(x, y, correct_kind), ...]
         self.moves = 0
         self.cursor_x = 1
         self.cursor_y = self.start_y
@@ -19649,7 +21239,9 @@ class LaserGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 140:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
@@ -19736,7 +21328,9 @@ class LaserGame(FrameLoopGame):
                 py = oy + y * self.CELL
                 tone = 28 if (x, y) in path_set else 18
                 draw_rect_outline(px, py, px + 5, py + 5, tone, tone + 6, tone + 12)
-                self._draw_mirror(px, py, self.grid[y][x], (x, y) in path_set, self.beam_phase)
+                self._draw_mirror(
+                    px, py, self.grid[y][x], (x, y) in path_set, self.beam_phase
+                )
         beam_complete = self._draw_beam(path, solved)
         sy = oy + self.start_y * self.CELL + 2
         ty = oy + self.target_y * self.CELL + 2
@@ -19746,20 +21340,27 @@ class LaserGame(FrameLoopGame):
             draw_rectangle(WIDTH - 5, ty - 2, WIDTH - 1, ty + 3, 80, 255, 120)
             draw_rectangle(WIDTH - 3, ty - 1, WIDTH - 1, ty + 2, 220, 255, 220)
         else:
-            draw_rectangle(WIDTH - 4, ty - 1, WIDTH - 1, ty + 2, 0, 170 + start_pulse, 80)
+            draw_rectangle(
+                WIDTH - 4, ty - 1, WIDTH - 1, ty + 2, 0, 170 + start_pulse, 80
+            )
         cx = ox + self.cursor_x * self.CELL
         cy = oy + self.cursor_y * self.CELL
         pulse_active = ticks_diff(now, self.beam_pulse_until) < 0
         cr, cg, cb = (255, 220, 80) if pulse_active else (255, 255, 255)
         draw_rect_outline(cx - 1, cy - 1, cx + 6, cy + 6, cr, cg, cb)
-        wrong_count = sum(1 for mx, my, ck in self.solution_mirrors
-                          if self.grid[my][mx] != ck)
-        draw_text_small(1, 52, "L" + str(self.level) + " M" + str(wrong_count), 160, 160, 160)
+        wrong_count = sum(
+            1 for mx, my, ck in self.solution_mirrors if self.grid[my][mx] != ck
+        )
+        draw_text_small(
+            1, 52, "L" + str(self.level) + " M" + str(wrong_count), 160, 160, 160
+        )
         display_score_and_time(self.score)
         return beam_complete
 
     def _start_level_complete(self, now):
-        time_bonus = max(0, (self.time_limit_ms - ticks_diff(now, self.level_start)) // 400)
+        time_bonus = max(
+            0, (self.time_limit_ms - ticks_diff(now, self.level_start)) // 400
+        )
         self.level_complete_score = max(5, 40 - self.moves) + self.level + time_bonus
         self.level_complete_pending = True
         self.beam_phase = 0
@@ -19779,7 +21380,10 @@ class LaserGame(FrameLoopGame):
             if c_button:
                 return False
             now = ticks_ms()
-            if not self.level_complete_pending and ticks_diff(now, self.level_start) > self.time_limit_ms:
+            if (
+                not self.level_complete_pending
+                and ticks_diff(now, self.level_start) > self.time_limit_ms
+            ):
                 set_game_over_score(self.score)
                 return False
             if not self.level_complete_pending:
@@ -19806,6 +21410,7 @@ class PairsGame(FrameLoopGame):
       - C: return to menu
     Match all hidden pairs with as few attempts as possible.
     """
+
     FRAME_MS = 50
     GRID = 4
     CELL = 13
@@ -19846,7 +21451,9 @@ class PairsGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 135:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID - 1)
@@ -19937,6 +21544,8 @@ class PairsGame(FrameLoopGame):
             return True
 
         return step
+
+
 class BomberGame(FrameLoopGame):
     """
     BOMBER
@@ -19946,6 +21555,7 @@ class BomberGame(FrameLoopGame):
       - C: return to menu
     Clear enemies with timed bombs in a compact block maze.
     """
+
     FRAME_MS = 55
     GRID_W = 9
     GRID_H = 8
@@ -19966,10 +21576,12 @@ class BomberGame(FrameLoopGame):
         self.py = 0
         self.bombs = []
         self.blasts = []
-        self.blocks = [[False for _x in range(self.GRID_W)] for _y in range(self.GRID_H)]
+        self.blocks = [
+            [False for _x in range(self.GRID_W)] for _y in range(self.GRID_H)
+        ]
         for y in range(self.GRID_H):
             for x in range(self.GRID_W):
-                fixed = (x % 2 == 1 and y % 2 == 1)
+                fixed = x % 2 == 1 and y % 2 == 1
                 loose = (x > 1 or y > 1) and random.randint(0, 4) == 0
                 self.blocks[y][x] = fixed or loose
         self.blocks[0][0] = False
@@ -19981,7 +21593,15 @@ class BomberGame(FrameLoopGame):
             x = random.randint(2, self.GRID_W - 1)
             y = random.randint(2, self.GRID_H - 1)
             if not self.blocks[y][x]:
-                self.enemies.append([x, y, random.choice((JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT))])
+                self.enemies.append(
+                    [
+                        x,
+                        y,
+                        random.choice(
+                            (JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT)
+                        ),
+                    ]
+                )
 
     def _blocked(self, x, y):
         if x < 0 or y < 0 or x >= self.GRID_W or y >= self.GRID_H:
@@ -19997,7 +21617,9 @@ class BomberGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 135:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             nx = self.px + dx
@@ -20067,7 +21689,9 @@ class BomberGame(FrameLoopGame):
             nx = e[0] + dx
             ny = e[1] + dy
             if self._blocked(nx, ny) or random.randint(0, 4) == 0:
-                e[2] = random.choice((JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT))
+                e[2] = random.choice(
+                    (JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT)
+                )
             else:
                 e[0] = nx
                 e[1] = ny
@@ -20090,7 +21714,7 @@ class BomberGame(FrameLoopGame):
                 px = ox + x * self.CELL
                 py = oy + y * self.CELL
                 if self.blocks[y][x]:
-                    fixed = (x % 2 == 1 and y % 2 == 1)
+                    fixed = x % 2 == 1 and y % 2 == 1
                     col = (70, 70, 90) if fixed else (110, 70, 20)
                     draw_rectangle(px, py, px + 5, py + 5, *col)
         for x, y, _until in self.blasts:
@@ -20107,9 +21731,15 @@ class BomberGame(FrameLoopGame):
             px = ox + e[0] * self.CELL
             py = oy + e[1] * self.CELL
             draw_rectangle(px + 1, py + 1, px + 4, py + 4, 255, 0, 60)
-        draw_rectangle(ox + self.px * self.CELL + 1, oy + self.py * self.CELL + 1,
-                       ox + self.px * self.CELL + 4, oy + self.py * self.CELL + 4,
-                       0, 220, 255)
+        draw_rectangle(
+            ox + self.px * self.CELL + 1,
+            oy + self.py * self.CELL + 1,
+            ox + self.px * self.CELL + 4,
+            oy + self.py * self.CELL + 4,
+            0,
+            220,
+            255,
+        )
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -20140,6 +21770,7 @@ class BomberGame(FrameLoopGame):
 
         return step
 
+
 class SkyWarGame(FrameLoopGame):
     """
     SKYWAR
@@ -20149,6 +21780,7 @@ class SkyWarGame(FrameLoopGame):
       - C: return to menu
     Helicopter battlefield shooter with air and ground targets.
     """
+
     FRAME_MS = 35
 
     def __init__(self):
@@ -20170,7 +21802,9 @@ class SkyWarGame(FrameLoopGame):
         self.frame = 0
 
     def _input(self, joystick, z_button):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         self.x = clamp(self.x + dx * 2, 2, WIDTH // 2)
         self.y = clamp(self.y + dy * 2, 2, PLAY_HEIGHT - 14)
@@ -20183,7 +21817,9 @@ class SkyWarGame(FrameLoopGame):
         kind = random.randint(0, 2)
         spd = -2 if self.score < 400 else -3
         if kind == 0:
-            self.enemies.append(["drone", WIDTH + 2, random.randint(4, PLAY_HEIGHT - 22), spd])
+            self.enemies.append(
+                ["drone", WIDTH + 2, random.randint(4, PLAY_HEIGHT - 22), spd]
+            )
         elif kind == 1:
             self.enemies.append(["tank", WIDTH + 2, PLAY_HEIGHT - 12, spd + 1])
         else:
@@ -20195,7 +21831,9 @@ class SkyWarGame(FrameLoopGame):
         for shot in self.shots:
             shot[1] += shot[3]
             shot[2] += shot[4]
-        self.shots = [s for s in self.shots if 0 <= s[1] < WIDTH and 0 <= s[2] < PLAY_HEIGHT]
+        self.shots = [
+            s for s in self.shots if 0 <= s[1] < WIDTH and 0 <= s[2] < PLAY_HEIGHT
+        ]
         keep = []
         for e in self.enemies:
             e[1] += e[3]
@@ -20219,14 +21857,18 @@ class SkyWarGame(FrameLoopGame):
         for s in self.enemy_shots:
             s[0] += s[2]
             s[1] += s[3]
-        self.enemy_shots = [s for s in self.enemy_shots if s[0] >= 0 and 0 <= s[1] < PLAY_HEIGHT]
+        self.enemy_shots = [
+            s for s in self.enemy_shots if s[0] >= 0 and 0 <= s[1] < PLAY_HEIGHT
+        ]
         survivors = []
         for e in self.enemies:
             hit = False
             ew = 6 if e[0] == "drone" else 8
             eh = 4 if e[0] == "drone" else 5
             for s in self.shots:
-                if rects_overlap(int(s[1]), int(s[2]), 2, 4, int(e[1]), int(e[2]), ew, eh):
+                if rects_overlap(
+                    int(s[1]), int(s[2]), 2, 4, int(e[1]), int(e[2]), ew, eh
+                ):
                     s[1] = WIDTH + 99
                     hit = True
                     pts = 8 if e[0] == "drone" else (10 if e[0] == "tank" else 14)
@@ -20274,7 +21916,9 @@ class SkyWarGame(FrameLoopGame):
             sx += 8
         for s in self.shots:
             if s[0] == "gun":
-                draw_rectangle(int(s[1]), int(s[2]), int(s[1]) + 1, int(s[2]) + 3, 255, 255, 0)
+                draw_rectangle(
+                    int(s[1]), int(s[2]), int(s[1]) + 1, int(s[2]) + 3, 255, 255, 0
+                )
         for s in self.enemy_shots:
             display.set_pixel(int(s[0]), int(s[1]), 255, 60, 0)
         for e in self.enemies:
@@ -20330,13 +21974,14 @@ class WingsGame(FrameLoopGame):
       - C: return to menu
     Carrier-based strike: take off, bomb island targets, return and land.
     """
+
     FRAME_MS = 38
     # Player is always drawn at this fixed screen x; world scrolls around it.
     SCREEN_PX = 12
     # Carrier occupies world x [0, CARRIER_W)
     CARRIER_W = 32
-    DECK_Y = PLAY_HEIGHT - 13   # carrier deck screen y
-    SEA_Y = PLAY_HEIGHT - 5     # sea surface screen y
+    DECK_Y = PLAY_HEIGHT - 13  # carrier deck screen y
+    SEA_Y = PLAY_HEIGHT - 5  # sea surface screen y
     LANDED = 0
     FLYING = 1
 
@@ -20358,15 +22003,15 @@ class WingsGame(FrameLoopGame):
 
     def reset(self):
         self.px = float(self.CARRIER_W // 2)  # player world x, starts on deck
-        self.py = float(self.DECK_Y)           # player screen y
+        self.py = float(self.DECK_Y)  # player screen y
         self.vx = 0.0
         self.vy = 0.0
         self.state = self.LANDED
         self.fuel = 1600
         self.ammo = 20
         self.score = 0
-        self.shots = []         # [type, world_x, screen_y, vx, vy]
-        self.hit_flashes = []   # [world_x, screen_y, ttl_frames]
+        self.shots = []  # [type, world_x, screen_y, vx, vy]
+        self.hit_flashes = []  # [world_x, screen_y, ttl_frames]
         self.last_fire = 0
         self.wave_t = 0
         self.frame = 0
@@ -20387,7 +22032,9 @@ class WingsGame(FrameLoopGame):
                 self.vx = 3.0
                 self.vy = -1.5
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if d == JOYSTICK_UP:
             self.vy = max(-3.5, self.vy - 0.22)
         elif d == JOYSTICK_DOWN:
@@ -20402,11 +22049,15 @@ class WingsGame(FrameLoopGame):
             flying_right = self.vx >= 0
             if self.py < self.SEA_Y - 14:
                 # high altitude → drop bomb with gravity
-                self.shots.append(["bomb", self.px + 4, float(self.py + 5), self.vx * 0.5, 0.4])
+                self.shots.append(
+                    ["bomb", self.px + 4, float(self.py + 5), self.vx * 0.5, 0.4]
+                )
             else:
                 # low altitude → strafing gun in direction of flight
                 gx = self.px + (9 if flying_right else 0)
-                self.shots.append(["gun", gx, float(self.py + 2), 5.0 if flying_right else -5.0, 0.0])
+                self.shots.append(
+                    ["gun", gx, float(self.py + 2), 5.0 if flying_right else -5.0, 0.0]
+                )
             self.last_fire = now
 
     def _advance(self):
@@ -20414,7 +22065,7 @@ class WingsGame(FrameLoopGame):
         self.wave_t = (self.wave_t + 1) % 16
 
         if self.state == self.LANDED:
-            self.fuel = min(1600, self.fuel + 10)   # refuel while on deck
+            self.fuel = min(1600, self.fuel + 10)  # refuel while on deck
             return
 
         # gravity
@@ -20429,19 +22080,24 @@ class WingsGame(FrameLoopGame):
 
         # move shots
         for s in self.shots:
-            s[1] += s[3]    # world x
-            s[2] += s[4]    # screen y
+            s[1] += s[3]  # world x
+            s[2] += s[4]  # screen y
             if s[0] == "bomb":
-                s[4] = min(s[4] + 0.14, 5.0)   # bomb gravity
+                s[4] = min(s[4] + 0.14, 5.0)  # bomb gravity
         # remove shots that went off-screen or hit sea
-        self.shots = [s for s in self.shots
-                      if 0 <= s[2] < self.SEA_Y and abs(s[1] - self.px) < WIDTH + 80]
+        self.shots = [
+            s
+            for s in self.shots
+            if 0 <= s[2] < self.SEA_Y and abs(s[1] - self.px) < WIDTH + 80
+        ]
 
         # advance hit flashes
-        self.hit_flashes = [[f[0], f[1], f[2] - 1] for f in self.hit_flashes if f[2] > 1]
+        self.hit_flashes = [
+            [f[0], f[1], f[2] - 1] for f in self.hit_flashes if f[2] > 1
+        ]
 
         # shot-target hit detection
-        target_sy = self.SEA_Y - 10   # ground level for island targets (screen y)
+        target_sy = self.SEA_Y - 10  # ground level for island targets (screen y)
         for s in self.shots:
             for island in self.islands:
                 for t in island[2]:
@@ -20449,7 +22105,7 @@ class WingsGame(FrameLoopGame):
                         continue
                     if abs(s[1] - t[1]) < 9 and abs(s[2] - target_sy) < 9:
                         t[2] = True
-                        s[2] = float(self.SEA_Y)   # mark shot for removal
+                        s[2] = float(self.SEA_Y)  # mark shot for removal
                         self.score += 20 if t[0] == "depot" else 15
                         self.hit_flashes.append([t[1], target_sy, 8])
 
@@ -20488,22 +22144,53 @@ class WingsGame(FrameLoopGame):
         draw_rectangle(0, self.SEA_Y, WIDTH - 1, PLAY_HEIGHT - 1, 0, 25, 80)
         wo = self.wave_t
         for wxi in range(0, WIDTH, 8):
-            draw_line((wxi + wo) % WIDTH, self.SEA_Y,
-                      (wxi + wo + 3) % WIDTH, self.SEA_Y - 1, 0, 60, 145)
+            draw_line(
+                (wxi + wo) % WIDTH,
+                self.SEA_Y,
+                (wxi + wo + 3) % WIDTH,
+                self.SEA_Y - 1,
+                0,
+                60,
+                145,
+            )
 
         # carrier
         c_sx = self._to_screen_x(0)
         if c_sx + self.CARRIER_W >= 0 and c_sx < WIDTH:
-            on_approach = (self.state == self.FLYING and self._on_carrier()
-                           and abs(self.py - self.DECK_Y) < 8 and abs(self.vx) < 2.3)
+            on_approach = (
+                self.state == self.FLYING
+                and self._on_carrier()
+                and abs(self.py - self.DECK_Y) < 8
+                and abs(self.vx) < 2.3
+            )
             deck_r = 0 if on_approach else 80
             deck_g = 220 if on_approach else 85
-            draw_rectangle(c_sx, self.DECK_Y, c_sx + self.CARRIER_W, self.DECK_Y + 4, deck_r, deck_g, 95)
-            draw_rectangle(c_sx + 6, self.DECK_Y - 4, c_sx + 16, self.DECK_Y, 70, 70, 80)   # bridge
+            draw_rectangle(
+                c_sx,
+                self.DECK_Y,
+                c_sx + self.CARRIER_W,
+                self.DECK_Y + 4,
+                deck_r,
+                deck_g,
+                95,
+            )
+            draw_rectangle(
+                c_sx + 6, self.DECK_Y - 4, c_sx + 16, self.DECK_Y, 70, 70, 80
+            )  # bridge
             # landing stripe
-            draw_line(c_sx + 2, self.DECK_Y, c_sx + self.CARRIER_W - 2, self.DECK_Y, 255, 240, 80)
+            draw_line(
+                c_sx + 2,
+                self.DECK_Y,
+                c_sx + self.CARRIER_W - 2,
+                self.DECK_Y,
+                255,
+                240,
+                80,
+            )
             # hull below waterline
-            draw_rectangle(c_sx, self.DECK_Y + 4, c_sx + self.CARRIER_W, self.SEA_Y - 1, 55, 55, 65)
+            draw_rectangle(
+                c_sx, self.DECK_Y + 4, c_sx + self.CARRIER_W, self.SEA_Y - 1, 55, 55, 65
+            )
 
         if ticks_diff(now, self.landed_flash) < 0:
             draw_rect_outline(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 255, 100)
@@ -20516,21 +22203,33 @@ class WingsGame(FrameLoopGame):
             if i_sx + iw < -5 or i_sx > WIDTH + 5:
                 continue
             # beach / sand edge
-            draw_rectangle(i_sx, self.SEA_Y - 4, i_sx + iw, self.SEA_Y - 1, 200, 175, 100)
+            draw_rectangle(
+                i_sx, self.SEA_Y - 4, i_sx + iw, self.SEA_Y - 1, 200, 175, 100
+            )
             # green interior
-            draw_rectangle(i_sx + 3, self.SEA_Y - 9, i_sx + iw - 3, self.SEA_Y - 4, 45, 100, 30)
+            draw_rectangle(
+                i_sx + 3, self.SEA_Y - 9, i_sx + iw - 3, self.SEA_Y - 4, 45, 100, 30
+            )
             # small hill
-            draw_rectangle(i_sx + iw // 3, self.SEA_Y - 12, i_sx + 2 * iw // 3, self.SEA_Y - 9, 30, 75, 20)
+            draw_rectangle(
+                i_sx + iw // 3,
+                self.SEA_Y - 12,
+                i_sx + 2 * iw // 3,
+                self.SEA_Y - 9,
+                30,
+                75,
+                20,
+            )
             # targets on the island
             for t in island[2]:
                 t_sx = self._to_screen_x(t[1])
                 t_sy = self.SEA_Y - 10
-                if t[2]:    # destroyed — show rubble
+                if t[2]:  # destroyed — show rubble
                     draw_rectangle(t_sx, t_sy + 1, t_sx + 5, t_sy + 4, 90, 55, 15)
                 elif t[0] == "depot":
                     draw_rectangle(t_sx, t_sy, t_sx + 7, t_sy + 5, 140, 90, 25)
                     draw_rectangle(t_sx + 2, t_sy - 3, t_sx + 5, t_sy, 160, 100, 30)
-                else:   # gun emplacement
+                else:  # gun emplacement
                     draw_rectangle(t_sx, t_sy + 3, t_sx + 4, t_sy + 5, 180, 40, 40)
                     draw_line(t_sx + 1, t_sy + 3, t_sx - 1, t_sy, 200, 60, 60)
 
@@ -20558,18 +22257,20 @@ class WingsGame(FrameLoopGame):
         if self.state == self.FLYING:
             draw_rectangle(psx, psy + 1, psx + 6, psy + 3, 0, 200, 255)
             if going_right:
-                draw_line(psx + 1, psy, psx + 5, psy - 1, 180, 220, 255)   # top wing
-                draw_line(psx - 1, psy + 2, psx - 3, psy, 120, 170, 210)   # tail
+                draw_line(psx + 1, psy, psx + 5, psy - 1, 180, 220, 255)  # top wing
+                draw_line(psx - 1, psy + 2, psx - 3, psy, 120, 170, 210)  # tail
             else:
-                draw_line(psx + 1, psy, psx + 5, psy - 1, 180, 220, 255)   # top wing
-                draw_line(psx + 7, psy + 2, psx + 9, psy, 120, 170, 210)   # tail
-        else:   # landed on deck
+                draw_line(psx + 1, psy, psx + 5, psy - 1, 180, 220, 255)  # top wing
+                draw_line(psx + 7, psy + 2, psx + 9, psy, 120, 170, 210)  # tail
+        else:  # landed on deck
             draw_rectangle(psx, psy, psx + 6, psy + 2, 0, 180, 230)
 
         # HUD
         fuel_w = max(0, min(22, self.fuel // 73))
         low_fuel = fuel_w <= 5
-        draw_rectangle(1, 1, fuel_w, 2, 255 if low_fuel else 0, 50 if low_fuel else 200, 0)
+        draw_rectangle(
+            1, 1, fuel_w, 2, 255 if low_fuel else 0, 50 if low_fuel else 200, 0
+        )
         draw_text_small(44, 0, str(self.ammo), 255, 255, 0)
         display_score_and_time(self.score)
 
@@ -20603,6 +22304,7 @@ class CgolgGame:
     Conway's Game of Life Game. Blue and red cells mix color through neighbor
     ancestry while both sides seed directed movers into opposite quarters.
     """
+
     FRAME_MS = 34
     GEN_MS = 135
     LEFT_W = WIDTH // 4
@@ -20617,9 +22319,47 @@ class CgolgGame:
     PATTERNS = (
         ("GDR", 3, ((0, 1), (1, 2), (2, 0), (2, 1), (2, 2))),
         ("GUR", 3, ((0, 1), (1, 0), (2, 0), (2, 1), (2, 2))),
-        ("LWSS", 6, ((0, 0), (0, 2), (1, 3), (2, 3), (3, 0), (3, 3), (4, 1), (4, 2), (4, 3))),
-        ("LWS2", 7, ((0, 1), (0, 2), (1, 1), (1, 2), (1, 3), (2, 0), (2, 2), (2, 3), (3, 0), (3, 1), (3, 2), (4, 1))),
-        ("LWS3", 7, ((0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 3), (3, 1), (3, 2), (3, 3), (4, 2))),
+        (
+            "LWSS",
+            6,
+            ((0, 0), (0, 2), (1, 3), (2, 3), (3, 0), (3, 3), (4, 1), (4, 2), (4, 3)),
+        ),
+        (
+            "LWS2",
+            7,
+            (
+                (0, 1),
+                (0, 2),
+                (1, 1),
+                (1, 2),
+                (1, 3),
+                (2, 0),
+                (2, 2),
+                (2, 3),
+                (3, 0),
+                (3, 1),
+                (3, 2),
+                (4, 1),
+            ),
+        ),
+        (
+            "LWS3",
+            7,
+            (
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 1),
+                (1, 2),
+                (2, 0),
+                (2, 1),
+                (2, 3),
+                (3, 1),
+                (3, 2),
+                (3, 3),
+                (4, 2),
+            ),
+        ),
     )
 
     def __init__(self):
@@ -20633,7 +22373,14 @@ class CgolgGame:
         self.reset()
 
     def reset(self):
-        for buf in (self.alive, self.red, self.blue, self.next_alive, self.next_red, self.next_blue):
+        for buf in (
+            self.alive,
+            self.red,
+            self.blue,
+            self.next_alive,
+            self.next_red,
+            self.next_blue,
+        ):
             for i in range(len(buf)):
                 buf[i] = 0
         self.score = 0
@@ -20714,7 +22461,9 @@ class CgolgGame:
     def _handle_input(self, joystick, z_button):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) >= 125:
-            d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN])
+            d = joystick.read_direction(
+                [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN]
+            )
             if d == JOYSTICK_LEFT:
                 self.pattern_idx = (self.pattern_idx - 1) % len(self.PATTERNS)
                 self.last_move = now
@@ -20892,21 +22641,49 @@ class CgolgGame:
         txt = name + str(cost)
         draw_text_small((WIDTH - len(txt) * 6) // 2, 0, txt, 190, 190, 190)
         if self.player_energy > 0:
-            draw_rectangle(1, 4, min(self.LEFT_W - 2, self.player_energy), 4, 0, 180, 255)
+            draw_rectangle(
+                1, 4, min(self.LEFT_W - 2, self.player_energy), 4, 0, 180, 255
+            )
         if self.enemy_energy > 0:
-            draw_rectangle(max(self.RIGHT_X + 1, WIDTH - 1 - self.enemy_energy), 4, WIDTH - 2, 4, 255, 60, 0)
+            draw_rectangle(
+                max(self.RIGHT_X + 1, WIDTH - 1 - self.enemy_energy),
+                4,
+                WIDTH - 2,
+                4,
+                255,
+                60,
+                0,
+            )
 
     def _draw_bases(self):
         now = ticks_ms()
-        left_col = (70, 190, 255) if ticks_diff(now, self.red_hit_until) >= 0 else (255, 255, 255)
-        right_col = (255, 90, 45) if ticks_diff(now, self.blue_hit_until) >= 0 else (255, 255, 255)
+        left_col = (
+            (70, 190, 255)
+            if ticks_diff(now, self.red_hit_until) >= 0
+            else (255, 255, 255)
+        )
+        right_col = (
+            (255, 90, 45)
+            if ticks_diff(now, self.blue_hit_until) >= 0
+            else (255, 255, 255)
+        )
         draw_rect_outline(0, 8, self.LEFT_W - 1, PLAY_HEIGHT - 2, 0, 42, 110)
         draw_rect_outline(self.RIGHT_X, 8, WIDTH - 1, PLAY_HEIGHT - 2, 110, 25, 0)
-        draw_rectangle(2, PLAY_HEIGHT // 2 - 3, 5, PLAY_HEIGHT // 2 + 3, left_col[0], left_col[1], left_col[2])
+        draw_rectangle(
+            2,
+            PLAY_HEIGHT // 2 - 3,
+            5,
+            PLAY_HEIGHT // 2 + 3,
+            left_col[0],
+            left_col[1],
+            left_col[2],
+        )
         draw_rectangle(3, PLAY_HEIGHT // 2 - 1, 6, PLAY_HEIGHT // 2 + 1, 0, 45, 110)
         cx = WIDTH - 4
         cy = PLAY_HEIGHT // 2
-        draw_rect_outline(cx - 3, cy - 3, cx + 2, cy + 3, right_col[0], right_col[1], right_col[2])
+        draw_rect_outline(
+            cx - 3, cy - 3, cx + 2, cy + 3, right_col[0], right_col[1], right_col[2]
+        )
         draw_line(cx - 4, cy, cx + 3, cy, right_col[0], right_col[1], right_col[2])
         draw_line(cx, cy - 4, cx, cy + 4, right_col[0], right_col[1], right_col[2])
 
@@ -20964,13 +22741,25 @@ class CgolgGame:
         self._draw_bases()
 
         cy = self.cursor_y
-        col = (255, 255, 255) if ticks_diff(ticks_ms(), self.flash_until) < 0 else (0, 180, 255)
+        col = (
+            (255, 255, 255)
+            if ticks_diff(ticks_ms(), self.flash_until) < 0
+            else (0, 180, 255)
+        )
         enemy_preview_y = clamp(PLAY_HEIGHT - cy - 5, 1, PLAY_HEIGHT - 7)
         self._draw_direction_arrow(cy + 2, True)
         self._draw_direction_arrow(enemy_preview_y + 2, False)
         self._draw_pattern_preview(4, cy, self.pattern_idx, True)
         self._draw_pattern_preview(WIDTH - 6, enemy_preview_y, self.pattern_idx, False)
-        draw_rect_outline(1, cy - 1, self.LEFT_W - 2, min(PLAY_HEIGHT - 1, cy + 5), col[0], col[1], col[2])
+        draw_rect_outline(
+            1,
+            cy - 1,
+            self.LEFT_W - 2,
+            min(PLAY_HEIGHT - 1, cy + 5),
+            col[0],
+            col[1],
+            col[2],
+        )
         self._draw_hud_top()
         display_score_and_time(self.score)
 
@@ -20991,6 +22780,7 @@ class CgolgGame:
             if (self.frame % 80) == 0:
                 gc.collect()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -21016,6 +22806,7 @@ class PinballGame:
     Compact Video Pinball-inspired table with rollover lanes, spinner, drop
     targets, bumpers, flippers, plunger strength, bonus, and multipliers.
     """
+
     FRAME_MS = 30
     BALL_R = 1.45
     LANE_X = 55.0
@@ -21126,7 +22917,10 @@ class PinballGame:
     def _hit_targets(self):
         for t in self.targets:
             tx, ty, lit = t
-            if abs(self.ball_x - tx) <= 2 + self.BALL_R and abs(self.ball_y - ty) <= 4 + self.BALL_R:
+            if (
+                abs(self.ball_x - tx) <= 2 + self.BALL_R
+                and abs(self.ball_y - ty) <= 4 + self.BALL_R
+            ):
                 if not lit:
                     t[2] = 1
                     self.bonus = min(99, self.bonus + 2)
@@ -21238,9 +23032,12 @@ class PinballGame:
         # physics occasionally parks it between elements with almost no speed.
         # If that happens away from a held flipper (so deliberate cradling is
         # left alone), give it a small upward kick after ~1s.
-        if (not left_on and not right_on
-                and self.ball_y < PLAY_HEIGHT - 8
-                and self.vx * self.vx + self.vy * self.vy < 0.05):
+        if (
+            not left_on
+            and not right_on
+            and self.ball_y < PLAY_HEIGHT - 8
+            and self.vx * self.vx + self.vy * self.vy < 0.05
+        ):
             self.stuck += 1
             if self.stuck > 33:
                 self.vy -= 1.7
@@ -21267,7 +23064,9 @@ class PinballGame:
             draw_rect_outline(lx - 4, ly - 3, lx + 4, ly + 3, *col)
         draw_rectangle(56, 49 - self.charge // 3, 60, 55, 255, 120, 20)
         for bx, by, radius in self.bumpers:
-            draw_rect_outline(bx - radius, by - radius, bx + radius, by + radius, 0, 120, 255)
+            draw_rect_outline(
+                bx - radius, by - radius, bx + radius, by + radius, 0, 120, 255
+            )
             draw_rectangle(bx - 1, by - 1, bx + 1, by + 1, 255, 80, 180)
         if self.spinner_phase & 1:
             draw_line(29, 24, 35, 24, 255, 255, 255)
@@ -21289,7 +23088,15 @@ class PinballGame:
             draw_line(53, 52, 36, 46, 255, 255, 255)
         else:
             draw_line(53, 52, 36, 55, 180, 180, 180)
-        draw_rectangle(int(self.ball_x) - 1, int(self.ball_y) - 1, int(self.ball_x) + 1, int(self.ball_y) + 1, 255, 255, 255)
+        draw_rectangle(
+            int(self.ball_x) - 1,
+            int(self.ball_y) - 1,
+            int(self.ball_x) + 1,
+            int(self.ball_y) + 1,
+            255,
+            255,
+            255,
+        )
         draw_text_small(1, PLAY_HEIGHT, "L" + str(self.balls), 255, 255, 255)
         draw_text_small(13, PLAY_HEIGHT, "B" + str(self.bonus), 255, 220, 60)
         draw_text_small(31, PLAY_HEIGHT, "X" + str(self.mult), 255, 220, 60)
@@ -21313,6 +23120,7 @@ class PinballGame:
             self.last_z = z_button
             self._draw(left_on, right_on)
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -21338,6 +23146,7 @@ class SabotrGame(FrameLoopGame):
     Stealth puzzle: avoid enemy sight windows, hide bodies from patrols, and
     reach the target.
     """
+
     FRAME_MS = 80
     W = 16
     H = 14
@@ -21408,7 +23217,12 @@ class SabotrGame(FrameLoopGame):
             "################",
         ),
     )
-    DIRS = {JOYSTICK_UP: (0, -1), JOYSTICK_DOWN: (0, 1), JOYSTICK_LEFT: (-1, 0), JOYSTICK_RIGHT: (1, 0)}
+    DIRS = {
+        JOYSTICK_UP: (0, -1),
+        JOYSTICK_DOWN: (0, 1),
+        JOYSTICK_LEFT: (-1, 0),
+        JOYSTICK_RIGHT: (1, 0),
+    }
 
     def __init__(self):
         self.reset()
@@ -21435,10 +23249,26 @@ class SabotrGame(FrameLoopGame):
                 elif ch == "T":
                     self.tx, self.ty = x, y
                 elif ch == "G":
-                    self.guards.append([x, y, random.choice((JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN)), 0])
+                    self.guards.append(
+                        [
+                            x,
+                            y,
+                            random.choice(
+                                (
+                                    JOYSTICK_LEFT,
+                                    JOYSTICK_RIGHT,
+                                    JOYSTICK_UP,
+                                    JOYSTICK_DOWN,
+                                )
+                            ),
+                            0,
+                        ]
+                    )
 
     def _blocked(self, x, y):
-        return x < 0 or x >= self.W or y < 0 or y >= self.H or self.walls[y * self.W + x]
+        return (
+            x < 0 or x >= self.W or y < 0 or y >= self.H or self.walls[y * self.W + x]
+        )
 
     def _guard_cells(self):
         return set((g[0], g[1]) for g in self.guards)
@@ -21449,7 +23279,9 @@ class SabotrGame(FrameLoopGame):
 
     def _try_takedown(self):
         for g in list(self.guards):
-            if (self.px, self.py) == self._behind_guard(g) or abs(self.px - g[0]) + abs(self.py - g[1]) == 1:
+            if (self.px, self.py) == self._behind_guard(g) or abs(self.px - g[0]) + abs(
+                self.py - g[1]
+            ) == 1:
                 self.guards.remove(g)
                 self.bodies.append((g[0], g[1]))
                 self.score += 25
@@ -21461,7 +23293,9 @@ class SabotrGame(FrameLoopGame):
         delay = 210 if sneaking else 120
         if ticks_diff(now, self.last_move) < delay:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if d not in self.DIRS:
             return
         dx, dy = self.DIRS[d]
@@ -21564,6 +23398,7 @@ class SabotrGame(FrameLoopGame):
                 self._load_map()
             self._draw()
             return True
+
         return step
 
 
@@ -21577,6 +23412,7 @@ class SoccerGame:
     Atari-style 4-player-per-side soccer: striker, two defenders, goalkeeper,
     formation motion, two halves, and timed scoring.
     """
+
     FRAME_MS = 38
     HALF_TICKS = 1450
 
@@ -21606,10 +23442,20 @@ class SoccerGame:
         if blue:
             ax = self.anchor_x
             ay = self.anchor_y
-            return [[ax + 18, ay, "S"], [ax, ay - 9, "D"], [ax, ay + 9, "D"], [self.blue_goalie_x, self.blue_goalie_y, "G"]]
+            return [
+                [ax + 18, ay, "S"],
+                [ax, ay - 9, "D"],
+                [ax, ay + 9, "D"],
+                [self.blue_goalie_x, self.blue_goalie_y, "G"],
+            ]
         ax = self.red_anchor_x
         ay = self.red_anchor_y
-        return [[ax - 18, ay, "S"], [ax, ay - 9, "D"], [ax, ay + 9, "D"], [self.red_goalie_x, self.red_goalie_y, "G"]]
+        return [
+            [ax - 18, ay, "S"],
+            [ax, ay - 9, "D"],
+            [ax, ay + 9, "D"],
+            [self.red_goalie_x, self.red_goalie_y, "G"],
+        ]
 
     def _kickoff(self):
         self.ball_x = WIDTH / 2
@@ -21619,17 +23465,25 @@ class SoccerGame:
         self.ball_owner = None
 
     def _move_blue(self, joystick):
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             self.input_dx = dx
             self.input_dy = dy
-        goalie_owned = self.ball_owner and self.ball_owner[0] == "B" and self.ball_owner[1] == 3
+        goalie_owned = (
+            self.ball_owner and self.ball_owner[0] == "B" and self.ball_owner[1] == 3
+        )
         if goalie_owned:
             if dx:
                 self.blue_goalie_x = clamp(self.blue_goalie_x + dx, 3, 12)
             if dy:
-                self.blue_goalie_y = clamp(self.blue_goalie_y + dy * 2, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10)
+                self.blue_goalie_y = clamp(
+                    self.blue_goalie_y + dy * 2,
+                    PLAY_HEIGHT // 2 - 10,
+                    PLAY_HEIGHT // 2 + 10,
+                )
             return
         if dx:
             self.anchor_x = clamp(self.anchor_x + dx, 10, 31)
@@ -21647,7 +23501,9 @@ class SoccerGame:
         elif self.ball_x < WIDTH // 2 - 8:
             self.red_anchor_x = max(35, self.red_anchor_x - 1)
         self.red_anchor_y = clamp(self.red_anchor_y, 12, PLAY_HEIGHT - 12)
-        if not (self.ball_owner and self.ball_owner[0] == "B" and self.ball_owner[1] == 3):
+        if not (
+            self.ball_owner and self.ball_owner[0] == "B" and self.ball_owner[1] == 3
+        ):
             if self.blue_goalie_x > 5:
                 self.blue_goalie_x -= 1
             elif self.blue_goalie_x < 5:
@@ -21661,15 +23517,21 @@ class SoccerGame:
         elif self.red_goalie_x > 58:
             self.red_goalie_x -= 1
         if (self.frame & 1) == 0:
-            goalie_target = self.ball_y if self.ball_x > WIDTH // 2 else PLAY_HEIGHT // 2
+            goalie_target = (
+                self.ball_y if self.ball_x > WIDTH // 2 else PLAY_HEIGHT // 2
+            )
             if self.red_goalie_y < goalie_target - 1:
                 self.red_goalie_y += 1
             elif self.red_goalie_y > goalie_target + 1:
                 self.red_goalie_y -= 1
         self.blue_goalie_x = clamp(self.blue_goalie_x, 3, 12)
-        self.blue_goalie_y = clamp(self.blue_goalie_y, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10)
+        self.blue_goalie_y = clamp(
+            self.blue_goalie_y, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10
+        )
         self.red_goalie_x = clamp(self.red_goalie_x, 51, 60)
-        self.red_goalie_y = clamp(self.red_goalie_y, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10)
+        self.red_goalie_y = clamp(
+            self.red_goalie_y, PLAY_HEIGHT // 2 - 10, PLAY_HEIGHT // 2 + 10
+        )
 
     def _nearest_player(self, blue=True):
         team = self._formation(blue)
@@ -21694,9 +23556,17 @@ class SoccerGame:
         r_role = self._formation(False)[ri][2]
         blue_limit = 10 if speed2 < 3.2 else 5
         red_limit = 9 if speed2 < 3.0 else 4
-        if b_role == "G" and self.ball_x < 10 and abs(self.ball_y - self.blue_goalie_y) <= 4:
+        if (
+            b_role == "G"
+            and self.ball_x < 10
+            and abs(self.ball_y - self.blue_goalie_y) <= 4
+        ):
             blue_limit = 18
-        if r_role == "G" and self.ball_x > WIDTH - 10 and abs(self.ball_y - self.red_goalie_y) <= 3:
+        if (
+            r_role == "G"
+            and self.ball_x > WIDTH - 10
+            and abs(self.ball_y - self.red_goalie_y) <= 3
+        ):
             red_limit = 14
         if bd < blue_limit:
             self.ball_owner = ("B", bi)
@@ -21720,12 +23590,16 @@ class SoccerGame:
                 self.vx = 2.35
                 self.vy = self.input_dy * 1.45
             else:
-                target_y = PLAY_HEIGHT // 2 + (8 if self.red_goalie_y <= PLAY_HEIGHT // 2 else -8)
+                target_y = PLAY_HEIGHT // 2 + (
+                    8 if self.red_goalie_y <= PLAY_HEIGHT // 2 else -8
+                )
                 target_y = clamp(target_y, PLAY_HEIGHT // 2 - 9, PLAY_HEIGHT // 2 + 9)
                 self.vx = 3.10
                 self.vy = (target_y - self.ball_y) * 0.105
         else:
-            target_y = PLAY_HEIGHT // 2 + (7 if self.blue_goalie_y <= PLAY_HEIGHT // 2 else -7)
+            target_y = PLAY_HEIGHT // 2 + (
+                7 if self.blue_goalie_y <= PLAY_HEIGHT // 2 else -7
+            )
             self.vx = -2.35
             self.vy = (target_y - self.ball_y) * 0.075
         self.ball_owner = None
@@ -21779,14 +23653,41 @@ class SoccerGame:
         display.clear()
         draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 5, 58, 22)
         draw_line(WIDTH // 2, 1, WIDTH // 2, PLAY_HEIGHT - 2, 220, 220, 220)
-        draw_rect_outline(0, PLAY_HEIGHT // 2 - 10, 3, PLAY_HEIGHT // 2 + 10, 255, 255, 255)
-        draw_rect_outline(WIDTH - 4, PLAY_HEIGHT // 2 - 10, WIDTH - 1, PLAY_HEIGHT // 2 + 10, 255, 255, 255)
+        draw_rect_outline(
+            0, PLAY_HEIGHT // 2 - 10, 3, PLAY_HEIGHT // 2 + 10, 255, 255, 255
+        )
+        draw_rect_outline(
+            WIDTH - 4,
+            PLAY_HEIGHT // 2 - 10,
+            WIDTH - 1,
+            PLAY_HEIGHT // 2 + 10,
+            255,
+            255,
+            255,
+        )
         self._draw_team(self._formation(True), (45, 165, 255))
         self._draw_team(self._formation(False), (255, 55, 45))
-        draw_rectangle(int(self.ball_x) - 1, int(self.ball_y) - 1, int(self.ball_x) + 1, int(self.ball_y) + 1, 255, 255, 255)
-        draw_text_small(1, PLAY_HEIGHT, str(self.blue_goals) + "-" + str(self.red_goals), 255, 255, 255)
+        draw_rectangle(
+            int(self.ball_x) - 1,
+            int(self.ball_y) - 1,
+            int(self.ball_x) + 1,
+            int(self.ball_y) + 1,
+            255,
+            255,
+            255,
+        )
+        draw_text_small(
+            1,
+            PLAY_HEIGHT,
+            str(self.blue_goals) + "-" + str(self.red_goals),
+            255,
+            255,
+            255,
+        )
         draw_text_small(27, PLAY_HEIGHT, "H" + str(self.half), 180, 180, 180)
-        draw_text_small(45, PLAY_HEIGHT, str(max(0, self.ticks_left // 25)), 255, 220, 60)
+        draw_text_small(
+            45, PLAY_HEIGHT, str(max(0, self.ticks_left // 25)), 255, 220, 60
+        )
 
     def _build_step(self, joystick):
         self.reset()
@@ -21827,6 +23728,7 @@ class SoccerGame:
                     return False
             self._draw()
             return True
+
         return step
 
     def main_loop(self, joystick):
@@ -21852,6 +23754,7 @@ class TowerDefenseGame(FrameLoopGame):
     Stop enemy waves before they reach the base. Towers automatically target
     enemies; repeated builds upgrade range, damage, slow, and splash.
     """
+
     FRAME_MS = 38
     CELL = 8
     GRID_W = WIDTH // CELL
@@ -21859,7 +23762,21 @@ class TowerDefenseGame(FrameLoopGame):
     OPEN_START = (0, 3)
     OPEN_BASE = (7, 3)
     LEVELS = (
-        ("PATH", ((0, 1), (2, 1), (2, 3), (6, 3), (6, 1), (7, 1), (7, 5), (2, 5), (2, 6), (7, 6))),
+        (
+            "PATH",
+            (
+                (0, 1),
+                (2, 1),
+                (2, 3),
+                (6, 3),
+                (6, 1),
+                (7, 1),
+                (7, 5),
+                (2, 5),
+                (2, 6),
+                (7, 6),
+            ),
+        ),
         ("OPEN", None),
         ("PATH", ((0, 5), (3, 5), (3, 2), (5, 2), (5, 4), (7, 4), (7, 0))),
         ("OPEN", None),
@@ -21953,8 +23870,10 @@ class TowerDefenseGame(FrameLoopGame):
         return gx * self.CELL + self.CELL // 2, gy * self.CELL + self.CELL // 2
 
     def _point_to_cell(self, px, py):
-        return (clamp(int(px) // self.CELL, 0, self.GRID_W - 1),
-                clamp(int(py) // self.CELL, 0, self.GRID_H - 1))
+        return (
+            clamp(int(px) // self.CELL, 0, self.GRID_W - 1),
+            clamp(int(py) // self.CELL, 0, self.GRID_H - 1),
+        )
 
     def _tower_at(self, gx, gy):
         for t in self.towers:
@@ -21978,7 +23897,9 @@ class TowerDefenseGame(FrameLoopGame):
             if not self._find_route(self.start_cell, blocked_extra=(gx, gy)):
                 return False
             for e in self.enemies:
-                if not self._find_route(self._point_to_cell(e[0], e[1]), blocked_extra=(gx, gy)):
+                if not self._find_route(
+                    self._point_to_cell(e[0], e[1]), blocked_extra=(gx, gy)
+                ):
                     return False
             return True
         return True
@@ -22015,7 +23936,9 @@ class TowerDefenseGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 125:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         dx, dy = direction_to_delta(d)
         if dx or dy:
             self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
@@ -22082,7 +24005,7 @@ class TowerDefenseGame(FrameLoopGame):
 
     def _spawn_enemy(self):
         boss = self.wave % 5 == 0 and self.spawn_queue == 1
-        runner = (self.wave >= 4 and self.spawn_queue % 5 == 0)
+        runner = self.wave >= 4 and self.spawn_queue % 5 == 0
         hp = 14 + self.wave * 4
         speed = 0.48 + min(0.30, self.wave * 0.018)
         reward = 3 + self.wave // 2
@@ -22101,7 +24024,9 @@ class TowerDefenseGame(FrameLoopGame):
         if len(route) < 2:
             return
         x, y = self._cell_center(route[0][0], route[0][1])
-        self.enemies.append([float(x), float(y), 1, float(hp), float(hp), speed, 0, kind, reward, route])
+        self.enemies.append(
+            [float(x), float(y), 1, float(hp), float(hp), speed, 0, kind, reward, route]
+        )
 
     def _advance_waves(self):
         if self.spawn_queue > 0:
@@ -22187,7 +24112,12 @@ class TowerDefenseGame(FrameLoopGame):
             target = self._tower_target(cx, cy, self.TOWER_RANGE[level])
             if not target:
                 continue
-            self._damage_enemy(target, self.TOWER_DAMAGE[level], slow=level >= 2, splash=4 if level >= 3 else 0)
+            self._damage_enemy(
+                target,
+                self.TOWER_DAMAGE[level],
+                slow=level >= 2,
+                splash=4 if level >= 3 else 0,
+            )
             t[3] = self.TOWER_COOLDOWN[level]
             color = (0, 220, 255) if level >= 2 else (255, 240, 60)
             if level >= 3:
@@ -22221,13 +24151,21 @@ class TowerDefenseGame(FrameLoopGame):
                 y2 = min(PLAY_HEIGHT - 1, y + self.CELL - 1)
                 draw_rectangle(x, y, x2, y2, 98, 68, 34)
                 edge = (62, 44, 24)
-                if (gx, gy - 1) not in self.path_cells and not ((gx, gy) == self.base_cell and gy == 0):
+                if (gx, gy - 1) not in self.path_cells and not (
+                    (gx, gy) == self.base_cell and gy == 0
+                ):
                     draw_line(x, y, x2, y, *edge)
-                if (gx + 1, gy) not in self.path_cells and not ((gx, gy) == self.base_cell and gx == self.GRID_W - 1):
+                if (gx + 1, gy) not in self.path_cells and not (
+                    (gx, gy) == self.base_cell and gx == self.GRID_W - 1
+                ):
                     draw_line(x2, y, x2, y2, *edge)
-                if (gx, gy + 1) not in self.path_cells and not ((gx, gy) == self.base_cell and gy == self.GRID_H - 1):
+                if (gx, gy + 1) not in self.path_cells and not (
+                    (gx, gy) == self.base_cell and gy == self.GRID_H - 1
+                ):
                     draw_line(x, y2, x2, y2, *edge)
-                if (gx - 1, gy) not in self.path_cells and not ((gx, gy) == self.start_cell and gx == 0):
+                if (gx - 1, gy) not in self.path_cells and not (
+                    (gx, gy) == self.start_cell and gx == 0
+                ):
                     draw_line(x, y, x, y2, *edge)
         else:
             for x in range(0, WIDTH, self.CELL):
@@ -22240,7 +24178,13 @@ class TowerDefenseGame(FrameLoopGame):
         draw_rectangle(ex - 4, ey - 4, ex + 4, ey + 4, 0, 160, 255)
 
     def _draw_towers(self):
-        colors = ((0, 0, 0), (60, 220, 90), (60, 185, 255), (205, 85, 255), (255, 230, 90))
+        colors = (
+            (0, 0, 0),
+            (60, 220, 90),
+            (60, 185, 255),
+            (205, 85, 255),
+            (255, 230, 90),
+        )
         for gx, gy, level, cooldown in self.towers:
             cx, cy = self._cell_center(gx, gy)
             r, g, b = colors[level]
@@ -22265,7 +24209,9 @@ class TowerDefenseGame(FrameLoopGame):
                 size = 1
             if e[6] > 0:
                 col = (80, 190, 255)
-            draw_rectangle(x - size, y - size, x + size, y + size, col[0], col[1], col[2])
+            draw_rectangle(
+                x - size, y - size, x + size, y + size, col[0], col[1], col[2]
+            )
             hp_w = max(1, int((e[3] * 5) / max(1, e[4])))
             draw_rectangle(x - 2, y - size - 3, x - 3 + hp_w, y - size - 3, 0, 255, 80)
 
@@ -22284,13 +24230,21 @@ class TowerDefenseGame(FrameLoopGame):
             col = (255, 50, 40)
         else:
             col = (255, 240, 60)
-        draw_rect_outline(cx, cy, cx + self.CELL - 1, cy + self.CELL - 1, col[0], col[1], col[2])
+        draw_rect_outline(
+            cx, cy, cx + self.CELL - 1, cy + self.CELL - 1, col[0], col[1], col[2]
+        )
         if tower:
             tx, ty = self._cell_center(self.cursor_x, self.cursor_y)
             rng = self.TOWER_RANGE[tower[2]]
-            draw_rect_outline(max(0, tx - rng), max(0, ty - rng),
-                              min(WIDTH - 1, tx + rng), min(PLAY_HEIGHT - 1, ty + rng),
-                              35, 70, 95)
+            draw_rect_outline(
+                max(0, tx - rng),
+                max(0, ty - rng),
+                min(WIDTH - 1, tx + rng),
+                min(PLAY_HEIGHT - 1, ty + rng),
+                35,
+                70,
+                95,
+            )
 
     def _draw_hud(self):
         draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
@@ -22298,7 +24252,9 @@ class TowerDefenseGame(FrameLoopGame):
         draw_text_small(19, PLAY_HEIGHT, "$" + str(min(99, self.money)), 255, 220, 40)
         draw_text_small(43, PLAY_HEIGHT, "B" + str(max(0, self.lives)), 80, 190, 255)
         if self.open_level:
-            draw_rectangle(WIDTH - 2, PLAY_HEIGHT + 1, WIDTH - 1, PLAY_HEIGHT + 2, 80, 255, 140)
+            draw_rectangle(
+                WIDTH - 2, PLAY_HEIGHT + 1, WIDTH - 1, PLAY_HEIGHT + 2, 80, 255, 140
+            )
 
     def _draw(self):
         display.clear()
@@ -22334,6 +24290,7 @@ class TowerDefenseGame(FrameLoopGame):
             if (self.frame % 90) == 0:
                 gc.collect()
             return True
+
         return step
 
 
@@ -22346,6 +24303,7 @@ class DigDugGame(FrameLoopGame):
       - C: return to menu
     Dig tunnels, collect gems, and clear burrowing enemies.
     """
+
     FRAME_MS = 70
     GRID_W = 8
     GRID_H = 7
@@ -22386,14 +24344,18 @@ class DigDugGame(FrameLoopGame):
             x = random.randint(0, self.GRID_W - 1)
             y = random.randint(0, self.GRID_H - 3)
             if abs(x - self.px) + abs(y - self.py) > 5:
-                self.enemies.append([x, y, 0, random.choice((JOYSTICK_LEFT, JOYSTICK_RIGHT)), 0])
+                self.enemies.append(
+                    [x, y, 0, random.choice((JOYSTICK_LEFT, JOYSTICK_RIGHT)), 0]
+                )
                 self.dirt[y][x] = False
 
     def _move_player(self, joystick):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 130:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
         dx, dy = direction_to_delta(d)
@@ -22415,8 +24377,10 @@ class DigDugGame(FrameLoopGame):
         dx, dy = direction_to_delta(self.dir, 1, 0)
         for e in self.enemies:
             dist = abs(e[0] - self.px) + abs(e[1] - self.py)
-            aligned = (dx and e[1] == self.py and (e[0] - self.px) * dx > 0 and dist <= 2)
-            aligned = aligned or (dy and e[0] == self.px and (e[1] - self.py) * dy > 0 and dist <= 2)
+            aligned = dx and e[1] == self.py and (e[0] - self.px) * dx > 0 and dist <= 2
+            aligned = aligned or (
+                dy and e[0] == self.px and (e[1] - self.py) * dy > 0 and dist <= 2
+            )
             if aligned:
                 e[2] += 1
                 e[4] = 10
@@ -22477,7 +24441,9 @@ class DigDugGame(FrameLoopGame):
     def _draw_cell(self, gx, gy, col):
         x = gx * self.CELL
         y = gy * self.CELL + 1
-        draw_rectangle(x + 1, y + 1, x + self.CELL - 2, y + self.CELL - 2, col[0], col[1], col[2])
+        draw_rectangle(
+            x + 1, y + 1, x + self.CELL - 2, y + self.CELL - 2, col[0], col[1], col[2]
+        )
 
     def _draw(self):
         display.clear()
@@ -22487,9 +24453,15 @@ class DigDugGame(FrameLoopGame):
                     shade = 34 + min(60, y * 8)
                     self._draw_cell(x, y, (shade, 22 + y * 5, 8))
                 else:
-                    draw_rect_outline(x * self.CELL + 2, y * self.CELL + 3,
-                                      x * self.CELL + self.CELL - 3,
-                                      y * self.CELL + self.CELL, 18, 15, 22)
+                    draw_rect_outline(
+                        x * self.CELL + 2,
+                        y * self.CELL + 3,
+                        x * self.CELL + self.CELL - 3,
+                        y * self.CELL + self.CELL,
+                        18,
+                        15,
+                        22,
+                    )
         for x, y in self.gems:
             self._draw_cell(x, y, (40, 180, 255))
             display.set_pixel(x * self.CELL + 4, y * self.CELL + 4, 255, 255, 255)
@@ -22539,6 +24511,7 @@ class JoustGame(FrameLoopGame):
       - C: return to menu
     Defeat riders by colliding from above.
     """
+
     FRAME_MS = 35
 
     def __init__(self):
@@ -22561,8 +24534,14 @@ class JoustGame(FrameLoopGame):
         count = min(7, 2 + self.level)
         for i in range(count):
             side = -8 if i % 2 else WIDTH + 2
-            self.enemies.append([float(side), float(10 + (i * 11) % 38),
-                                 -1.1 if side > WIDTH else 1.1, 0.0])
+            self.enemies.append(
+                [
+                    float(side),
+                    float(10 + (i * 11) % 38),
+                    -1.1 if side > WIDTH else 1.1,
+                    0.0,
+                ]
+            )
 
     def _platform_at(self, x, y):
         platforms = ((3, PLAY_HEIGHT - 5, 58), (6, 37, 20), (38, 37, 20), (18, 22, 28))
@@ -22624,7 +24603,9 @@ class JoustGame(FrameLoopGame):
         now = ticks_ms()
         survivors = []
         for e in self.enemies:
-            if rects_overlap(int(self.x), int(self.y), 5, 5, int(e[0]), int(e[1]), 5, 5):
+            if rects_overlap(
+                int(self.x), int(self.y), 5, 5, int(e[0]), int(e[1]), 5, 5
+            ):
                 if self.y + 1 < e[1]:
                     self.score += 80 + self.level * 10
                     self.vy = -1.4
@@ -22656,7 +24637,12 @@ class JoustGame(FrameLoopGame):
 
     def _draw(self):
         display.clear()
-        for px, py, pw in ((3, PLAY_HEIGHT - 5, 58), (6, 37, 20), (38, 37, 20), (18, 22, 28)):
+        for px, py, pw in (
+            (3, PLAY_HEIGHT - 5, 58),
+            (6, 37, 20),
+            (38, 37, 20),
+            (18, 22, 28),
+        ):
             draw_rectangle(px, py, px + pw, py + 1, 60, 160, 90)
         for e in self.enemies:
             self._draw_rider(e[0], e[1], (255, 80, 40))
@@ -22696,6 +24682,7 @@ class BurgerTimeGame(FrameLoopGame):
       - C: return to menu
     Walk over burger layers to drop every ingredient.
     """
+
     FRAME_MS = 58
     GRID_W = 8
     GRID_H = 7
@@ -22727,7 +24714,9 @@ class BurgerTimeGame(FrameLoopGame):
         self.enemies = []
         count = min(5, 2 + self.level)
         for i in range(count):
-            self.enemies.append([7 - (i % 3), self.PLAT_ROWS[i % len(self.PLAT_ROWS)], 0, 0])
+            self.enemies.append(
+                [7 - (i % 3), self.PLAT_ROWS[i % len(self.PLAT_ROWS)], 0, 0]
+            )
 
     def _on_ladder(self, x):
         return x in self.LADDERS
@@ -22741,7 +24730,9 @@ class BurgerTimeGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 125:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if not d:
             return
         dx, dy = direction_to_delta(d)
@@ -22844,10 +24835,16 @@ class BurgerTimeGame(FrameLoopGame):
 
     def _draw_grid(self):
         for y in self.PLAT_ROWS:
-            draw_rectangle(0, y * self.CELL + 6, WIDTH - 1, y * self.CELL + 7, 80, 95, 150)
+            draw_rectangle(
+                0, y * self.CELL + 6, WIDTH - 1, y * self.CELL + 7, 80, 95, 150
+            )
         for x in self.LADDERS:
-            draw_line(x * self.CELL + 3, 0, x * self.CELL + 3, PLAY_HEIGHT - 2, 70, 150, 210)
-            draw_line(x * self.CELL + 5, 0, x * self.CELL + 5, PLAY_HEIGHT - 2, 70, 150, 210)
+            draw_line(
+                x * self.CELL + 3, 0, x * self.CELL + 3, PLAY_HEIGHT - 2, 70, 150, 210
+            )
+            draw_line(
+                x * self.CELL + 5, 0, x * self.CELL + 5, PLAY_HEIGHT - 2, 70, 150, 210
+            )
 
     def _draw(self):
         display.clear()
@@ -22862,18 +24859,35 @@ class BurgerTimeGame(FrameLoopGame):
                 x = (x0 + i) * self.CELL + 1
                 py = iy * self.CELL + 2
                 dim = bool(mask & (1 << i))
-                draw_rectangle(x, py, x + 6, py + 2,
-                               r if dim else r // 2,
-                               g if dim else g // 2,
-                               b if dim else b // 2)
+                draw_rectangle(
+                    x,
+                    py,
+                    x + 6,
+                    py + 2,
+                    r if dim else r // 2,
+                    g if dim else g // 2,
+                    b if dim else b // 2,
+                )
         for e in self.enemies:
             col = (180, 180, 180) if e[3] > 0 else (255, 60, 60)
-            draw_rectangle(e[0] * self.CELL + 2, e[1] * self.CELL + 2,
-                           e[0] * self.CELL + 5, e[1] * self.CELL + 5,
-                           col[0], col[1], col[2])
-        draw_rectangle(self.px * self.CELL + 2, self.py * self.CELL + 1,
-                       self.px * self.CELL + 5, self.py * self.CELL + 5,
-                       255, 230, 90)
+            draw_rectangle(
+                e[0] * self.CELL + 2,
+                e[1] * self.CELL + 2,
+                e[0] * self.CELL + 5,
+                e[1] * self.CELL + 5,
+                col[0],
+                col[1],
+                col[2],
+            )
+        draw_rectangle(
+            self.px * self.CELL + 2,
+            self.py * self.CELL + 1,
+            self.px * self.CELL + 5,
+            self.py * self.CELL + 5,
+            255,
+            230,
+            90,
+        )
         for i in range(self.lives):
             draw_rectangle(i * 4, 0, i * 4 + 2, 1, 255, 80, 80)
         draw_text_small(WIDTH - 16, 0, "P" + str(self.pepper), 210, 210, 210)
@@ -22916,6 +24930,7 @@ class StickArcherGame(FrameLoopGame):
       - C: return to menu
     Stickman archery duel with simple arrow physics and ragdoll knockouts.
     """
+
     FRAME_MS = 35
     GROUND_Y = PLAY_HEIGHT - 5
     MAX_CHARGE = 30
@@ -22946,7 +24961,9 @@ class StickArcherGame(FrameLoopGame):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 70:
             return
-        d = joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT])
+        d = joystick.read_direction(
+            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+        )
         if d == JOYSTICK_UP:
             self.aim = min(78, self.aim + 3)
             self.last_move = now
@@ -22965,8 +24982,17 @@ class StickArcherGame(FrameLoopGame):
         speed = 2.3 + self.charge * 0.12
         sx = self.px + 4
         sy = self.GROUND_Y - 14
-        self.arrows.append([float(sx), float(sy), math.cos(rad) * speed,
-                            -math.sin(rad) * speed, 0, sx, sy])
+        self.arrows.append(
+            [
+                float(sx),
+                float(sy),
+                math.cos(rad) * speed,
+                -math.sin(rad) * speed,
+                0,
+                sx,
+                sy,
+            ]
+        )
         self.charge = 0
 
     def _fire_enemy(self):
@@ -22977,9 +25003,20 @@ class StickArcherGame(FrameLoopGame):
         speed = 2.6 + min(1.3, self.wave * 0.14)
         sx = self.ex - 4
         sy = self.GROUND_Y - 14
-        self.arrows.append([float(sx), float(sy), -math.cos(rad) * speed,
-                            -math.sin(rad) * speed, 1, sx, sy])
-        self.enemy_next_shot = ticks_ms() + max(650, 1700 - self.wave * 80 + random.randint(-160, 180))
+        self.arrows.append(
+            [
+                float(sx),
+                float(sy),
+                -math.cos(rad) * speed,
+                -math.sin(rad) * speed,
+                1,
+                sx,
+                sy,
+            ]
+        )
+        self.enemy_next_shot = ticks_ms() + max(
+            650, 1700 - self.wave * 80 + random.randint(-160, 180)
+        )
 
     def _handle_bow(self, z_button):
         if z_button:
@@ -23006,8 +25043,16 @@ class StickArcherGame(FrameLoopGame):
         for i in range(7):
             vx = random.randint(-14, 14) / 10.0
             vy = -random.randint(4, 18) / 10.0
-            self.parts.append([float(x), float(self.GROUND_Y - 14 + i % 4),
-                               vx, vy, 28 + random.randint(0, 18), col])
+            self.parts.append(
+                [
+                    float(x),
+                    float(self.GROUND_Y - 14 + i % 4),
+                    vx,
+                    vy,
+                    28 + random.randint(0, 18),
+                    col,
+                ]
+            )
 
     def _advance_arrows(self):
         keep = []
@@ -23029,7 +25074,9 @@ class StickArcherGame(FrameLoopGame):
                         self._spawn_parts(self.ex, False)
                     continue
             else:
-                self.player_hp, hit, _head = self._target_hit(a, self.px, self.player_hp)
+                self.player_hp, hit, _head = self._target_hit(
+                    a, self.px, self.player_hp
+                )
                 if hit:
                     self.hit_flash = ticks_ms() + 120
                     if self.player_hp <= 0:
@@ -23084,8 +25131,24 @@ class StickArcherGame(FrameLoopGame):
         draw_line(ix + lean, body_y + 7, ix + 4, foot, col[0], col[1], col[2])
         if not falling:
             bow_x = ix + 6 if friendly else ix - 6
-            draw_line(ix + (3 if friendly else -3), body_y + 2, bow_x, body_y - 4, 210, 170, 80)
-            draw_line(ix + (3 if friendly else -3), body_y + 2, bow_x, body_y + 8, 210, 170, 80)
+            draw_line(
+                ix + (3 if friendly else -3),
+                body_y + 2,
+                bow_x,
+                body_y - 4,
+                210,
+                170,
+                80,
+            )
+            draw_line(
+                ix + (3 if friendly else -3),
+                body_y + 2,
+                bow_x,
+                body_y + 8,
+                210,
+                170,
+                80,
+            )
         for i in range(hp):
             px = ix - 5 + i * 2
             display.set_pixel(px, max(0, head_y - 3), 0, 255, 80)
@@ -23117,11 +25180,21 @@ class StickArcherGame(FrameLoopGame):
             self._draw_aim()
         for a in self.arrows:
             col = (255, 240, 120) if a[4] == 0 else (255, 110, 80)
-            draw_line(int(a[5]), int(a[6]), int(a[0]), int(a[1]), col[0], col[1], col[2])
+            draw_line(
+                int(a[5]), int(a[6]), int(a[0]), int(a[1]), col[0], col[1], col[2]
+            )
             display.set_pixel(int(a[0]), int(a[1]), 255, 255, 255)
         for p in self.parts:
             col = p[5]
-            draw_rectangle(int(p[0]), int(p[1]), int(p[0]) + 1, int(p[1]) + 1, col[0], col[1], col[2])
+            draw_rectangle(
+                int(p[0]),
+                int(p[1]),
+                int(p[0]) + 1,
+                int(p[1]) + 1,
+                col[0],
+                col[1],
+                col[2],
+            )
         wx = WIDTH - 11
         draw_text_small(wx, 2, "W" + str(self.wave), 170, 170, 170)
         wind_x = WIDTH // 2
@@ -23166,6 +25239,7 @@ class OrbitGame(FrameLoopGame):
       - C: return to menu
     Absorb smaller blobs, avoid larger ones, and use gravity wells carefully.
     """
+
     FRAME_MS = 40
 
     def __init__(self):
@@ -23195,13 +25269,19 @@ class OrbitGame(FrameLoopGame):
             if abs(x - self.x) + abs(y - self.y) < 18:
                 continue
             small = random.randint(0, 9) < 7
-            br = random.randint(16, 38) / 10.0 if small else random.randint(44, 76) / 10.0
+            br = (
+                random.randint(16, 38) / 10.0
+                if small
+                else random.randint(44, 76) / 10.0
+            )
             vx = random.randint(-10, 10) / 35.0
             vy = random.randint(-10, 10) / 35.0
             self.blobs.append([float(x), float(y), vx, vy, br])
         self.wells = []
         if self.level >= 2:
-            self.wells.append([WIDTH // 2, PLAY_HEIGHT // 2, 0.018 + self.level * 0.002])
+            self.wells.append(
+                [WIDTH // 2, PLAY_HEIGHT // 2, 0.018 + self.level * 0.002]
+            )
         if self.level >= 5:
             self.wells.append([random.randint(14, 50), random.randint(12, 44), -0.012])
 
@@ -23240,7 +25320,9 @@ class OrbitGame(FrameLoopGame):
         self.r = max(2.8, self.r - 0.18)
         bx = self.x - ax * (self.r + 2)
         by = self.y - ay * (self.r + 2)
-        self.blobs.append([bx, by, -ax * 1.1 + self.vx * 0.25, -ay * 1.1 + self.vy * 0.25, 1.5])
+        self.blobs.append(
+            [bx, by, -ax * 1.1 + self.vx * 0.25, -ay * 1.1 + self.vy * 0.25, 1.5]
+        )
         self.last_thrust = now
 
     def _apply_wells(self, obj):
@@ -23376,6 +25458,7 @@ class GalaxyGame(FrameLoopGame):
       - C: return to menu
     Capture planets by sending fleets across the star map.
     """
+
     FRAME_MS = 70
 
     def __init__(self):
@@ -23485,7 +25568,17 @@ class GalaxyGame(FrameLoopGame):
         dy = dst[1] - src[1]
         dist = max(1.0, math.sqrt(dx * dx + dy * dy))
         speed = 1.45 if owner == 0 else 1.25 + self.level * 0.03
-        self.fleets.append([float(src[0]), float(src[1]), dst_i, owner, ships, dx / dist * speed, dy / dist * speed])
+        self.fleets.append(
+            [
+                float(src[0]),
+                float(src[1]),
+                dst_i,
+                owner,
+                ships,
+                dx / dist * speed,
+                dy / dist * speed,
+            ]
+        )
 
     def _player_action(self):
         p = self.planets[self.cursor]
@@ -23513,8 +25606,16 @@ class GalaxyGame(FrameLoopGame):
         dst_i = targets[0]
         for i in targets:
             p = self.planets[i]
-            d0 = abs(p[0] - self.planets[src_i][0]) + abs(p[1] - self.planets[src_i][1]) + p[4] * 2
-            d1 = abs(self.planets[dst_i][0] - self.planets[src_i][0]) + abs(self.planets[dst_i][1] - self.planets[src_i][1]) + self.planets[dst_i][4] * 2
+            d0 = (
+                abs(p[0] - self.planets[src_i][0])
+                + abs(p[1] - self.planets[src_i][1])
+                + p[4] * 2
+            )
+            d1 = (
+                abs(self.planets[dst_i][0] - self.planets[src_i][0])
+                + abs(self.planets[dst_i][1] - self.planets[src_i][1])
+                + self.planets[dst_i][4] * 2
+            )
             if d0 < d1:
                 dst_i = i
         self._send_fleet(src_i, dst_i, 1)
@@ -23586,11 +25687,25 @@ class GalaxyGame(FrameLoopGame):
             col = self._owner_color(p[3])
             self._draw_circle(p[0], p[1], p[2], col)
             if i == self.selected:
-                draw_rect_outline(p[0] - p[2] - 2, p[1] - p[2] - 2,
-                                  p[0] + p[2] + 2, p[1] + p[2] + 2, 255, 255, 255)
+                draw_rect_outline(
+                    p[0] - p[2] - 2,
+                    p[1] - p[2] - 2,
+                    p[0] + p[2] + 2,
+                    p[1] + p[2] + 2,
+                    255,
+                    255,
+                    255,
+                )
             if i == self.cursor:
-                draw_rect_outline(p[0] - p[2] - 4, p[1] - p[2] - 4,
-                                  p[0] + p[2] + 4, p[1] + p[2] + 4, 255, 230, 70)
+                draw_rect_outline(
+                    p[0] - p[2] - 4,
+                    p[1] - p[2] - 4,
+                    p[0] + p[2] + 4,
+                    p[1] + p[2] + 4,
+                    255,
+                    230,
+                    70,
+                )
             txt = str(min(99, p[4]))
             draw_text_small(p[0] - len(txt) * 3, p[1] + p[2] + 1, txt, 230, 230, 230)
         draw_text_small(1, 1, "L" + str(self.level), 170, 170, 170)
@@ -23632,6 +25747,7 @@ class OrbitalGame(FrameLoopGame):
     Bounce shots through numbered circles. Every circle starts at 3, counts down
     on each touch, and bursts at 0.
     """
+
     FRAME_MS = 35
     CANNON_X = WIDTH // 2
     CANNON_Y = PLAY_HEIGHT - 2
@@ -23741,10 +25857,16 @@ class OrbitalGame(FrameLoopGame):
 
     def _burst(self, x, y, col):
         for _ in range(8):
-            self.bursts.append([float(x), float(y),
-                                random.randint(-12, 12) / 10.0,
-                                random.randint(-12, 12) / 10.0,
-                                14 + random.randint(0, 10), col])
+            self.bursts.append(
+                [
+                    float(x),
+                    float(y),
+                    random.randint(-12, 12) / 10.0,
+                    random.randint(-12, 12) / 10.0,
+                    14 + random.randint(0, 10),
+                    col,
+                ]
+            )
 
     def _bounce_circle(self, circle):
         sx, sy, vx, vy, age, _last = self.shot[:6]
@@ -23896,7 +26018,10 @@ class OrbitalGame(FrameLoopGame):
         if ticks_diff(now, self.safe_until) < 0:
             return True
         for c in self.circles:
-            if c[1] + c[2] >= self.CANNON_Y - 2 and abs(c[0] - self.CANNON_X) < c[2] + 5:
+            if (
+                c[1] + c[2] >= self.CANNON_Y - 2
+                and abs(c[0] - self.CANNON_X) < c[2] + 5
+            ):
                 set_game_over_score(self.score)
                 return False
         if not self.circles and not self.shots:
@@ -23909,7 +26034,11 @@ class OrbitalGame(FrameLoopGame):
         display.clear()
         draw_rectangle(0, self.CANNON_Y + 1, WIDTH - 1, PLAY_HEIGHT - 1, 24, 24, 32)
         for c in self.circles:
-            col = (255, 90, 90) if c[3] == 1 else ((255, 190, 70) if c[3] == 2 else (80, 190, 255))
+            col = (
+                (255, 90, 90)
+                if c[3] == 1
+                else ((255, 190, 70) if c[3] == 2 else (80, 190, 255))
+            )
             self._draw_circle_outline(c[0], c[1], c[2], col)
             draw_text_small(int(c[0]) - 2, int(c[1]) - 3, str(c[3]), 255, 255, 255)
         for b in self.bursts:
@@ -23920,9 +26049,15 @@ class OrbitalGame(FrameLoopGame):
                 # Growing phase: draw as expanding circle outline
                 self._draw_circle_outline(shot[0], shot[1], shot[6], (180, 255, 180))
             else:
-                draw_rectangle(int(shot[0]) - 1, int(shot[1]) - 1,
-                               int(shot[0]) + 1, int(shot[1]) + 1,
-                               255, 255, 255)
+                draw_rectangle(
+                    int(shot[0]) - 1,
+                    int(shot[1]) - 1,
+                    int(shot[0]) + 1,
+                    int(shot[1]) + 1,
+                    255,
+                    255,
+                    255,
+                )
         rad = math.radians(self.aim)
         cos_a = math.cos(rad)
         sin_a = math.sin(rad)
@@ -23935,8 +26070,15 @@ class OrbitalGame(FrameLoopGame):
                 gx = self.CANNON_X + int(cos_a * dist)
                 gy = self.CANNON_Y - int(sin_a * dist)
                 set_pixel_clipped(gx, gy, 120, 120, 60)
-        draw_rectangle(self.CANNON_X - 2, self.CANNON_Y - 1,
-                       self.CANNON_X + 2, self.CANNON_Y + 1, 150, 150, 170)
+        draw_rectangle(
+            self.CANNON_X - 2,
+            self.CANNON_Y - 1,
+            self.CANNON_X + 2,
+            self.CANNON_Y + 1,
+            150,
+            150,
+            170,
+        )
         draw_text_small(1, 1, "L" + str(self.level), 170, 170, 170)
         display_score_and_time(self.score)
 
@@ -23976,6 +26118,7 @@ class ColumnsGame:
     to clear them; cleared gems feed chains for bonus points. The run ends when
     the stack reaches the top.
     """
+
     FRAME_MS = 33
     COLS = 7
     ROWS = 13
@@ -24079,11 +26222,19 @@ class ColumnsGame:
                     # Only start a run when the previous cell breaks it, so each
                     # line is counted once.
                     px, py = x - dx, y - dy
-                    if 0 <= px < self.COLS and 0 <= py < self.ROWS and g[self._idx(px, py)] == c:
+                    if (
+                        0 <= px < self.COLS
+                        and 0 <= py < self.ROWS
+                        and g[self._idx(px, py)] == c
+                    ):
                         continue
                     run = [(x, y)]
                     nx, ny = x + dx, y + dy
-                    while 0 <= nx < self.COLS and 0 <= ny < self.ROWS and g[self._idx(nx, ny)] == c:
+                    while (
+                        0 <= nx < self.COLS
+                        and 0 <= ny < self.ROWS
+                        and g[self._idx(nx, ny)] == c
+                    ):
                         run.append((nx, ny))
                         nx += dx
                         ny += dy
@@ -24093,7 +26244,11 @@ class ColumnsGame:
 
     def _apply_gravity(self):
         for x in range(self.COLS):
-            stack = [self.grid[self._idx(x, y)] for y in range(self.ROWS) if self.grid[self._idx(x, y)]]
+            stack = [
+                self.grid[self._idx(x, y)]
+                for y in range(self.ROWS)
+                if self.grid[self._idx(x, y)]
+            ]
             pad = self.ROWS - len(stack)
             for y in range(self.ROWS):
                 self.grid[self._idx(x, y)] = 0 if y < pad else stack[y - pad]
@@ -24124,9 +26279,15 @@ class ColumnsGame:
 
     def _draw(self):
         display.clear()
-        draw_rect_outline(self.OX - 1, self.OY - 1,
-                          self.OX + self.COLS * self.CELL,
-                          self.OY + self.ROWS * self.CELL, 60, 60, 90)
+        draw_rect_outline(
+            self.OX - 1,
+            self.OY - 1,
+            self.OX + self.COLS * self.CELL,
+            self.OY + self.ROWS * self.CELL,
+            60,
+            60,
+            90,
+        )
         for y in range(self.ROWS):
             for x in range(self.COLS):
                 c = self.grid[self._idx(x, y)]
@@ -24149,8 +26310,13 @@ class ColumnsGame:
                 return False
             now = ticks_ms()
             d = joystick.read_direction(
-                [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
-            if d in (JOYSTICK_LEFT, JOYSTICK_RIGHT) and ticks_diff(now, self.last_move) >= 110:
+                [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN],
+                debounce=False,
+            )
+            if (
+                d in (JOYSTICK_LEFT, JOYSTICK_RIGHT)
+                and ticks_diff(now, self.last_move) >= 110
+            ):
                 self._move(-1 if d == JOYSTICK_LEFT else 1)
                 self.last_move = now
             elif d == JOYSTICK_UP and ticks_diff(now, self.last_cycle) >= 150:
@@ -24161,7 +26327,9 @@ class ColumnsGame:
             self.last_z = z_button
             if game_over:
                 return False
-            interval = self.fall_interval // 5 if d == JOYSTICK_DOWN else self.fall_interval
+            interval = (
+                self.fall_interval // 5 if d == JOYSTICK_DOWN else self.fall_interval
+            )
             if ticks_diff(now, self.last_fall) >= interval:
                 self._fall_step()
                 self.last_fall = now
@@ -24247,8 +26415,7 @@ class LightsOutGame(GridCursorGame):
                 draw_rectangle(px, py, px + 7, py + 7, *color)
         px = self.ORIGIN_X + self.cursor_x * self.CELL
         py = self.ORIGIN_Y + self.cursor_y * self.CELL
-        draw_rect_outline(px - 1, py - 1, px + 8, py + 8,
-                          255, 255, 255)
+        draw_rect_outline(px - 1, py - 1, px + 8, py + 8, 255, 255, 255)
         display_score_and_time(self.moves)
 
     def _build_step(self, joystick):
@@ -24315,9 +26482,7 @@ class ReactionGridGame(GridCursorGame):
         else:
             target = random.randint(0, self.TARGET_COUNT - 2)
             self.target = target + (target >= old_target)
-        self.target_is_decoy = (
-            self.score >= 3 and random.randint(0, 5) == 0
-        )
+        self.target_is_decoy = self.score >= 3 and random.randint(0, 5) == 0
         timeout = max(400, 1150 - self.score * 28)
         self.deadline = ticks_add(ticks_ms(), timeout)
 
@@ -24347,8 +26512,7 @@ class ReactionGridGame(GridCursorGame):
             draw_rectangle(px, py, px + 9, py + 9, *color)
         px = self.ORIGIN_X + self.cursor_x * self.CELL
         py = self.ORIGIN_Y + self.cursor_y * self.CELL
-        draw_rect_outline(px - 1, py - 1, px + 10, py + 10,
-                          255, 255, 255)
+        draw_rect_outline(px - 1, py - 1, px + 10, py + 10, 255, 255, 255)
         for strike in range(self.strikes):
             display.set_pixel(WIDTH - strike * 3 - 2, 1, 255, 0, 0)
         display_score_and_time(self.score)
@@ -24430,9 +26594,7 @@ class PicrossGame(GridCursorGame):
         self.reset()
 
     def reset(self):
-        self.pattern, self.row_clues, self.column_clues = random.choice(
-            self.PUZZLES
-        )
+        self.pattern, self.row_clues, self.column_clues = random.choice(self.PUZZLES)
         self.grid = [0] * (self.GRID_W * self.GRID_H)
         self.cursor_x = 0
         self.cursor_y = 0
@@ -24480,8 +26642,7 @@ class PicrossGame(GridCursorGame):
                     display.set_pixel(px + 3, py + 3, 100, 120, 135)
         px = self.ORIGIN_X + self.cursor_x * self.CELL
         py = self.ORIGIN_Y + self.cursor_y * self.CELL
-        draw_rect_outline(px - 1, py - 1, px + 7, py + 7,
-                          255, 255, 255)
+        draw_rect_outline(px - 1, py - 1, px + 7, py + 7, 255, 255, 255)
         display_score_and_time(self.moves)
 
     def _build_step(self, joystick):
@@ -24534,11 +26695,13 @@ class SlalomGame(FrameLoopGame):
         self.gates = []
         self.snow = []
         for _unused in range(self.MAX_SNOW):
-            self.snow.append([
-                random.randint(0, WIDTH - 1),
-                random.randint(0, PLAY_HEIGHT - 1),
-                random.randint(1, 3),
-            ])
+            self.snow.append(
+                [
+                    random.randint(0, WIDTH - 1),
+                    random.randint(0, PLAY_HEIGHT - 1),
+                    random.randint(1, 3),
+                ]
+            )
         self._spawn_gate(-5.0)
 
     def _gate_gap(self):
@@ -24604,10 +26767,7 @@ class SlalomGame(FrameLoopGame):
         for gate in self.gates:
             previous_y = gate[0]
             gate[0] += speed
-            if (
-                not gate[3]
-                and previous_y < self.PLAYER_Y <= gate[0]
-            ):
+            if not gate[3] and previous_y < self.PLAYER_Y <= gate[0]:
                 if not self._inside_gate(gate):
                     set_game_over_score(self.score)
                     return False
@@ -24617,9 +26777,8 @@ class SlalomGame(FrameLoopGame):
                 self.gates[keep_index] = gate
                 keep_index += 1
         del self.gates[keep_index:]
-        if (
-            len(self.gates) < self.MAX_GATES
-            and (not self.gates or self.gates[-1][0] >= 12)
+        if len(self.gates) < self.MAX_GATES and (
+            not self.gates or self.gates[-1][0] >= 12
         ):
             self._spawn_gate(-5.0)
         return True
@@ -24640,10 +26799,12 @@ class SlalomGame(FrameLoopGame):
         player_x = int(self.x)
         color = (255, 210, 30) if not tucked else (255, 90, 25)
         draw_play_rect(player_x - 1, self.PLAYER_Y, 3, 4, *color)
-        draw_line(player_x - 3, self.PLAYER_Y + 4,
-                  player_x, self.PLAYER_Y + 3, 220, 240, 255)
-        draw_line(player_x, self.PLAYER_Y + 3,
-                  player_x + 3, self.PLAYER_Y + 4, 220, 240, 255)
+        draw_line(
+            player_x - 3, self.PLAYER_Y + 4, player_x, self.PLAYER_Y + 3, 220, 240, 255
+        )
+        draw_line(
+            player_x, self.PLAYER_Y + 3, player_x + 3, self.PLAYER_Y + 4, 220, 240, 255
+        )
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -24666,8 +26827,17 @@ class SlalomGame(FrameLoopGame):
 
 class GameOverMenu:
     """Unified end-of-run menu with retry, highscore view, and menu return."""
-    def __init__(self, joystick, score, best, best_name="---", title="LOST",
-                 highscores=None, game_name=None):
+
+    def __init__(
+        self,
+        joystick,
+        score,
+        best,
+        best_name="---",
+        title="LOST",
+        highscores=None,
+        game_name=None,
+    ):
         self.joystick = joystick
         self.score = int(score or 0)
         self.best = int(best or 0)
@@ -24685,7 +26855,13 @@ class GameOverMenu:
 
     def _draw_button(self, x, y, label, selected):
         col = (255, 255, 255) if selected else (95, 95, 95)
-        bg = (28, 70, 34) if selected and self.title == "WON" else (70, 28, 28) if selected else (0, 0, 0)
+        bg = (
+            (28, 70, 34)
+            if selected and self.title == "WON"
+            else (70, 28, 28)
+            if selected
+            else (0, 0, 0)
+        )
         w = len(label) * 6 + 5
         draw_rectangle(x - 2, y - 2, x + w - 1, y + 7, *bg)
         draw_rect_outline(x - 2, y - 2, x + w - 1, y + 7, *col)
@@ -24711,7 +26887,11 @@ class GameOverMenu:
     def _highscore_entries(self):
         if self.highscores is None:
             if self.game_name:
-                return [(self.game_name, self.best, self.best_name)] if self.best > 0 else []
+                return (
+                    [(self.game_name, self.best, self.best_name)]
+                    if self.best > 0
+                    else []
+                )
             return []
         return self.highscores.entries(self.game_name)
 
@@ -24724,7 +26904,7 @@ class GameOverMenu:
             draw_text_small(8, 25, "NO SCORE", 140, 140, 140)
         max_top = max(0, len(rows) - 5)
         top = clamp(top, 0, max_top)
-        for i, row in enumerate(rows[top:top + 5]):
+        for i, row in enumerate(rows[top : top + 5]):
             game, score, name = row
             y = 11 + i * 9
             rank = str(top + i + 1)
@@ -24754,7 +26934,10 @@ class GameOverMenu:
                 self._draw_menu(idx)
 
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT],
+                    debounce=True,
+                )
                 if d in (JOYSTICK_UP, JOYSTICK_LEFT):
                     idx = (idx - 1) % len(self.opts)
                     last_move = now
@@ -24790,7 +26973,9 @@ class GameOverMenu:
                 self._draw_highscores(self.hs_top)
             now = ticks_ms()
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN], debounce=True
+                )
                 rows = self._highscore_entries()
                 max_top = max(0, len(rows) - 5)
                 if d == JOYSTICK_UP and self.hs_top > 0:
@@ -24824,7 +27009,10 @@ class GameOverMenu:
                 self._draw_menu(idx)
 
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True)
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT],
+                    debounce=True,
+                )
                 if d in (JOYSTICK_UP, JOYSTICK_LEFT):
                     idx = (idx - 1) % len(self.opts)
                     last_move = now
@@ -24860,7 +27048,9 @@ class GameOverMenu:
                 self._draw_highscores(self.hs_top)
             now = ticks_ms()
             if ticks_diff(now, last_move) > move_delay:
-                d = self.joystick.read_direction([JOYSTICK_UP, JOYSTICK_DOWN], debounce=True)
+                d = self.joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_DOWN], debounce=True
+                )
                 rows = self._highscore_entries()
                 max_top = max(0, len(rows) - 5)
                 if d == JOYSTICK_UP and self.hs_top > 0:
@@ -24888,7 +27078,9 @@ def draw_menu_scrollbar(top, view, total):
     track_h = PLAY_HEIGHT - 4
     draw_line(track_x, track_y, track_x, track_y + track_h - 1, 35, 35, 35)
     if total <= view:
-        draw_rectangle(track_x - 1, track_y, track_x, track_y + track_h - 1, 160, 160, 160)
+        draw_rectangle(
+            track_x - 1, track_y, track_x, track_y + track_h - 1, 160, 160, 160
+        )
         return
     thumb_h = max(4, int(track_h * view / total))
     thumb_h = min(track_h, thumb_h)
@@ -24948,7 +27140,9 @@ class GameSettingsMenu:
         move_delay = 135
 
         while True:
-            values = tuple(self.settings.choice_index(self.game_name, i) for i in range(len(opts)))
+            values = tuple(
+                self.settings.choice_index(self.game_name, i) for i in range(len(opts))
+            )
             if idx != prev_idx or values != prev_values:
                 prev_idx = idx
                 prev_values = values
@@ -24958,7 +27152,7 @@ class GameSettingsMenu:
             if ticks_diff(now, last_move) > move_delay:
                 d = self.joystick.read_direction(
                     [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT],
-                    debounce=True
+                    debounce=True,
                 )
                 if d == JOYSTICK_UP and idx > 0:
                     idx -= 1
@@ -24985,8 +27179,10 @@ class GameSettingsMenu:
             if asyncio is None:
                 sleep_ms(16)
 
+
 class GameSelect:
     """Main game selector menu; choose a game to play with joystick."""
+
     # Tuple shape: (menu_id, game_class, flags). GAME_FLAG_HEAVY entries can be
     # hidden by runtime configuration for constrained targets.
     GAME_REGISTRY = (
@@ -25008,6 +27204,7 @@ class GameSelect:
         ("CLIMB", ClimberGame, 0),
         ("COLMNS", ColumnsGame, 0),
         ("DEFUSE", DefuseGame, 0),
+        ("DIGDUG", DigDugGame, 0),
         ("DODGE", DodgeGame, 0),
         ("DOOMLT", DoomLiteGame, GAME_FLAG_HEAVY),
         ("FLAPPY", FlappyGame, 0),
@@ -25015,6 +27212,7 @@ class GameSelect:
         ("GALAXY", GalaxyGame, 0),
         ("GOLF", GolfGame, 0),
         ("INVADR", InvaderGame, 0),
+        ("JOUST", JoustGame, 0),
         ("KEEN", KeenGame, 0),
         ("KERBAL", KerbalGame, GAME_FLAG_HEAVY),
         ("LANDER", LunarLanderGame, GAME_FLAG_HEAVY),
@@ -25058,7 +27256,8 @@ class GameSelect:
         self.highscores = HighScores()
         self.settings = GameSettings()
         self.game_registry = tuple(
-            g for g in self.GAME_REGISTRY
+            g
+            for g in self.GAME_REGISTRY
             if (CONFIG_ENABLE_HEAVY_GAMES or not (g[2] & GAME_FLAG_HEAVY))
             and _name_enabled(g[0], CONFIG_ENABLED_GAMES, CONFIG_DISABLED_GAMES)
         )
@@ -25110,9 +27309,13 @@ class GameSelect:
         if self.highscores.qualifies(game_name, global_score):
             entry_title = "NEW HS" if global_score > best else "SAVE"
             if asyncio is not None:
-                initials = await InitialsEntryMenu(self.joystick, global_score, best, best_name, entry_title).run_async()
+                initials = await InitialsEntryMenu(
+                    self.joystick, global_score, best, best_name, entry_title
+                ).run_async()
             else:
-                initials = InitialsEntryMenu(self.joystick, global_score, best, best_name, entry_title).run()
+                initials = InitialsEntryMenu(
+                    self.joystick, global_score, best, best_name, entry_title
+                ).run()
             if initials:
                 self.highscores.update(game_name, global_score, initials)
 
@@ -25120,10 +27323,24 @@ class GameSelect:
         best_name = self.highscores.best_name(game_name)
         title = globals().get("game_result", "LOST")
         if asyncio is not None:
-            return await GameOverMenu(self.joystick, global_score, best, best_name, title,
-                                      self.highscores, game_name).run_async()
-        return GameOverMenu(self.joystick, global_score, best, best_name, title,
-                            self.highscores, game_name).run()
+            return await GameOverMenu(
+                self.joystick,
+                global_score,
+                best,
+                best_name,
+                title,
+                self.highscores,
+                game_name,
+            ).run_async()
+        return GameOverMenu(
+            self.joystick,
+            global_score,
+            best,
+            best_name,
+            title,
+            self.highscores,
+            game_name,
+        ).run()
 
     async def run_game_selector(self):
         # wait for lingering button presses to prevent instant re-entry
@@ -25183,7 +27400,9 @@ class GameSelect:
                 game_name = games[self.selected]
                 await _wait_for_primary_release_async(self.joystick)
                 if self.settings.has_options(game_name):
-                    await GameSettingsMenu(self.joystick, game_name, self.settings).run_async()
+                    await GameSettingsMenu(
+                        self.joystick, game_name, self.settings
+                    ).run_async()
                     prev_selected = -1
                     prev_top = -1
                 else:
@@ -25217,6 +27436,7 @@ class GameSelect:
                         continue
                 break
 
+
 # ---------- Intro ----------
 async def _show_intro():
     """Show logo.png on desktop/web or a colour-fade animation on MicroPython."""
@@ -25229,6 +27449,7 @@ async def _show_intro():
             return False
         try:
             import pygame  # type: ignore
+
             pygame.event.pump()
             for event in pygame.event.get():
                 if event.type == pygame.KEYDOWN:
@@ -25237,9 +27458,15 @@ async def _show_intro():
                     raise RestartProgram()
             keys = pygame.key.get_pressed()
             for key in (
-                pygame.K_SPACE, pygame.K_RETURN, pygame.K_ESCAPE,
-                pygame.K_z, pygame.K_x,
-                pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT,
+                pygame.K_SPACE,
+                pygame.K_RETURN,
+                pygame.K_ESCAPE,
+                pygame.K_z,
+                pygame.K_x,
+                pygame.K_UP,
+                pygame.K_DOWN,
+                pygame.K_LEFT,
+                pygame.K_RIGHT,
             ):
                 if keys[key]:
                     return True
@@ -25267,6 +27494,7 @@ async def _show_intro():
         try:
             import struct
             import zlib
+
             with open(path, "rb") as fh:
                 data = fh.read()
             if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -25275,13 +27503,27 @@ async def _show_intro():
             width = height = color_type = None
             compressed = []
             while pos + 8 <= len(data):
-                length = struct.unpack(">I", data[pos:pos + 4])[0]
-                kind = data[pos + 4:pos + 8]
-                chunk = data[pos + 8:pos + 8 + length]
+                length = struct.unpack(">I", data[pos : pos + 4])[0]
+                kind = data[pos + 4 : pos + 8]
+                chunk = data[pos + 8 : pos + 8 + length]
                 pos += 12 + length
                 if kind == b"IHDR":
-                    width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(">IIBBBBB", chunk)
-                    if bit_depth != 8 or compression != 0 or filter_method != 0 or interlace != 0 or color_type not in (2, 6):
+                    (
+                        width,
+                        height,
+                        bit_depth,
+                        color_type,
+                        compression,
+                        filter_method,
+                        interlace,
+                    ) = struct.unpack(">IIBBBBB", chunk)
+                    if (
+                        bit_depth != 8
+                        or compression != 0
+                        or filter_method != 0
+                        or interlace != 0
+                        or color_type not in (2, 6)
+                    ):
                         return False
                 elif kind == b"IDAT":
                     compressed.append(chunk)
@@ -25298,7 +27540,7 @@ async def _show_intro():
             for _ in range(height):
                 filt = raw[i]
                 i += 1
-                row = list(raw[i:i + row_len])
+                row = list(raw[i : i + row_len])
                 i += row_len
                 for x in range(row_len):
                     left = row[x - channels] if x >= channels else 0
@@ -25315,7 +27557,16 @@ async def _show_intro():
                         pa = abs(p - left)
                         pb = abs(p - up)
                         pc = abs(p - up_left)
-                        row[x] = (row[x] + (left if pa <= pb and pa <= pc else up if pb <= pc else up_left)) & 255
+                        row[x] = (
+                            row[x]
+                            + (
+                                left
+                                if pa <= pb and pa <= pc
+                                else up
+                                if pb <= pc
+                                else up_left
+                            )
+                        ) & 255
                 rows.append(row)
                 prev = row
             for y in range(HEIGHT):
@@ -25341,13 +27592,17 @@ async def _show_intro():
     joystick = None if IS_MICROPYTHON else Joystick()
     if not IS_MICROPYTHON:
         try:
-            import pygame  # type: ignore
             import os as _os_intro
+
+            import pygame  # type: ignore
+
             _candidates = []
             for _base in (
                 _os_intro.getcwd(),
                 _os_intro.path.dirname(_os_intro.path.abspath(__file__)),
-                _os_intro.path.dirname(_os_intro.path.abspath(sys.argv[0])) if getattr(sys, "argv", None) else "",
+                _os_intro.path.dirname(_os_intro.path.abspath(sys.argv[0]))
+                if getattr(sys, "argv", None)
+                else "",
             ):
                 if _base:
                     _lp = _os_intro.path.join(_base, "logo.png")
@@ -25413,7 +27668,9 @@ async def _show_intro():
                     y1 = y0 + strip_h if ci < len(colours) - 1 else HEIGHT
                     for y in range(y0, y1):
                         for x in range(WIDTH):
-                            display.set_pixel(x, y, int(col[0] * t), int(col[1] * t), int(col[2] * t))
+                            display.set_pixel(
+                                x, y, int(col[0] * t), int(col[1] * t), int(col[2] * t)
+                            )
                 display_flush()
                 await _yield()
                 await sleep_ms_async(30)
@@ -25458,6 +27715,7 @@ async def _show_intro():
     display_flush()
     await _yield()
 
+
 async def _start_display_runtime():
     """Bring up the display and optional framebuffer before intro/menu code runs."""
     try:
@@ -25476,8 +27734,9 @@ async def _start_display_runtime():
     reset_menu_display(0)
     await yield_runtime(0)
 
+
 async def _recover_to_menu(delay_ms=800):
-    """Show a brief error marker and restore enough state for the selector to continue."""
+    """Show an error marker, then restore enough state for the selector."""
     display.clear()
     draw_text(1, 20, "ERR", 255, 0, 0)
     await sleep_ms_async(delay_ms)
@@ -25509,9 +27768,11 @@ async def main():
             print("Error:", e)
             await _recover_to_menu()
 
+
 if __name__ == "__main__":
     if asyncio is not None:
         asyncio.run(main())
     else:
         import sys as _sys
+
         print("asyncio unavailable", file=_sys.stderr)
