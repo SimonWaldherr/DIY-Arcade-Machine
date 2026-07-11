@@ -50,15 +50,18 @@ class ArcadeGameTests(unittest.TestCase):
 
     def setUp(self):
         self.original_display = app.display
+        self.original_play_sound = app.play_sound
         self.original_game_state = (
             app.game_over,
             app.global_score,
             app.game_result,
         )
         app.display = _DisplayStub()
+        app.play_sound = lambda kind, tone=0: None
 
     def tearDown(self):
         app.display = self.original_display
+        app.play_sound = self.original_play_sound
         app.game_over, app.global_score, app.game_result = self.original_game_state
 
     def test_new_games_are_registered_once(self):
@@ -179,6 +182,55 @@ class ArcadeGameTests(unittest.TestCase):
             abs(game.gates[-1][1] - game.gates[-2][1]),
             game.MAX_GATE_SHIFT,
         )
+
+    def test_doom_ray_buffer_matches_the_target_stride(self):
+        game = app.DoomLiteGame()
+
+        self.assertEqual(game.render_stride, 1 if app.IS_DESKTOP else 2)
+        game._render()
+
+        self.assertEqual(len(game.zbuf), app.WIDTH)
+        self.assertTrue(all(distance > 0 for distance in game.zbuf))
+
+    def test_doom_quad_burst_hits_distinct_visible_enemies(self):
+        game = app.DoomLiteGame()
+        game.px = 2.5
+        game.py = 2.5
+        game.ang = 128
+        game.score = 0
+        game.quad_timer = 60
+        game.enemies = [
+            [1.5, 2.43, 1, 60, 0, 0, 0.0, 0.0, 0, 1, 0],
+            [1.5, 2.50, 1, 60, 0, 0, 0.0, 0.0, 0, 1, 0],
+            [1.5, 2.57, 1, 60, 0, 0, 0.0, 0.0, 0, 1, 0],
+        ]
+
+        hits = game._shoot()
+
+        self.assertEqual(hits, 3)
+        self.assertTrue(all(enemy[2] <= 0 for enemy in game.enemies))
+        self.assertGreater(game.score, 0)
+
+    def test_doom_enemy_state_gains_strafe_and_muzzle_slots(self):
+        game = app.DoomLiteGame()
+        game.frame = 2
+        game.wave = 3
+        enemy = [1.5, 2.5, 2, 60, 1, 0, 0.0, 0.0, 0]
+        game.enemies = [enemy]
+
+        game._update_enemies()
+
+        self.assertEqual(len(enemy), 11)
+        self.assertIn(enemy[9], (-1, 0, 1))
+
+    def test_doom_shared_frame_advances_the_simulation(self):
+        game = app.DoomLiteGame()
+        game.enemies = []
+        frame = game.frame
+
+        self.assertTrue(game._advance_game_frame(_JoystickStub()))
+        self.assertEqual(game.frame, frame + 1)
+        self.assertGreater(len(game.enemies), 0)
 
 
 if __name__ == "__main__":

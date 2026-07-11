@@ -16794,6 +16794,17 @@ class DoomLiteGame:
     ENEMY_MIN_SHOOT_DIST2 = 0.25
     CONTACT_DAMAGE_DIST2 = 0.20
     ENEMY_SHOOT_RANGE2 = (49.0, 67.24, 88.36)
+    QUAD_SPREAD = (-3, 0, 3)
+    INPUT_DIRECTIONS = (
+        JOYSTICK_UP,
+        JOYSTICK_DOWN,
+        JOYSTICK_LEFT,
+        JOYSTICK_RIGHT,
+        JOYSTICK_UP_LEFT,
+        JOYSTICK_UP_RIGHT,
+        JOYSTICK_DOWN_LEFT,
+        JOYSTICK_DOWN_RIGHT,
+    )
 
     # These thresholds are stored as squared distances because the hot paths
     # only compare ranges. Keeping them squared avoids sqrt on every enemy.
@@ -16893,6 +16904,12 @@ class DoomLiteGame:
         self.hit_flash = 0  # frames left to flash crosshair on hit
         self.dmg_flash = 0  # frames left to flash screen red when damaged
         self.key_flash = 0
+        self.weapon_heat = 0
+
+        # Keep the physical matrix and browser renderer coarse, but use native
+        # columns for the desktop emulator where drawing a full 64-pixel view
+        # is inexpensive and wall detail is more legible.
+        self.render_stride = 1 if IS_DESKTOP else 2
 
         self.enemies = []
         self._spawn_wave(self.wave)
@@ -17352,7 +17369,9 @@ class DoomLiteGame:
             hp = 1 + typ
             if wave >= 8 and typ > 0:
                 hp += 1
-            # x, y, hp, cooldown, type, animation phase, alert x/y/timer
+            # x, y, hp, cooldown, type, animation phase, alert x/y/timer,
+            # strafe direction, muzzle flash. The final two fields give ranged
+            # enemies distinct behavior without a separate object allocation.
             self.enemies.append(
                 [
                     spawn[0],
@@ -17364,6 +17383,8 @@ class DoomLiteGame:
                     0.0,
                     0.0,
                     0,
+                    -1 if random.randint(0, 1) else 1,
+                    0,
                 ]
             )
 
@@ -17373,7 +17394,7 @@ class DoomLiteGame:
         radius2 = self.NOISE_RADIUS2
         for e in self.enemies:
             # Older save/attract states may still have the pre-alert enemy shape.
-            while len(e) < 9:
+            while len(e) < 11:
                 e.append(0)
             if e[2] <= 0:
                 continue
@@ -17388,55 +17409,62 @@ class DoomLiteGame:
                 e[8] = 90 + int((radius2 - d2) * 0.8)
 
     def _shoot(self):
-        # simple hitscan: Gegner in Blickrichtung, nahe Crosshair, nicht hinter Wand
+        """Fire a hitscan burst and return the number of enemies hit."""
         if self._try_use_door():
             self.weapon_recoil = 2
-            return
-        self.muzzle_flash = 6
-        self.weapon_recoil = 5
+            return 0
+
+        quad_active = self.quad_timer > 0
+        shot_angles = self.QUAD_SPREAD if quad_active else (0,)
+        damage = 2 if quad_active else 1
+        aim_tolerance = 3 if quad_active else 4
+        hit_indices = []
+        hits = 0
+
+        self.muzzle_flash = 8 if quad_active else 6
+        self.weapon_recoil = 6 if quad_active else 5
+        self.weapon_heat = min(12, self.weapon_heat + 3)
         play_sound("zap", self.wave)
         self._alert_enemies_to_noise(self.px, self.py)
-        wall_dist, _ = self._cast_ray(self.ang)
 
-        best_i = -1
-        best_d2 = 999.0
-        # The ray gives a true wall distance; convert the accepted range to a
-        # squared value so every enemy can be tested without sqrt.
-        wall_limit = wall_dist + 0.2
-        wall_limit2 = wall_limit * wall_limit
+        for angle_offset in shot_angles:
+            shot_ang = (self.ang + angle_offset) & 255
+            wall_dist, _ = self._cast_ray(shot_ang)
+            wall_limit = wall_dist + 0.2
+            wall_limit2 = wall_limit * wall_limit
+            best_i = -1
+            best_d2 = 999.0
 
-        for i, e in enumerate(self.enemies):
-            if e[2] <= 0:
+            for i, enemy in enumerate(self.enemies):
+                if i in hit_indices or enemy[2] <= 0:
+                    continue
+                dx = enemy[0] - self.px
+                dy = enemy[1] - self.py
+                dist2 = dx * dx + dy * dy
+                if dist2 <= self.SHOT_MIN_DIST2 or dist2 >= wall_limit2:
+                    continue
+                enemy_ang = self._angle_to_units(dx, dy)
+                if abs(self._angle_delta(enemy_ang, shot_ang)) > aim_tolerance:
+                    continue
+                if dist2 < best_d2:
+                    best_d2 = dist2
+                    best_i = i
+
+            if best_i < 0:
                 continue
-            dx = e[0] - self.px
-            dy = e[1] - self.py
-            dist2 = dx * dx + dy * dy
-            if dist2 <= self.SHOT_MIN_DIST2:
-                continue
 
-            if dist2 >= wall_limit2:
-                continue
-
-            a = self._angle_to_units(dx, dy)
-            delta = self._angle_delta(a, self.ang)
-
-            # Near the crosshair center: keep a forgiving arcade-stick threshold.
-            if abs(delta) > 4:
-                continue
-
-            if dist2 < best_d2:
-                best_d2 = dist2
-                best_i = i
-
-        if best_i >= 0:
-            damage = 4 if self.quad_timer > 0 else 1
-            self.enemies[best_i][2] -= damage
-            self.hit_flash = 8  # flash crosshair on hit
-            if self.enemies[best_i][2] <= 0:
-                typ = self.enemies[best_i][4] if len(self.enemies[best_i]) > 4 else 0
-                self.score += 50 + typ * 25 + (25 if self.quad_timer > 0 else 0)
+            hit_indices.append(best_i)
+            enemy = self.enemies[best_i]
+            enemy[2] -= damage
+            self.hit_flash = 10
+            hits += 1
+            typ = enemy[4] if len(enemy) > 4 else 0
+            if enemy[2] <= 0:
+                self.score += 50 + typ * 25 + (25 if quad_active else 0)
             else:
-                self.score += 15 + (10 if self.quad_timer > 0 else 0)
+                self.score += 15 + (10 if quad_active else 0)
+
+        return hits
 
     def _update_enemies(self):
         global game_over, global_score
@@ -17445,10 +17473,10 @@ class DoomLiteGame:
         if (self.frame & 1) == 1:
             return
 
-        for e in self.enemies:
+        for enemy_index, e in enumerate(self.enemies):
             if len(e) < 4:
                 e.append(0)  # upgrade legacy states to support cooldowns
-            while len(e) < 9:
+            while len(e) < 11:
                 e.append(0)
 
             if e[2] <= 0:
@@ -17472,9 +17500,12 @@ class DoomLiteGame:
 
             typ = e[4]
             e[5] = (e[5] + 1) & 31
+            if e[10] > 0:
+                e[10] -= 1
 
             # Enemies might shoot back occasionally if wave > 2
-            if self.wave > 2 and e[3] <= 0:
+            should_check_los = ((self.frame + enemy_index) & 3) == 0
+            if self.wave > 2 and e[3] <= 0 and should_check_los:
                 # First do cheap squared range checks. Only visible candidates
                 # pay for sqrt, because the ray result is a true distance.
                 if (
@@ -17494,6 +17525,7 @@ class DoomLiteGame:
                             game_over = True
                             return
                         self.px, self.py = self._player_start_for_level()
+                        e[10] = 5
                         # Reload enemy weapon
                         e[3] = random.randint(90, 210) - typ * 15
                         if e[3] < 55:
@@ -17519,10 +17551,18 @@ class DoomLiteGame:
                 else:
                     e[8] = 0
 
-            # Move toward target
+            # Archetypes: basic enemies stalk, orange enemies strafe while
+            # shooting, and purple enemies close distance more aggressively.
             step = 0.05 + (self.wave * 0.002) + typ * 0.006
+            if typ == 2:
+                step += 0.014
             if step > 0.09:
                 step = 0.09
+
+            strafe = typ == 1 and dist2 < 28.0 and e[8] <= 0
+            if strafe:
+                strafe_dir = e[9] if e[9] else 1
+                move_dx, move_dy = -dy * strafe_dir, dx * strafe_dir
 
             # axis-priority move
             if abs(move_dx) > abs(move_dy):
@@ -17531,6 +17571,8 @@ class DoomLiteGame:
                 if self._is_enemy_clear_pos(nx, e[1]):
                     e[0] = nx
                 else:
+                    if strafe:
+                        e[9] = -strafe_dir
                     sy = step if move_dy > 0 else -step
                     ny = e[1] + sy
                     if self._is_enemy_clear_pos(e[0], ny):
@@ -17541,6 +17583,8 @@ class DoomLiteGame:
                 if self._is_enemy_clear_pos(e[0], ny):
                     e[1] = ny
                 else:
+                    if strafe:
+                        e[9] = -strafe_dir
                     sx = step if move_dx > 0 else -step
                     nx = e[0] + sx
                     if self._is_enemy_clear_pos(nx, e[1]):
@@ -17556,7 +17600,7 @@ class DoomLiteGame:
         return (230, 35, 35, 255, 230, 40)
 
     def _draw_enemy_sprite(
-        self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim, light=255
+        self, sp, x0, x1, y0, y1, dist, zbuf, typ, hp, anim, light=255, firing=0
     ):
         body_r, body_g, body_b, eye_r, eye_g, eye_b = self._enemy_palette(typ, hp)
         h = y1 - y0 + 1
@@ -17608,6 +17652,9 @@ class DoomLiteGame:
                         continue
                     rr, gg, bb = body_r // 2, body_g // 2, body_b // 2
 
+                if firing and rel_y == h // 2 and rel_x == center:
+                    rr, gg, bb = 255, 235, 90
+
                 if light < 255:
                     rr = (rr * light) // 255
                     gg = (gg * light) // 255
@@ -17630,6 +17677,11 @@ class DoomLiteGame:
         set_pixel_clipped(cx - 1, base_y - 1, 170, 170, 180)
         set_pixel_clipped(cx, base_y - 2, 190, 190, 200)
         set_pixel_clipped(cx + 1, base_y - 1, 170, 170, 180)
+        if self.weapon_heat > 0:
+            heat = min(255, 80 + self.weapon_heat * 14)
+            set_pixel_clipped(cx - 1, base_y + 1, heat, heat // 3, 20)
+            set_pixel_clipped(cx, base_y, 255, heat, 30)
+            set_pixel_clipped(cx + 1, base_y + 1, heat, heat // 3, 20)
         if self.quad_timer > 0:
             set_pixel_clipped(cx - 3, base_y + 2, 120, 70, 255)
             set_pixel_clipped(cx + 3, base_y + 2, 120, 70, 255)
@@ -17664,8 +17716,10 @@ class DoomLiteGame:
         minimap_w = self.MAP_W + 2 if self.render_minimap else 0
         minimap_h = self.MAP_H + 2 if self.render_minimap else 0
 
-        # ray angles: fixedpoint, damit FOV/64 sauber läuft
-        col_step = 2
+        # Ray stride is target-aware: desktop renders native 64 columns while
+        # browser and matrix targets retain paired columns for stable timing.
+        col_step = self.render_stride
+        draw_pair = col_step == 2
         angle_step_fp = (self.FOV << 16) // WIDTH
         # Positive angle points upward in map coordinates, so screen-left is
         # ang + HALF_FOV and screen-right is ang - HALF_FOV.
@@ -17679,8 +17733,9 @@ class DoomLiteGame:
             zbuf[x] = dist
             # The renderer draws two screen columns per ray. Mirror the depth so
             # sprite clipping still works at native screen-column granularity.
-            x2 = x + 1
-            zbuf[x2] = dist
+            x2 = x + 1 if draw_pair else x
+            if draw_pair:
+                zbuf[x2] = dist
 
             ray_dx = COS[ray_ang]
             ray_dy = -SIN[ray_ang]
@@ -17776,6 +17831,7 @@ class DoomLiteGame:
             # low contrast so lighting remains the main depth cue.
             wall_u = hit_y if side == 0 else hit_x
             pattern_base = int(wall_u * 8)
+            wall_style = (hit_mx * 3 + hit_my * 5 + theme) & 3
             # The minimap owns the top-left overlay. Starting below it avoids a
             # branch for every pixel in the inner loops.
             skip_top = minimap_h if x < minimap_w else 0
@@ -17784,13 +17840,18 @@ class DoomLiteGame:
             # Draw sky, wall, and floor in order!
             for y in range(skip_top, start):
                 sp(x, y, sky_r, sky_g, sky_b)
-                sp(x2, y, sky_r, sky_g, sky_b)
+                if draw_pair:
+                    sp(x2, y, sky_r, sky_g, sky_b)
 
             wall_start = start if start > skip_top else skip_top
             for y in range(wall_start, end + 1):
                 pattern = (pattern_base + ((y - start) >> 1)) & 15
                 if is_door and ((pattern_base + y) & 3) == 0:
                     pr, pg, pb = min(255, wr + 18), min(255, wg + 12), wb
+                elif wall_style == 1 and (pattern_base & 3) == 0:
+                    pr, pg, pb = (wr * 3) // 4, (wg * 3) // 4, (wb * 3) // 4
+                elif wall_style == 2 and ((y - start) & 3) == 0:
+                    pr, pg, pb = min(255, wr + 8), min(255, wg + 8), min(255, wb + 8)
                 elif pattern == 0:
                     pr, pg, pb = min(255, wr + 12), min(255, wg + 12), min(255, wb + 12)
                 elif pattern == 8:
@@ -17798,14 +17859,16 @@ class DoomLiteGame:
                 else:
                     pr, pg, pb = wr, wg, wb
                 sp(x, y, pr, pg, pb)
-                sp(x2, y, pr, pg, pb)
+                if draw_pair:
+                    sp(x2, y, pr, pg, pb)
 
             floor_start = end + 1
             if floor_start < skip_top:
                 floor_start = skip_top
             for y in range(floor_start, PLAY_H):
                 sp(x, y, fl_r, fl_g, fl_b)
-                sp(x2, y, fl_r, fl_g, fl_b)
+                if draw_pair:
+                    sp(x2, y, fl_r, fl_g, fl_b)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -17858,6 +17921,7 @@ class DoomLiteGame:
 
                 typ = e[4] if len(e) > 4 else 0
                 anim = e[5] if len(e) > 5 else 0
+                firing = e[10] if len(e) > 10 else 0
                 sprite_light = 62
                 for li, (lx, ly, strength) in enumerate(lamps):
                     ldx = e[0] - lx
@@ -17870,7 +17934,18 @@ class DoomLiteGame:
                 if sprite_light > 255:
                     sprite_light = 255
                 self._draw_enemy_sprite(
-                    sp, x0, x1, y0, y1, dist, zbuf, typ, e[2], anim, sprite_light
+                    sp,
+                    x0,
+                    x1,
+                    y0,
+                    y1,
+                    dist,
+                    zbuf,
+                    typ,
+                    e[2],
+                    anim,
+                    sprite_light,
+                    firing,
                 )
 
         if self.key_pos is not None and not self.key_taken:
@@ -17990,245 +18065,125 @@ class DoomLiteGame:
         if self.render_hud:
             display_score_and_time(self.score)
 
+    def _advance_game_frame(self, joystick):
+        """Advance one game frame; shared by sync and browser runtime loops."""
+        global game_over, global_score
+
+        c_button, z_button = joystick.read_buttons()
+        if c_button:
+            return False
+
+        self.frame += 1
+        if self.wave_announce > 0:
+            self.wave_announce -= 1
+        if self.hit_flash > 0:
+            self.hit_flash -= 1
+        if self.muzzle_flash > 0:
+            self.muzzle_flash -= 1
+        if self.weapon_recoil > 0:
+            self.weapon_recoil -= 1
+        if self.weapon_heat > 0:
+            self.weapon_heat -= 1
+        if self.quad_timer > 0:
+            self.quad_timer -= 1
+        if self.key_flash > 0:
+            self.key_flash -= 1
+        if self.dmg_flash > 0:
+            self.dmg_flash -= 1
+
+        direction = joystick.read_direction(self.INPUT_DIRECTIONS, debounce=False)
+        turn_x, move_y = direction_to_delta_8way(direction)
+        if turn_x < 0:
+            self.ang = (self.ang + 5) & 255
+        elif turn_x > 0:
+            self.ang = (self.ang - 5) & 255
+
+        move = 0.0
+        if move_y < 0:
+            move = 0.12
+        elif move_y > 0:
+            move = -0.10
+        if move:
+            self.bob_phase = (self.bob_phase + 2) & 31
+            cos_ang, sin_ang = self._cos_sin(self.ang)
+            next_x = self.px + cos_ang * move
+            next_y = self.py - sin_ang * move
+            if not self._is_wall_pos(next_x, self.py):
+                self.px = next_x
+            if not self._is_wall_pos(self.px, next_y):
+                self.py = next_y
+            if self._update_pickups_and_exit():
+                global_score = self.score
+                self._render()
+                return True
+
+        if self.shot_cd > 0:
+            self.shot_cd -= 1
+        if z_button and self.shot_cd == 0:
+            self._shoot()
+            self.shot_cd = 10
+
+        self._update_enemies()
+        if game_over:
+            global_score = self.score
+            return False
+
+        alive = 0
+        for enemy in self.enemies:
+            if enemy[2] > 0:
+                alive += 1
+        if alive == 0:
+            self.score += 100
+            self.wave += 1
+            self._spawn_wave(self.wave)
+            self.px, self.py = self._player_start_for_level()
+            self.ang = 0
+
+        global_score = self.score
+        self._render()
+        if (self.frame % 80) == 0:
+            gc.collect()
+        return True
+
     def main_loop(self, joystick):
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0)
 
         while not game_over:
             try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
                 now = ticks_ms()
                 if ticks_diff(now, self.last_frame) < self.frame_ms:
                     sleep_ms(2)
                     continue
                 self.last_frame = now
-                self.frame += 1
-                if self.wave_announce > 0:
-                    self.wave_announce -= 1
-                if self.hit_flash > 0:
-                    self.hit_flash -= 1
-                if self.muzzle_flash > 0:
-                    self.muzzle_flash -= 1
-                if self.weapon_recoil > 0:
-                    self.weapon_recoil -= 1
-                if self.quad_timer > 0:
-                    self.quad_timer -= 1
-                if self.key_flash > 0:
-                    self.key_flash -= 1
-                if self.dmg_flash > 0:
-                    self.dmg_flash -= 1
-
-                # input
-                d = joystick.read_direction(
-                    [
-                        JOYSTICK_UP,
-                        JOYSTICK_DOWN,
-                        JOYSTICK_LEFT,
-                        JOYSTICK_RIGHT,
-                        JOYSTICK_UP_LEFT,
-                        JOYSTICK_UP_RIGHT,
-                        JOYSTICK_DOWN_LEFT,
-                        JOYSTICK_DOWN_RIGHT,
-                    ],
-                    debounce=False,
-                )
-
-                # rotate
-                tx, ty = direction_to_delta_8way(d)
-                rot = 0
-                if tx < 0:
-                    rot = 5
-                elif tx > 0:
-                    rot = -5
-                if rot:
-                    self.ang = (self.ang + rot) & 255
-
-                # move
-                move = 0.0
-                if ty < 0:
-                    move = 0.12
-                elif ty > 0:
-                    move = -0.10
-
-                if move != 0.0:
-                    self.bob_phase = (self.bob_phase + 2) & 31
-                    c, s = self._cos_sin(self.ang)
-                    dx = c * move
-                    dy = -s * move
-
-                    nx = self.px + dx
-                    ny = self.py + dy
-
-                    # axis-separate collision
-                    if not self._is_wall_pos(nx, self.py):
-                        self.px = nx
-                    if not self._is_wall_pos(self.px, ny):
-                        self.py = ny
-                    if self._update_pickups_and_exit():
-                        self._render()
-                        continue
-
-                # shoot
-                if self.shot_cd > 0:
-                    self.shot_cd -= 1
-                if z_button and self.shot_cd == 0:
-                    self._shoot()
-                    self.shot_cd = 10
-
-                # enemy update / collision
-                self._update_enemies()
-                if game_over:
-                    global_score = self.score
+                if not self._advance_game_frame(joystick):
                     return
-
-                # next wave?
-                alive = 0
-                for e in self.enemies:
-                    if e[2] > 0:
-                        alive += 1
-                if alive == 0:
-                    self.score += 100
-                    self.wave += 1
-                    self._spawn_wave(self.wave)
-                    self.px, self.py = self._player_start_for_level()
-                    self.ang = 0
-
-                global_score = self.score
-                self._render()
-
-                if (self.frame % 80) == 0:
-                    gc.collect()
-
             except RestartProgram:
                 return
 
     async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
+        """Async version for pygbag: yields between shared simulation frames."""
         if asyncio is None:
             return self.main_loop(joystick)
 
         global game_over, global_score
         game_over = False
         global_score = 0
-
         self.reset()
         display_score_and_time(0)
 
         while not game_over:
             try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
                 now = ticks_ms()
                 if ticks_diff(now, self.last_frame) < self.frame_ms:
                     await asyncio.sleep(0.002)
                     continue
                 self.last_frame = now
-                self.frame += 1
-                if self.wave_announce > 0:
-                    self.wave_announce -= 1
-                if self.hit_flash > 0:
-                    self.hit_flash -= 1
-                if self.muzzle_flash > 0:
-                    self.muzzle_flash -= 1
-                if self.weapon_recoil > 0:
-                    self.weapon_recoil -= 1
-                if self.quad_timer > 0:
-                    self.quad_timer -= 1
-                if self.key_flash > 0:
-                    self.key_flash -= 1
-                if self.dmg_flash > 0:
-                    self.dmg_flash -= 1
-
-                # input
-                d = joystick.read_direction(
-                    [
-                        JOYSTICK_UP,
-                        JOYSTICK_DOWN,
-                        JOYSTICK_LEFT,
-                        JOYSTICK_RIGHT,
-                        JOYSTICK_UP_LEFT,
-                        JOYSTICK_UP_RIGHT,
-                        JOYSTICK_DOWN_LEFT,
-                        JOYSTICK_DOWN_RIGHT,
-                    ],
-                    debounce=False,
-                )
-
-                # rotate
-                tx, ty = direction_to_delta_8way(d)
-                rot = 0
-                if tx < 0:
-                    rot = 5
-                elif tx > 0:
-                    rot = -5
-                if rot:
-                    self.ang = (self.ang + rot) & 255
-
-                # move
-                move = 0.0
-                if ty < 0:
-                    move = 0.12
-                elif ty > 0:
-                    move = -0.10
-
-                if move != 0.0:
-                    self.bob_phase = (self.bob_phase + 2) & 31
-                    c, s = self._cos_sin(self.ang)
-                    dx = c * move
-                    dy = -s * move
-
-                    nx = self.px + dx
-                    ny = self.py + dy
-
-                    # axis-separate collision
-                    if not self._is_wall_pos(nx, self.py):
-                        self.px = nx
-                    if not self._is_wall_pos(self.px, ny):
-                        self.py = ny
-                    if self._update_pickups_and_exit():
-                        self._render()
-                        continue
-
-                # shoot
-                if self.shot_cd > 0:
-                    self.shot_cd -= 1
-                if z_button and self.shot_cd == 0:
-                    self._shoot()
-                    self.shot_cd = 10
-
-                # enemy update / collision
-                self._update_enemies()
-                if game_over:
-                    global_score = self.score
+                if not self._advance_game_frame(joystick):
                     return
-
-                # next wave?
-                alive = 0
-                for e in self.enemies:
-                    if e[2] > 0:
-                        alive += 1
-                if alive == 0:
-                    self.score += 100
-                    self.wave += 1
-                    self._spawn_wave(self.wave)
-                    self.px, self.py = self._player_start_for_level()
-                    self.ang = 0
-
-                global_score = self.score
-                self._render()
-
-                if (self.frame % 80) == 0:
-                    gc.collect()
-
             except RestartProgram:
                 return
 

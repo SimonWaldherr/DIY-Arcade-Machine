@@ -253,7 +253,7 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
-| `DOOMLT` | Doom Lite | Mini raycaster FPS with rotating levels and enemy sprites; also powers the WINMAZE demo renderer |
+| `DOOMLT` | Doom Lite | Target-aware raycaster FPS with textured walls, enemy archetypes, and Quad burst fire; also powers the WINMAZE demo renderer |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
 | `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
