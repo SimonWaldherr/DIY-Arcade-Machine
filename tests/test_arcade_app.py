@@ -59,9 +59,7 @@ class ArcadeGameTests(unittest.TestCase):
 
     def tearDown(self):
         app.display = self.original_display
-        app.game_over, app.global_score, app.game_result = (
-            self.original_game_state
-        )
+        app.game_over, app.global_score, app.game_result = self.original_game_state
 
     def test_new_games_are_registered_once(self):
         registry = app.GameSelect.GAME_REGISTRY
@@ -79,8 +77,7 @@ class ArcadeGameTests(unittest.TestCase):
 
         game._flip_pattern(2, 2)
         changed = sum(
-            old_value != new_value
-            for old_value, new_value in zip(before, game.grid)
+            old_value != new_value for old_value, new_value in zip(before, game.grid)
         )
         self.assertEqual(changed, 5)
 
@@ -131,24 +128,18 @@ class ArcadeGameTests(unittest.TestCase):
         game = app.PicrossGame()
         for pattern, row_clues, column_clues in game.PUZZLES:
             self.assertEqual(
-                tuple(self._runs(value == "1" for value in row)
-                      for row in pattern),
+                tuple(self._runs(value == "1" for value in row) for row in pattern),
                 row_clues,
             )
             self.assertEqual(
                 tuple(
-                    self._runs(pattern[y][x] == "1"
-                               for y in range(game.GRID_H))
+                    self._runs(pattern[y][x] == "1" for y in range(game.GRID_H))
                     for x in range(game.GRID_W)
                 ),
                 column_clues,
             )
 
-        game.grid = [
-            1 if value == "1" else 0
-            for row in game.pattern
-            for value in row
-        ]
+        game.grid = [1 if value == "1" else 0 for row in game.pattern for value in row]
 
         self.assertTrue(game._matches_pattern())
         game.grid[0] = 1 - game.grid[0]

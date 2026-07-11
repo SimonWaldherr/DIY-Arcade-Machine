@@ -44,6 +44,7 @@ def _hide_web_loader():
         return
     try:
         import platform
+
         try:
             platform.window.DIYArcadeLoaderReady = True
         except Exception:
@@ -75,6 +76,7 @@ def _hide_web_loader():
 def _print_exception(exc):
     try:
         import traceback
+
         traceback.print_exc()
     except Exception:
         try:
@@ -92,6 +94,7 @@ async def main():
 
     try:
         import gc
+
         gc.collect()
     except Exception:
         pass
@@ -102,7 +105,9 @@ async def main():
     # arcade_app.main() will reinitialise the display once it starts.
     try:
         import asyncio as _aio
+
         import pygame
+
         pygame.init()
         try:
             if (
@@ -132,10 +137,10 @@ async def main():
         if logo is not None:
             _surf.blit(pygame.transform.scale(logo, size), (0, 0))
         else:
-            _surf.fill((10, 0, 30))                    # dark purple fallback
+            _surf.fill((10, 0, 30))  # dark purple fallback
 
         pygame.display.flip()
-        await _aio.sleep(0)          # yield so the browser renders this frame
+        await _aio.sleep(0)  # yield so the browser renders this frame
         _hide_web_loader()
     except Exception as e:
         print("pygame init warning:", e)
@@ -143,6 +148,7 @@ async def main():
     # ── Import the main application ─────────────────────────────────────────
     try:
         import arcade_app as app
+
         print("arcade_app loaded OK")
     except Exception as exc:
         print("ERROR: could not import arcade_app:", exc)
