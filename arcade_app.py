@@ -1911,6 +1911,7 @@ else:
             self._up_until = 0
             self._down_until = 0
             self._touch_press_counts = {}
+            self._last_poll_ms = -1
 
         def _poll(self):
             try:
@@ -1918,6 +1919,9 @@ else:
             except Exception:
                 return
             now = ticks_ms()
+            if now == self._last_poll_ms:
+                return
+            self._last_poll_ms = now
             try:
                 events = pygame.event.get([pygame.KEYDOWN])
             except Exception:
@@ -2018,10 +2022,10 @@ else:
             return self.nunchuck.buttons()
 
 
-def read_wasd_direction(possible_directions, debounce=False):
-    """Read WASD as a digital direction source for desktop/web multiplayer."""
+def read_wasd_input(possible_directions, debounce=False):
+    """Return the WASD player's direction and action from one keyboard poll."""
     if IS_MICROPYTHON:
-        return None
+        return None, False
     try:
         import pygame  # type: ignore
 
@@ -2033,35 +2037,34 @@ def read_wasd_direction(possible_directions, debounce=False):
         right = bool(keys[pygame.K_d])
         x, y = dpad_to_analog(up, down, left, right)
         d = _read_direction_from_xy(x, y, possible_directions)
+        action = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
         if not debounce:
-            return d
+            return d, action
         now = ticks_ms()
-        last_dir = getattr(read_wasd_direction, "_last_dir", None)
-        last_ms = getattr(read_wasd_direction, "_last_ms", 0)
+        last_dir = getattr(read_wasd_input, "_last_dir", None)
+        last_ms = getattr(read_wasd_input, "_last_ms", 0)
         if d is None:
-            setattr(read_wasd_direction, "_last_dir", None)
-            return None
+            setattr(read_wasd_input, "_last_dir", None)
+            return None, action
         if d == last_dir and ticks_diff(now, last_ms) < _JoystickBase._debounce_ms:
-            return None
-        setattr(read_wasd_direction, "_last_dir", d)
-        setattr(read_wasd_direction, "_last_ms", now)
-        return d
+            return None, action
+        setattr(read_wasd_input, "_last_dir", d)
+        setattr(read_wasd_input, "_last_ms", now)
+        return d, action
     except Exception:
-        return None
+        return None, False
+
+
+def read_wasd_direction(possible_directions, debounce=False):
+    """Read WASD as a digital direction source for desktop/web multiplayer."""
+    direction, _action = read_wasd_input(possible_directions, debounce)
+    return direction
 
 
 def read_wasd_buttons():
     """Return (back, action) for the WASD-side player on desktop/web."""
-    if IS_MICROPYTHON:
-        return False, False
-    try:
-        import pygame  # type: ignore
-
-        pygame.event.pump()
-        keys = pygame.key.get_pressed()
-        return False, bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
-    except Exception:
-        return False, False
+    _direction, action = read_wasd_input((), debounce=False)
+    return False, action
 
 
 def read_player2_direction(possible_directions, debounce=False):
@@ -3367,6 +3370,8 @@ class AirHockeyGame(FrameLoopGame):
     RINK_TOP = 3
     RINK_BOTTOM = PLAY_HEIGHT - 3
     GOAL_HALF = 7
+    GOAL_TOP = PLAY_HEIGHT // 2 - GOAL_HALF
+    GOAL_BOTTOM = PLAY_HEIGHT // 2 + GOAL_HALF
     PUCK_R = 1.1
     MALLET_R = 3.3
     MALLET_SPEED = 1.55
@@ -3396,6 +3401,13 @@ class AirHockeyGame(FrameLoopGame):
         self.puck_y = PLAY_HEIGHT / 2
         self.puck_vx = 1.65
         self.puck_vy = random.choice((-0.9, -0.45, 0.45, 0.9))
+        self._draw_left_x = self.left_x
+        self._draw_left_y = self.left_y
+        self._draw_right_x = self.right_x
+        self._draw_right_y = self.right_y
+        self._draw_puck_x = self.puck_x
+        self._draw_puck_y = self.puck_y
+        self._rink_ready = False
 
     def _puck_speed(self):
         return math.sqrt(self.puck_vx * self.puck_vx + self.puck_vy * self.puck_vy)
@@ -3619,10 +3631,63 @@ class AirHockeyGame(FrameLoopGame):
         )
         for y in range(self.RINK_TOP + 4, self.RINK_BOTTOM - 3, 8):
             draw_line(WIDTH // 2 - 1, y, WIDTH // 2 + 1, y + 1, 220, 220, 220)
-        goal_y1 = int(PLAY_HEIGHT / 2 - self.GOAL_HALF)
-        goal_y2 = int(PLAY_HEIGHT / 2 + self.GOAL_HALF)
-        draw_rectangle(self.RINK_LEFT, goal_y1, self.RINK_LEFT + 1, goal_y2, 0, 0, 0)
-        draw_rectangle(self.RINK_RIGHT - 1, goal_y1, self.RINK_RIGHT, goal_y2, 0, 0, 0)
+        draw_rectangle(
+            self.RINK_LEFT, self.GOAL_TOP, self.RINK_LEFT + 1, self.GOAL_BOTTOM, 0, 0, 0
+        )
+        draw_rectangle(
+            self.RINK_RIGHT - 1,
+            self.GOAL_TOP,
+            self.RINK_RIGHT,
+            self.GOAL_BOTTOM,
+            0,
+            0,
+            0,
+        )
+
+    def _rink_pixel_color(self, x, y):
+        """Return the static rink color below a moving puck or mallet."""
+        if (
+            self.RINK_LEFT <= x <= self.RINK_RIGHT
+            and self.RINK_TOP <= y <= self.RINK_BOTTOM
+        ):
+            color = (8, 120, 92)
+        else:
+            color = (14, 90, 70)
+
+        if (
+            x == self.RINK_LEFT
+            or x == self.RINK_RIGHT
+            or y == self.RINK_TOP
+            or y == self.RINK_BOTTOM
+        ):
+            color = (220, 220, 220)
+        elif x == WIDTH // 2 and self.RINK_TOP < y < self.RINK_BOTTOM:
+            color = (220, 220, 220)
+        elif (
+            WIDTH // 2 - 1 <= x <= WIDTH // 2 + 1
+            and self.RINK_TOP + 4 <= y < self.RINK_BOTTOM - 3
+            and (y - (self.RINK_TOP + 4)) % 8 < 2
+        ):
+            color = (220, 220, 220)
+
+        if self.GOAL_TOP <= y <= self.GOAL_BOTTOM and (
+            self.RINK_LEFT <= x <= self.RINK_LEFT + 1
+            or self.RINK_RIGHT - 1 <= x <= self.RINK_RIGHT
+        ):
+            return 0, 0, 0
+        return color
+
+    def _restore_rink_region(self, cx, cy, radius):
+        """Restore one small dynamic region without repainting the whole rink."""
+        x0 = max(0, int(cx) - radius)
+        x1 = min(WIDTH - 1, int(cx) + radius)
+        y0 = max(0, int(cy) - radius)
+        y1 = min(PLAY_HEIGHT - 1, int(cy) + radius)
+        sp = display.set_pixel
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                r, g, b = self._rink_pixel_color(x, y)
+                sp(x, y, r, g, b)
 
     def _draw_player(self, x, y, color):
         draw_rectangle(int(x) - 2, int(y) - 2, int(x) + 2, int(y) + 2, *color)
@@ -3638,7 +3703,13 @@ class AirHockeyGame(FrameLoopGame):
         draw_text_small(44, PLAY_HEIGHT, mode, 160, 160, 160)
 
     def _draw(self):
-        self._draw_rink()
+        if not self._rink_ready:
+            self._draw_rink()
+            self._rink_ready = True
+        else:
+            self._restore_rink_region(self._draw_left_x, self._draw_left_y, 2)
+            self._restore_rink_region(self._draw_right_x, self._draw_right_y, 2)
+            self._restore_rink_region(self._draw_puck_x, self._draw_puck_y, 1)
         self._draw_player(self.left_x, self.left_y, (70, 170, 255))
         self._draw_player(self.right_x, self.right_y, (255, 90, 90))
         if self.flash:
@@ -3653,6 +3724,12 @@ class AirHockeyGame(FrameLoopGame):
             255,
         )
         self._draw_hud()
+        self._draw_left_x = self.left_x
+        self._draw_left_y = self.left_y
+        self._draw_right_x = self.right_x
+        self._draw_right_y = self.right_y
+        self._draw_puck_x = self.puck_x
+        self._draw_puck_y = self.puck_y
         global global_score
         global_score = max(self.left_score, self.right_score)
         display_flush()
@@ -5773,7 +5850,8 @@ class TronGame(FrameLoopGame):
     TRON LIGHT CYCLE (Endless)
     Controls:
       - Left/Right: 90° turn
-      - Z: Turbo (double step)
+      - P1: WASD + Shift turbo in 2P mode
+      - P2: Arrow keys + Z turbo in 2P mode
       - C: Back to menu
     """
 
@@ -5971,6 +6049,46 @@ class TronGame(FrameLoopGame):
             self._draw_head()
         return True
 
+    def _step_two_player(self, p1_turbo, p2_turbo):
+        """Advance both cycles from the same board state for fair collisions."""
+        p1_steps = self.TURBO_STEP if p1_turbo else 1
+        p2_steps = self.TURBO_STEP if p2_turbo else 1
+        for phase in range(max(p1_steps, p2_steps)):
+            p1_moves = phase < p1_steps
+            p2_moves = phase < p2_steps
+            p1_next = None
+            p2_next = None
+            p1_alive = True
+            p2_alive = True
+
+            if p1_moves:
+                dx, dy = self._DIR_VECS[self.direction]
+                p1_next = self.head_x + dx, self.head_y + dy
+                p1_alive = not self._blocked(p1_next[0], p1_next[1])
+            if p2_moves:
+                dx, dy = self._DIR_VECS[self.enemy_dir]
+                p2_next = self.enemy_x + dx, self.enemy_y + dy
+                p2_alive = not self._blocked(p2_next[0], p2_next[1])
+
+            # Reaching one free cell at the same time is a draw, regardless of
+            # whether player one or player two happens to be processed first.
+            if p1_moves and p2_moves and p1_next == p2_next:
+                return False, False
+            if not p1_alive or not p2_alive:
+                return p1_alive, p2_alive
+
+            if p1_moves:
+                self.head_x, self.head_y = p1_next
+                self.score += 1
+                self._occupy(self.head_x, self.head_y)
+                self._draw_head()
+            if p2_moves:
+                self.enemy_x, self.enemy_y = p2_next
+                self.enemy_score += 1
+                self._occupy(self.enemy_x, self.enemy_y)
+                self._draw_enemy()
+        return True, True
+
     def _draw_head(self, force=False):
         color = self._palette[self.score % len(self._palette)]
         r, g, b = color
@@ -5984,6 +6102,16 @@ class TronGame(FrameLoopGame):
         if force:
             display_flush()
 
+    def _draw_match_score(self):
+        if self.players_mode != "two":
+            display_score_and_time(self.score)
+            return
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        draw_text_small(1, PLAY_HEIGHT, "1" + str(self.score), 80, 210, 255)
+        draw_text_small(23, PLAY_HEIGHT, "-", 255, 255, 255)
+        draw_text_small(30, PLAY_HEIGHT, "2" + str(self.enemy_score), 255, 90, 75)
+        display_flush()
+
     def _build_step(self, joystick):
         global game_over, global_score
         game_over = False
@@ -5996,26 +6124,38 @@ class TronGame(FrameLoopGame):
             if c_button:
                 return False
             if self.players_mode == "two":
-                _p1_back, p1_action = read_wasd_buttons()
-                turn = read_wasd_direction(
+                turn, p1_action = read_wasd_input(
                     [JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=True
                 )
-                z_button = p1_action
+                p2_turbo = z_button
             else:
                 turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
+                p2_turbo = False
             if turn:
                 self._turn(turn)
             if self.players_mode == "two":
                 p2_turn = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
                 if p2_turn:
                     self._turn_enemy(p2_turn)
-            alive = self._step(turbo=z_button)
+                p1_alive, p2_alive = self._step_two_player(p1_action, p2_turbo)
+                if not p1_alive or not p2_alive:
+                    if p1_alive:
+                        self.score += 150
+                    elif p2_alive:
+                        self.enemy_score += 150
+                    set_game_over_score(self.score, won=p1_alive and not p2_alive)
+                    return False
+            else:
+                if not self._step(turbo=z_button):
+                    game_over = True
+                    return False
             global_score = self.score
-            display_score_and_time(self.score)
-            if not alive:
-                game_over = True
-                return False
-            if not self.enemy_alive and random.randint(0, 15) == 0:
+            self._draw_match_score()
+            if (
+                self.players_mode != "two"
+                and not self.enemy_alive
+                and random.randint(0, 15) == 0
+            ):
                 self._try_respawn_enemy()
             return True
 
@@ -7761,9 +7901,15 @@ class WormsGame(FrameLoopGame):
         self.last_fire = [False, False]
         self.cpu_wait = 26
         self.turns = 0
+        self._terrain_dirty = True
+        self._drawn_worms = []
+        self._drawn_aim_bounds = None
+        self._drawn_shell = None
+        self._drawn_explosion = None
         self._new_match()
 
     def _new_match(self):
+        self._terrain_dirty = True
         self.terrain = []
         base = 42
         for x in range(WIDTH):
@@ -7824,6 +7970,7 @@ class WormsGame(FrameLoopGame):
             d = abs(x - icx)
             cut = max(1, radius - d)
             self.terrain[x] = clamp(self.terrain[x] + cut, 22, PLAY_HEIGHT - 1)
+        self._terrain_dirty = True
         self._damage_worms(cx, cy, radius + 2)
         self._settle_all()
 
@@ -7942,6 +8089,30 @@ class WormsGame(FrameLoopGame):
         if w["hp"] > 1:
             display.set_pixel(x + 2, y, 255, 255, 255)
 
+    def _draw_terrain(self):
+        display.clear()
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 10, 24)
+        for x, y in enumerate(self.terrain):
+            draw_line(x, y, x, PLAY_HEIGHT - 1, 60, 92, 45)
+            display.set_pixel(x, y, 120, 150, 70)
+
+    def _restore_terrain_region(self, x0, y0, x1, y1):
+        """Restore a dynamic sprite area from the unchanged terrain map."""
+        x0 = max(0, int(x0))
+        x1 = min(WIDTH - 1, int(x1))
+        y0 = max(0, int(y0))
+        y1 = min(PLAY_HEIGHT - 1, int(y1))
+        sp = display.set_pixel
+        for x in range(x0, x1 + 1):
+            ground_y = self.terrain[x]
+            for y in range(y0, y1 + 1):
+                if y < ground_y:
+                    sp(x, y, 0, 10, 24)
+                elif y == ground_y:
+                    sp(x, y, 120, 150, 70)
+                else:
+                    sp(x, y, 60, 92, 45)
+
     def _draw_aim(self):
         w = self._active_worm()
         sign = 1 if self.turn_team == 0 else -1
@@ -7951,26 +8122,45 @@ class WormsGame(FrameLoopGame):
         x1 = x0 + int(math.cos(rad) * 7 * sign)
         y1 = y0 - int(math.sin(rad) * 7)
         draw_line(x0, y0, x1, y1, 255, 255, 120)
+        return min(x0, x1) - 1, min(y0, y1) - 1, max(x0, x1) + 1, max(y0, y1) + 1
 
     def _draw(self):
-        display.clear()
-        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 10, 24)
-        for x, y in enumerate(self.terrain):
-            draw_line(x, y, x, PLAY_HEIGHT - 1, 60, 92, 45)
-            display.set_pixel(x, y, 120, 150, 70)
+        if self._terrain_dirty:
+            self._draw_terrain()
+            self._terrain_dirty = False
+        else:
+            for x, y in self._drawn_worms:
+                self._restore_terrain_region(x - 2, y - 4, x + 3, y + 2)
+            if self._drawn_aim_bounds is not None:
+                self._restore_terrain_region(*self._drawn_aim_bounds)
+            if self._drawn_shell is not None:
+                x, y = self._drawn_shell
+                self._restore_terrain_region(x, y, x, y)
+            if self._drawn_explosion is not None:
+                self._restore_terrain_region(*self._drawn_explosion)
+
+        drawn_worms = self._drawn_worms
+        del drawn_worms[:]
         for team in range(2):
             for i, w in enumerate(self.worms[team]):
                 self._draw_worm(
                     w, team, team == self.turn_team and i == self.active[team]
                 )
+                if w["hp"] > 0:
+                    drawn_worms.append((int(w["x"]), int(w["y"])))
+        aim_bounds = None
         if not self.shell and (self.turn_team == 0 or self.players_mode == "two"):
-            self._draw_aim()
+            aim_bounds = self._draw_aim()
+        shell_pos = None
         if self.shell:
-            display.set_pixel(int(self.shell[0]), int(self.shell[1]), 255, 255, 180)
+            shell_pos = int(self.shell[0]), int(self.shell[1])
+            display.set_pixel(shell_pos[0], shell_pos[1], 255, 255, 180)
+        explosion_bounds = None
         if self.explosion:
             x, y, t = self.explosion
             col = (255, 220, 40) if t & 1 else (255, 70, 30)
             draw_rect_outline(x - 2, y - 2, x + 2, y + 2, *col)
+            explosion_bounds = x - 2, y - 2, x + 2, y + 2
             self.explosion[2] -= 1
             if self.explosion[2] <= 0:
                 self.explosion = None
@@ -7978,15 +8168,17 @@ class WormsGame(FrameLoopGame):
         draw_text_small(1, PLAY_HEIGHT, "A" + str(self.angle), 210, 210, 210)
         draw_text_small(19, PLAY_HEIGHT, "P" + str(self.power), 210, 210, 210)
         draw_text_small(43, PLAY_HEIGHT, "W" + str(int(self.wind * 100)), 180, 180, 180)
+        self._drawn_aim_bounds = aim_bounds
+        self._drawn_shell = shell_pos
+        self._drawn_explosion = explosion_bounds
         display_flush()
 
     def _read_turn_input(self, joystick, joystick_fire):
         if self.players_mode == "two" and self.turn_team == 0:
-            d = read_wasd_direction(
+            d, fire = read_wasd_input(
                 [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT],
                 debounce=True,
             )
-            _back, fire = read_wasd_buttons()
             return d, fire
         d = joystick.read_direction(
             [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]

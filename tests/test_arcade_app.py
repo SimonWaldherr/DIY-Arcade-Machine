@@ -19,6 +19,17 @@ class _DisplayStub:
         pass
 
 
+class _CountingDisplay(_DisplayStub):
+    def __init__(self):
+        self.pixel_writes = 0
+
+    def set_pixel(self, *args):
+        self.pixel_writes += 1
+
+    def fill_rect(self, x1, y1, x2, y2, *args):
+        self.pixel_writes += max(0, x2 - x1 + 1) * max(0, y2 - y1 + 1)
+
+
 class _JoystickStub:
     def __init__(self, direction=None, buttons=(False, False)):
         self.direction = direction
@@ -284,6 +295,66 @@ class ArcadeGameTests(unittest.TestCase):
 
         self.assertIs(demo._pend_trail, trail)
         self.assertEqual(len(trail), 48)
+
+    def test_air_hockey_restores_only_moving_regions_after_first_frame(self):
+        display = _CountingDisplay()
+        app.display = display
+        game = app.AirHockeyGame({"settings": {"players": "two"}})
+
+        game._draw()
+        initial_writes = display.pixel_writes
+        display.pixel_writes = 0
+        game.left_x += game.MALLET_SPEED
+        game.puck_x += game.puck_vx
+        game.puck_y += game.puck_vy
+        game._draw()
+
+        self.assertTrue(game._rink_ready)
+        self.assertLess(display.pixel_writes, initial_writes // 3)
+
+    def test_worms_reuses_static_terrain_between_turn_updates(self):
+        display = _CountingDisplay()
+        app.display = display
+        game = app.WormsGame({"settings": {"players": "two", "worms": 2}})
+
+        game._draw()
+        initial_writes = display.pixel_writes
+        display.pixel_writes = 0
+        game.angle += 2
+        game._draw()
+
+        self.assertFalse(game._terrain_dirty)
+        self.assertLess(display.pixel_writes, initial_writes // 3)
+
+    def test_tron_two_player_resolves_same_cell_collision_as_draw(self):
+        game = app.TronGame({"settings": {"players": "two"}})
+        game.trail = bytearray(app.WIDTH * app.PLAY_HEIGHT)
+        game.head_x, game.head_y, game.direction = 20, 20, game.DIR_RIGHT
+        game.enemy_x, game.enemy_y, game.enemy_dir = 22, 20, game.DIR_LEFT
+        game._occupy(game.head_x, game.head_y)
+        game._occupy(game.enemy_x, game.enemy_y)
+
+        p1_alive, p2_alive = game._step_two_player(False, False)
+
+        self.assertFalse(p1_alive)
+        self.assertFalse(p2_alive)
+        self.assertEqual((game.head_x, game.head_y), (20, 20))
+        self.assertEqual((game.enemy_x, game.enemy_y), (22, 20))
+
+    def test_tron_two_player_allows_both_turbo_buttons(self):
+        game = app.TronGame({"settings": {"players": "two"}})
+        game.trail = bytearray(app.WIDTH * app.PLAY_HEIGHT)
+        game.head_x, game.head_y, game.direction = 10, 20, game.DIR_RIGHT
+        game.enemy_x, game.enemy_y, game.enemy_dir = 50, 20, game.DIR_LEFT
+        game._occupy(game.head_x, game.head_y)
+        game._occupy(game.enemy_x, game.enemy_y)
+
+        p1_alive, p2_alive = game._step_two_player(False, True)
+
+        self.assertTrue(p1_alive)
+        self.assertTrue(p2_alive)
+        self.assertEqual((game.head_x, game.head_y), (11, 20))
+        self.assertEqual((game.enemy_x, game.enemy_y), (48, 20))
 
 
 if __name__ == "__main__":
