@@ -199,7 +199,7 @@ config = {
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
-<meta name="description" content="Play 27+ classic-inspired 64x64 arcade games in the browser, on desktop, or on LED matrix hardware.">
+<meta name="description" content="Play 70+ classic-inspired 64x64 arcade games in the browser, on desktop, or on LED matrix hardware.">
 <meta name="author" content="Simon Waldherr">
 <meta name="robots" content="index, follow">
 <meta name="color-scheme" content="dark">
@@ -213,7 +213,7 @@ config = {
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta property="og:site_name" content="DIY Arcade Machine">
 <meta property="og:title" content="DIY Arcade Machine">
-<meta property="og:description" content="Play 27+ classic-inspired 64x64 arcade games directly in the browser.">
+<meta property="og:description" content="Play 70+ classic-inspired 64x64 arcade games directly in the browser.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/">
 <meta property="og:image" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/og-image.png">
@@ -226,7 +226,7 @@ config = {
 <meta property="og:locale:alternate" content="de_DE">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="DIY Arcade Machine">
-<meta name="twitter:description" content="Play 27+ classic-inspired 64x64 arcade games directly in the browser.">
+<meta name="twitter:description" content="Play 70+ classic-inspired 64x64 arcade games directly in the browser.">
 <meta name="twitter:image" content="https://simonwaldherr.github.io/DIY-Arcade-Machine/og-image.png">
 <meta name="twitter:image:alt" content="DIY Arcade Machine logo and title on a dark arcade background">
 <link rel="canonical" href="https://simonwaldherr.github.io/DIY-Arcade-Machine/">
@@ -1068,11 +1068,21 @@ function DIYArcadeIsIOSFullscreenVariant() {
 
 window.DIYArcadeLoaderReady = false;
 window.DIYArcadeLoaderFallbackTimer = null;
+window.DIYArcadeLoaderWatchTimer = null;
+window.DIYArcadeLoaderHardTimeout = null;
 window.DIYArcadeHideLoader = function() {
     window.DIYArcadeLoaderReady = true;
     if (window.DIYArcadeLoaderFallbackTimer) {
         clearTimeout(window.DIYArcadeLoaderFallbackTimer);
         window.DIYArcadeLoaderFallbackTimer = null;
+    }
+    if (window.DIYArcadeLoaderWatchTimer) {
+        clearInterval(window.DIYArcadeLoaderWatchTimer);
+        window.DIYArcadeLoaderWatchTimer = null;
+    }
+    if (window.DIYArcadeLoaderHardTimeout) {
+        clearTimeout(window.DIYArcadeLoaderHardTimeout);
+        window.DIYArcadeLoaderHardTimeout = null;
     }
     const transfer = document.getElementById("transfer");
     if (transfer) {
@@ -1090,7 +1100,7 @@ window.DIYArcadeArmLoaderFallback = function(ms) {
         window.DIYArcadeHideLoader();
     }, ms || 7000);
 };
-setInterval(() => {
+window.DIYArcadeLoaderWatchTimer = setInterval(() => {
     if (window.DIYArcadeLoaderReady || window.DIYArcadeLoaderFallbackTimer) {
         return;
     }
@@ -1108,7 +1118,7 @@ setInterval(() => {
         window.DIYArcadeArmLoaderFallback(2500);
     }
 }, 500);
-setTimeout(() => {
+window.DIYArcadeLoaderHardTimeout = setTimeout(() => {
     window.DIYArcadeHideLoader();
 }, 20000);
 
@@ -1172,7 +1182,7 @@ setTimeout(() => {
             activeSources[key].clear();
             state[key] = false;
         });
-        document.querySelectorAll("[data-touch-key]").forEach((button) => {
+        touchButtons.forEach((button) => {
             button.classList.remove("is-active");
             if (button._touchIds) {
                 button._touchIds.clear();
@@ -1195,12 +1205,19 @@ setTimeout(() => {
         } catch (_error) {}
     }
 
+    let wakeLock = null;
+
     async function requestWakeLock() {
         try {
-            if (!("wakeLock" in navigator) || document.hidden) {
+            if (!("wakeLock" in navigator) || document.hidden || wakeLock) {
                 return;
             }
-            window.DIYArcadeWakeLock = await navigator.wakeLock.request("screen");
+            wakeLock = await navigator.wakeLock.request("screen");
+            window.DIYArcadeWakeLock = wakeLock;
+            wakeLock.addEventListener("release", () => {
+                wakeLock = null;
+                window.DIYArcadeWakeLock = null;
+            }, { once: true });
         } catch (_error) {}
     }
 
@@ -1217,6 +1234,7 @@ setTimeout(() => {
         return;
     }
     controls.setAttribute("aria-hidden", "false");
+    const touchButtons = controls.querySelectorAll("[data-touch-key]");
 
     const listenerOptions = { passive: false };
     controls.addEventListener("touchstart", preventGesture, listenerOptions);
@@ -1228,7 +1246,7 @@ setTimeout(() => {
     controls.addEventListener("gestureend", preventGesture, listenerOptions);
     controls.addEventListener("contextmenu", preventGesture);
 
-    document.querySelectorAll("[data-touch-key]").forEach((button) => {
+    touchButtons.forEach((button) => {
         const key = button.dataset.touchKey;
         const source = "button:" + key;
         button._touchIds = new Set();
@@ -1264,26 +1282,26 @@ setTimeout(() => {
             button.addEventListener("pointerup", endPointer, listenerOptions);
             button.addEventListener("pointercancel", endPointer, listenerOptions);
             button.addEventListener("lostpointercapture", endPointer, listenerOptions);
+        } else {
+            button.addEventListener("touchstart", (event) => {
+                event.preventDefault();
+                for (const touch of event.changedTouches) {
+                    button._touchIds.add(touch.identifier);
+                }
+                beginButtonPress();
+            }, listenerOptions);
+
+            const endTouch = (event) => {
+                event.preventDefault();
+                for (const touch of event.changedTouches) {
+                    button._touchIds.delete(touch.identifier);
+                }
+                endButtonPress();
+            };
+
+            button.addEventListener("touchend", endTouch, listenerOptions);
+            button.addEventListener("touchcancel", endTouch, listenerOptions);
         }
-
-        button.addEventListener("touchstart", (event) => {
-            event.preventDefault();
-            for (const touch of event.changedTouches) {
-                button._touchIds.add(touch.identifier);
-            }
-            beginButtonPress();
-        }, listenerOptions);
-
-        const endTouch = (event) => {
-            event.preventDefault();
-            for (const touch of event.changedTouches) {
-                button._touchIds.delete(touch.identifier);
-            }
-            endButtonPress();
-        };
-
-        button.addEventListener("touchend", endTouch, listenerOptions);
-        button.addEventListener("touchcancel", endTouch, listenerOptions);
     });
 
     const canvas = document.getElementById("canvas");
@@ -1366,14 +1384,9 @@ setTimeout(() => {
                 pulseSwipeKey(Math.abs(dx) > Math.abs(dy)
                     ? (dx < 0 ? "left" : "right")
                     : (dy < 0 ? "up" : "down"));
-                swipeTouches.set(touch.identifier, {
-                    startX: start.startX,
-                    startY: start.startY,
-                    x: touch.clientX,
-                    y: touch.clientY,
-                    startedAt: start.startedAt,
-                    swiped: true,
-                });
+                start.x = touch.clientX;
+                start.y = touch.clientY;
+                start.swiped = true;
             }
         }, listenerOptions);
 

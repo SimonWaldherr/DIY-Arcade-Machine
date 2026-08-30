@@ -22,7 +22,7 @@ WEB_REPO_CACHE   ?= build/pygame-web-repo
 WEB_PYGAME_STATIC_WHEEL ?= pygame_static-1.0-$(PYTHON_ABI)-$(PYTHON_ABI)-wasm32_bi_emscripten.whl
 
 # Default behavior is to show help
-.PHONY: all help run upload build clean clean-all install web-install web-build web-pages-build web web-safari web-ios-build web-ios web-ios-safari
+.PHONY: all help run test check targets-check desktop-check hardware-check web-check arcade-bundle upload build clean clean-all install web-install web-build web-pages-build web web-safari web-ios-build web-ios web-ios-safari
 
 all: help
 
@@ -32,6 +32,10 @@ help:
 	@echo "Available commands:"
 	@echo "  \033[1;32mmake install\033[0m   - Install desktop dependencies (PyGame)"
 	@echo "  \033[1;32mmake run\033[0m       - Run the emulator on the desktop (Python PyGame needed)"
+	@echo "  \033[1;32mmake test\033[0m      - Run the unit tests"
+	@echo "  \033[1;32mmake check\033[0m     - Verify the generated bundle and run tests"
+	@echo "  \033[1;32mmake targets-check\033[0m - Smoke-test desktop, MicroPython and web targets"
+	@echo "  \033[1;32mmake arcade-bundle\033[0m - Rebuild arcade_app.py from arcade_src/"
 	@echo "  \033[1;32mmake upload\033[0m    - Upload the game to the microcontroller (runs upload.sh)"
 	@echo "  \033[1;32mmake build\033[0m     - Compile arcade_app.py to arcade_app.mpy (requires mpy-cross)"
 	@echo "  \033[1;32mmake web-install\033[0m - Install pygbag for browser builds"
@@ -50,14 +54,35 @@ install: .venv/bin/activate
 
 .venv/bin/activate:
 	python3 -m venv .venv
-	.venv/bin/pip install pygame
+	.venv/bin/pip install pygame-ce
 
 # Run the PyGame emulator locally (installs dependencies in venv first)
-run: install
+run: arcade-bundle install
 	.venv/bin/python main.py
 
+arcade-bundle:
+	python3 tools/build_arcade_bundle.py
+
+test: arcade-bundle
+	python3 -m unittest discover -s tests -v
+
+check:
+	python3 tools/build_arcade_bundle.py --check
+	python3 -m unittest discover -s tests -v
+
+desktop-check: arcade-bundle install
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy .venv/bin/python tools/check_desktop.py
+
+hardware-check: arcade-bundle
+	python3 tools/check_micropython_build.py
+
+web-check: web-pages-build
+	python3 tools/check_web_build.py
+
+targets-check: check desktop-check hardware-check web-check
+
 # Upload the scripts via the interactive bash script
-upload:
+upload: arcade-bundle
 	./upload.sh
 
 # Install pygbag for browser/WebAssembly builds
@@ -87,7 +112,7 @@ web-runtime:
 			-o "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)"; \
 	fi
 
-web-build: web-install web-runtime
+web-build: arcade-bundle web-install web-runtime
 	@echo "Building WebAssembly version..."
 	rm -rf $(WEB_SRC)
 	mkdir -p $(WEB_SRC)
@@ -103,7 +128,10 @@ web-build: web-install web-runtime
 	cp web/favicon.ico web/favicon-16.png web/favicon-32.png web/og-image.png $(WEB_SRC)/build/web/
 	cp -R web/icons $(WEB_SRC)/build/web/
 	mkdir -p $(WEB_SRC)/build/web/archives
-	cp -R $(WEB_ARCHIVES_SRC) $(WEB_SRC)/build/web/archives/
+	python3 tools/copy_web_runtime.py \
+		"$(WEB_ARCHIVES_SRC)" \
+		"$(WEB_SRC)/build/web/archives/$(RUNTIME_VERSION)" \
+		"$(PYTHON_ABI)"
 	mkdir -p $(WEB_SRC)/build/web/archives/repo
 	mkdir -p $(WEB_SRC)/build/web/archives/repo/$(PYTHON_ABI)
 	cp "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" \
@@ -114,7 +142,7 @@ web-build: web-install web-runtime
 	rm -rf build/web
 	cp -R $(WEB_SRC)/build/web build/web
 
-web-ios-build: web-install web-runtime
+web-ios-build: arcade-bundle web-install web-runtime
 	@echo "Building iOS fullscreen WebAssembly version..."
 	rm -rf $(WEB_IOS_SRC)
 	mkdir -p $(WEB_IOS_SRC)
@@ -130,7 +158,10 @@ web-ios-build: web-install web-runtime
 	cp web/favicon.ico web/favicon-16.png web/favicon-32.png web/og-image.png $(WEB_IOS_SRC)/build/web/
 	cp -R web/icons $(WEB_IOS_SRC)/build/web/
 	mkdir -p $(WEB_IOS_SRC)/build/web/archives
-	cp -R $(WEB_ARCHIVES_SRC) $(WEB_IOS_SRC)/build/web/archives/
+	python3 tools/copy_web_runtime.py \
+		"$(WEB_ARCHIVES_SRC)" \
+		"$(WEB_IOS_SRC)/build/web/archives/$(RUNTIME_VERSION)" \
+		"$(PYTHON_ABI)"
 	mkdir -p $(WEB_IOS_SRC)/build/web/archives/repo
 	mkdir -p $(WEB_IOS_SRC)/build/web/archives/repo/$(PYTHON_ABI)
 	cp "$(WEB_REPO_CACHE)/$(PYTHON_ABI)/$(WEB_PYGAME_STATIC_WHEEL)" \
@@ -178,7 +209,7 @@ web-ios-safari: web-install
 	.venv/bin/python serve_safari.py $(PORT) $(WEB_IOS_OUT)
 
 # Build bytecode locally if mpy-cross is available
-build:
+build: arcade-bundle
 	@if command -v mpy-cross >/dev/null 2>&1; then \
 		echo "Compiling arcade_app.py..."; \
 		mpy-cross -X heapsize=8388608 arcade_app.py; \

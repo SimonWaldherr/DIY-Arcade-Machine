@@ -30,14 +30,26 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Syntax check
-        run: python -m py_compile main.py arcade_app.py
+      - name: Test source bundle and game logic
+        run: make check
+
+      - name: Install MicroPython compiler
+        run: python -m pip install mpy-cross
+
+      - name: Check MicroPython bundle
+        run: make hardware-check
 
       - name: Build web bundle
         # Build the regular browser bundle plus the iOS fullscreen variant at /ios/.
         # The Makefile handles the repo's browser-build dependencies and avoids
         # any runtime dependency on the external pygame-web CDN.
         run: make web-pages-build
+
+      - name: Smoke-test desktop display backend
+        run: make desktop-check
+
+      - name: Validate web targets
+        run: python tools/check_web_build.py
 
       - name: Verify build output
         # Fail fast if the Pages artifact is missing the entry point or runtime.

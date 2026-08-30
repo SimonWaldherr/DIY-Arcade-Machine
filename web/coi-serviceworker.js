@@ -1,5 +1,5 @@
 /*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
-const DIY_ARCADE_CACHE = "diy-arcade-pwa-v1";
+const DIY_ARCADE_CACHE = "diy-arcade-pwa-v3";
 const DIY_ARCADE_CORE_ASSETS = [
     "./",
     "index.html",
@@ -71,21 +71,39 @@ if (typeof window === "undefined") {
         const requestUrl = new URL(request.url);
         const sameOrigin = requestUrl.origin === self.location.origin;
         const cacheable = sameOrigin && !request.headers.has("range");
+        const immutableRuntime = cacheable
+            && requestUrl.pathname.includes("/archives/")
+            && /\.(?:css|data|ico|js|ogg|png|wasm|whl)$/.test(requestUrl.pathname);
         const networkRequest = request.mode === "no-cors"
             ? new Request(request, { credentials: "omit" })
             : request;
 
+        const fetchAndCache = () => fetch(networkRequest)
+            .then((response) => {
+                const isolated = withIsolationHeaders(response.clone());
+                if (cacheable && response.ok) {
+                    caches.open(DIY_ARCADE_CACHE)
+                        .then((cache) => cache.put(request, isolated.clone()))
+                        .catch(() => undefined);
+                }
+                return isolated;
+            });
+
+        // Versioned pygbag runtime paths are immutable. Serving these large
+        // WASM/data files from Cache Storage avoids a network round-trip on
+        // every subsequent launch while navigations and app bundles still
+        // use network-first update semantics.
+        if (immutableRuntime) {
+            event.respondWith(
+                caches.match(request)
+                    .then((cached) => cached ? withIsolationHeaders(cached.clone()) : fetchAndCache())
+                    .catch(() => fetchAndCache())
+            );
+            return;
+        }
+
         event.respondWith(
-            fetch(networkRequest)
-                .then((response) => {
-                    const isolated = withIsolationHeaders(response.clone());
-                    if (cacheable && response.ok) {
-                        caches.open(DIY_ARCADE_CACHE)
-                            .then((cache) => cache.put(request, isolated.clone()))
-                            .catch(() => undefined);
-                    }
-                    return isolated;
-                })
+            fetchAndCache()
                 .catch(() => caches.match(request)
                     .then((cached) => {
                         if (cached) {

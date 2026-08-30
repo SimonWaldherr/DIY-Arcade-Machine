@@ -15,7 +15,7 @@ A complete mini arcade system that runs on **hardware, desktop, and in the brows
   - **MicroPython + HUB75 LED Matrix**: Runs on RP2040-based boards (Interstate 75)
   - **Desktop (CPython) + PyGame**: Full emulator for development and testing
   - **Browser (WebAssembly) + pygbag**: Play directly in any modern browser, no install needed
-- **50+ Built-in Games**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
+- **70+ Games Available by Default**: Classics, puzzle games, racers, shooters, reflex challenges, and compact original arcade games built for the 64×64 matrix
 - **Intro Screen**: Animated logo display on startup
 - **64×64 Display Layout**
   - 58-pixel playfield (rows 0-57)
@@ -212,6 +212,13 @@ For ease of use, a `Makefile` is provided with the following commands:
 
 - `make install`: Installs desktop dependencies (PyGame)
 - `make run`: Runs the PyGame emulator locally (`python main.py`)
+- `make arcade-bundle`: Rebuilds `arcade_app.py` from the modules in `arcade_src/`
+- `make test`: Rebuilds the bundle and runs the unit tests
+- `make check`: Verifies the committed bundle and runs the unit tests
+- `make targets-check`: Builds and smoke-tests desktop, MicroPython and both web targets
+- `make desktop-check`: Initializes PyGame and presents a headless frame
+- `make hardware-check`: Compiles `main.py` and `arcade_app.py` with `mpy-cross`
+- `make web-check`: Builds and validates the regular and iOS/touch web bundles
 - `make web-install`: Installs pygbag for browser/WebAssembly builds
 - `make web-build`: Builds the regular browser version into `build/web/`
 - `make web-ios-build`: Builds the fullscreen-oriented iOS version into `build/ios/`
@@ -224,11 +231,38 @@ For ease of use, a `Makefile` is provided with the following commands:
 - `make clean`: Cleans up previous build artifacts and pycache
 - `make clean-all`: Cleans up all files and the python virtual environment
 
+### Modular source workflow
+
+The editable application source lives in [`arcade_src/`](./arcade_src/). Its
+ordered fragments share one namespace and are concatenated into
+`arcade_app.py`. This preserves the single-module deployment model and low
+runtime overhead required by MicroPython while keeping development work split
+into manageable files.
+
+After changing a fragment, run `make arcade-bundle` and commit both the source
+fragment and the regenerated `arcade_app.py`. `make check` detects a stale
+bundle.
+
+### Target support and validation
+
+| Target | Runtime and input | Validation |
+|--------|-------------------|------------|
+| HUB75 console | MicroPython, Interstate 75, Nunchuk/I2C controller | `make hardware-check`, then a physical-device smoke test before release |
+| Desktop | CPython, pygame-ce, keyboard | `make desktop-check` |
+| Browser | pygbag/WebAssembly, keyboard and optional touch | `make web-check` plus a browser canvas smoke test |
+| iOS/touch browser | pygbag/WebAssembly, on-screen D-pad, action buttons and gestures | Included in `make web-check`; published below `/ios/` |
+
+`make targets-check` runs every automated check. The HUB75 check proves that
+both deployable modules compile to MicroPython bytecode; display timing,
+brightness, I2C wiring and controller behavior still require the physical
+console because those properties cannot be reproduced faithfully on a host.
+
 ---
 
 ## Content Selection
 
-The configuration block at the very top of [`arcade_app.py`](./arcade_app.py)
+The configuration block at the top of
+[`arcade_src/00_runtime.py`](./arcade_src/00_runtime.py)
 can hide content for a smaller or curated build. Add menu IDs to
 `CONFIG_DISABLED_GAMES` and effect IDs to `CONFIG_DISABLED_DEMOS`; leave the
 lists empty to show everything. CPU game previews in DEMOS use `G:NAME`, for
@@ -243,9 +277,9 @@ CONFIG_DISABLED_DEMOS = ("MANDEL", "G:DOOMLT")
 
 ## Game List
 
-The arcade includes demo animations and over 50 games. Each game is documented in detail in the [Game Documentation](./docs/games/README.md) with gameplay notes and technical descriptions.
-
-Detailed per-game documentation is available in [docs/games](./docs/games/README.md).
+The default configuration offers more than 70 selectable games plus demo
+animations. The table below documents the complete built-in catalog; entries
+can be enabled or disabled through the content-selection settings above.
 
 | Game ID | Name | Description |
 |---------|------|-------------|
@@ -255,23 +289,33 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `ARENA` | Arena | Top-down wave survival with movement and shooting |
 | `ARTILL` | Artillery Simulator | Turn-based angle-and-power shell duel with wind and deforming terrain |
 | `ASTRD` | Asteroids | Rotate, thrust, shoot asteroids in space |
+| `BEAT` | Beat Grid | Tap matching directions as notes cross the beat line and build a combo |
 | `BEJWL` | Bejeweled | Match-3 gem swapping puzzle |
 | `BILLI` | Billiards | Pool/Snooker-style table game with cue aim, pockets, rails, and ball collisions |
+| `BLOBBY` | Blobby Volley | One-button beach volleyball against a compact CPU blob |
 | `BOMBER` | Bomber | Timed bombs, block clearing, and maze enemies |
 | `BRKOUT` | Breakout | Brick breaker with rainbow bricks and optional powerups |
+| `BUBBLE` | Bubble Bobble | Trap enemies in bubbles and touch them to pop them |
 | `BTLZON` | Battlezone | Atari-style vector tank combat with radar, rocks, projectile shots, and waves |
-| `CATCH` | Catch | Catch stars, avoid bombs, and keep the basket moving |
 | `CAVEFL` | Cave Flyer | Tunnel navigation (starts wide, narrows progressively) |
 | `CENTI` | Centipede | Atari-style segmented shooter with mushrooms and waves |
 | `CGOLG` | Conway's Game of Life Game | Competitive Life battle with directed gliders and spaceships |
 | `CITY` | City Chase | Top-down city driving with jobs, traffic, police heat, and drop-offs |
 | `CLIMB` | Climber | Platform-jumping tower climb with scrolling height |
+| `COLMNS` | Columns | Match falling columns of colored gems in horizontal, vertical, or diagonal lines |
+| `CONNECT` | Connect Four | Drop counters against a compact CPU opponent and make four in a row |
 | `DEFUSE` | Defuse | Cut colored wires in sequence before the timer expires |
+| `DEFEND` | Defender | Patrol a wrapping planet and rescue settlers from raiders |
 | `DIGDUG` | Dig Dug | Dig tunnels, collect gems, and pump burrowing enemies |
 | `DODGE` | Dodge | Avoid falling blocks, dash to dodge |
+| `DONKEY` | Donkey Kong | Climb girders, use ladders, and jump rolling barrels |
 | `DOOMLT` | Doom Lite | Target-aware raycaster FPS with textured walls, enemy archetypes, and Quad burst fire; also powers the WINMAZE demo renderer |
 | `FLAPPY` | Flappy Bird | Navigate through moving pipe gaps |
+| `FLOOD` | Flood | Recolor the connected corner region to clear the seven-by-seven board |
+| `FIGHT` | Street Fighters | Footwork and timing duel against an aggressive CPU fighter |
 | `FROGGR` | Frogger | Hop across traffic lanes and advance through harder levels |
+| `GALAGA` | Galaga | Formation shooter with diving enemy attacks |
+| `GALAXY` | Galaxy | Capture planets by sending fleets across a compact star map |
 | `GOLF` | Golf | Tiny minigolf courses with aim, power, bounces, and obstacles |
 | `INVADR` | Invaders | Shoot marching alien waves, protect shields, hit saucers |
 | `JOUST` | Joust | Flap between platforms and defeat riders from above |
@@ -281,13 +325,21 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `LASER` | Laser | Mirror-rotation puzzle: guide the beam into the target |
 | `LIGHTS` | Lights Out | Toggle a light and its neighbors to clear the five-by-five grid |
 | `LOCO` | LocoMotion | Rotating railway puzzle with train routing |
+| `LOOP` | Time Loop | Record movement loops whose ghosts hold switches for the next run |
 | `MAZE` | Maze Explorer | Fog-of-war maze with gems, enemies, shooting |
+| `MARBLE` | Marble Madness | Accelerate a marble through walls, holes, and a finish gate |
 | `MINES` | Mines | Minesweeper-style reveal puzzle for the LED matrix |
+| `MOON` | Moon Patrol | Armed lunar rover with jumps, craters, and airborne hazards |
+| `ORBIT` | Orbit | Absorb smaller blobs, avoid larger ones, and navigate gravity wells |
+| `ORBTAL` | Orbital | Bounce shots through numbered circles until they burst |
 | `PACMAN` | Pac-Man | Collect pellets, avoid ghosts, power pellets |
 | `PAIRS` | Pairs | Memory card matching on a 4x4 board |
+| `PAPER` | Paperboy | Cycle through hazards and throw papers into marked mailboxes |
+| `PEGGLE` | Peggle | Aim a bouncing ball and clear orange pegs with limited shots |
 | `PICROS` | Picross | Solve five-by-five picture logic puzzles from row and column clues |
 | `PINBAL` | Pinball | Plunger launch, flippers, bumpers, targets, and multipliers |
 | `PITFAL` | Pitfall Runner | Endless runner with snakes, pits, treasures (safe start zone) |
+| `POLAR` | Magnetron | Switch polarity and steer charged particles into matching collectors |
 | `PONG` | Pong | Paddle vs. CPU or optional 2-player paddle duel |
 | `QIX` | Qix | Territory capture, avoid the enemy |
 | `RACING` | Top-Down Racing | Overhead circuit racer with curved road, boost, laps, and traffic |
@@ -297,18 +349,24 @@ Detailed per-game documentation is available in [docs/games](./docs/games/README
 | `RTYPE` | R-Type Shooter | Side-scrolling endless shooter |
 | `SABOTR` | Saboteur Stealth | Sneak through multiple patrol maps and reach the objective |
 | `SIMON` | Simon Says | Memory sequence game with colored quadrants |
+| `SIGNAL` | Signal Control | Switch traffic lights and keep a busy intersection collision-free |
 | `SLALOM` | Slalom | Carve through downhill gates; tuck for more speed and double points |
-| `SKYWAR` | Sky War | Helicopter battlefield shooter with air and ground targets |
 | `SNAKE` | Snake | Classic snake with red/green targets, wraparound |
 | `SOCCER` | Championship Soccer | Atari-style soccer with direction-based passes and shots |
+| `SONAR` | Sonar Ruins | Explore a dark maze with limited sonar pulses, recover beacons, and find the exit |
 | `SOKO` | Sokoban | Multi-level crate-pushing puzzle campaign |
 | `STACK` | Stacker | Timing game: trim and stack moving blocks |
+| `STKARC` | Stick Archer | Archery duel with charged shots, wind, and simple arrow physics |
+| `TAPPER` | Tapper | Serve four bar lanes and catch every returning mug |
+| `TEMPEST` | Tempest | Circle a wireframe tunnel and shoot enemies before the rim |
 | `TETRIS` | Tetris | Falling blocks with line clearing |
+| `TILT` | Tilt | Slide across ice, collect every crystal, and reset with Z if you get stuck |
 | `TRON` | Tron Lightcycle | Leave a trail, steer 90° turns, dodge CPU or optional second player |
 | `TWRDEF` | Tower Defense | Build towers across rotating road and open-field layouts |
 | `UFODEF` | UFO Defense | Missile Command-style defense with turret/base and wave/time settings |
-| `WINGS` | Wings | Carrier strike game with fuel, ammo, targets, and landing |
+| `WIRES` | Wires | Rotate cable tiles to power one fully connected circuit |
 | `WORMS` | Worms Mini | Turn-based team artillery with destructible terrain and CPU/2-player settings |
+| `ZAXXON` | Zaxxon | Isometric fortress flight through moving energy gates |
 
 Each game tracks high scores with optional initials entry.
 
@@ -378,9 +436,9 @@ high-score view, and return-to-menu actions.
 
 ## Architecture
 
-Developer notes are documented in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
-Per-game gameplay and implementation notes are documented in
-[docs/games/README.md](./docs/games/README.md).
+The modular source workflow is documented in
+[`arcade_src/README.md`](./arcade_src/README.md). Per-game descriptions are
+listed in the game table above.
 
 The short version:
 

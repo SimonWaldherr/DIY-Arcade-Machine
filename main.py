@@ -20,9 +20,15 @@ try:
 except ImportError:
     _importlib_util = None
 
-os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-if getattr(sys, "platform", "") == "emscripten":
-    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+# Embedded MicroPython ports do not necessarily expose ``os.environ``.
+# Environment hints only matter to the CPython/PyGame runtimes, so keep the
+# tiny hardware bootstrap independent of that optional API.
+try:
+    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    if getattr(sys, "platform", "") == "emscripten":
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+except (AttributeError, OSError):
+    pass
 
 
 def _logo_candidates():
