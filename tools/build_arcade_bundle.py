@@ -21,6 +21,7 @@ MANIFEST = (
     "60_games_extended.py",
     "70_games_classics.py",
     "80_games_original.py",
+    "85_games_adventure.py",
     "90_menus_and_main.py",
 )
 GENERATED_HEADER = (

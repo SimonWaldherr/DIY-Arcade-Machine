@@ -921,6 +921,38 @@ class SabotrGame(FrameLoopGame):
             "#.............##",
             "################",
         ),
+        (
+            '################',
+            '#P.............#',
+            '#..#..#..#..#..#',
+            '#.....#.....#..#',
+            '#.....#.....#..#',
+            '#..#..#..#..#..#',
+            '#..#.G#..#..#..#',
+            '#..#..#..#..#..#',
+            '#..#..#..#.G#..#',
+            '#..#..#..#..#..#',
+            '#..#.....#.....#',
+            '#..#.....#.....#',
+            '#.............T#',
+            '################',
+        ),
+        (
+            '################',
+            '#P.............#',
+            '#..#..#..#..#..#',
+            '#..#.....#.....#',
+            '#..#.....#.....#',
+            '#..#..#..#..#..#',
+            '#..#.G#..#..#..#',
+            '#..#..#..#..#..#',
+            '#..#..#..#.G#..#',
+            '#..#..#..#..#..#',
+            '#.....#.....#..#',
+            '#.....#.....#..#',
+            '#.............T#',
+            '################',
+        ),
     )
     DIRS = {
         JOYSTICK_UP: (0, -1),
@@ -1488,6 +1520,8 @@ class TowerDefenseGame(FrameLoopGame):
         ("PATH", ((0, 3), (1, 3), (1, 1), (4, 1), (4, 5), (6, 5), (6, 2), (7, 2))),
         ("PATH", ((0, 6), (3, 6), (3, 4), (1, 4), (1, 2), (5, 2), (5, 0), (7, 0))),
         ("OPEN", None),
+        ('PATH', ((0, 0), (6, 0), (6, 2), (1, 2), (1, 4), (5, 4), (5, 6), (7, 6))),
+        ('PATH', ((0, 6), (0, 1), (2, 1), (2, 5), (4, 5), (4, 2), (7, 2))),
     )
     TOWER_COST = (0, 12, 18, 28, 42)
     TOWER_RANGE = (0, 18, 22, 26, 30)
@@ -2014,7 +2048,8 @@ class DigDugGame(FrameLoopGame):
     GRID_H = 7
     CELL = 8
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.reset()
 
     def reset(self):
@@ -2035,6 +2070,14 @@ class DigDugGame(FrameLoopGame):
         for x in range(1, self.GRID_W - 1):
             if x % 2 == 0:
                 self.dirt[self.py][x] = False
+        if self.map_index == 1:
+            for y in range(self.GRID_H):
+                self.dirt[y][2] = False
+                self.dirt[y][5] = False
+        elif self.map_index == 2:
+            for y in (2, 4):
+                for x in range(self.GRID_W):
+                    self.dirt[y][x] = False
         self.gems = []
         while len(self.gems) < min(7, 3 + self.level):
             x = random.randint(0, self.GRID_W - 1)
@@ -4293,6 +4336,8 @@ class PicrossGame(GridCursorGame):
             ("111", "5", "3", "1", "1"),
             ("2", "2", "5", "2", "2"),
         ),
+        (('00100', '01110', '11111', '00100', '01110'), ('1', '3', '5', '1', '3'), ('1', '21', '5', '21', '1')),
+        (('01110', '11011', '10001', '11011', '01110'), ('3', '22', '11', '22', '3'), ('3', '22', '11', '22', '3')),
     )
 
     def __init__(self):
@@ -4685,6 +4730,7 @@ class FloodGame(FrameLoopGame):
         self.grid = [random.randint(0, len(self.PALETTE) - 1) for _ in range(self.GRID_W * self.GRID_H)]
         while all(color == self.grid[0] for color in self.grid):
             self.grid = [random.randint(0, len(self.PALETTE) - 1) for _ in range(self.GRID_W * self.GRID_H)]
+        self._pending = bytearray(self.GRID_W * self.GRID_H)
         self.selected_color = (self.grid[0] + 1) % len(self.PALETTE)
         self.moves = 0
         self.last_move = ticks_ms()
@@ -4697,11 +4743,14 @@ class FloodGame(FrameLoopGame):
         old_color = self.grid[0]
         if color == old_color:
             return 0
-        pending = [0]
+        pending = self._pending
+        pending[0] = 0
+        count = 1
         changed = 0
         self.grid[0] = color
-        while pending:
-            index = pending.pop()
+        while count:
+            count -= 1
+            index = pending[count]
             changed += 1
             x, y = index % self.GRID_W, index // self.GRID_W
             for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
@@ -4710,7 +4759,8 @@ class FloodGame(FrameLoopGame):
                     neighbor = self._index(nx, ny)
                     if self.grid[neighbor] == old_color:
                         self.grid[neighbor] = color
-                        pending.append(neighbor)
+                        pending[count] = neighbor
+                        count += 1
         return changed
 
     def _is_solved(self):
@@ -4808,7 +4858,11 @@ class WiresGame(GridCursorGame):
         LEFT,
     )
 
-    def __init__(self):
+    SOLUTIONS = (SOLUTION, (6, 10, 10, 10, 8, 7, 10, 10, 10, 8, 7, 10, 10, 10, 8, 7, 10, 10, 10, 8, 3, 10, 10, 10, 8), (6, 14, 14, 14, 12, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 1, 1, 1))
+
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % len(self.SOLUTIONS)
+        self.SOLUTION = self.SOLUTIONS[self.map_index]
         self.reset()
 
     def reset(self):
@@ -4961,8 +5015,14 @@ class TiltGame(GridCursorGame):
         "#*....#",
         "#######",
     )
+    MAPS = (LEVEL,
+        ('#######', '#P.*..#', '#.#.#.#', '#*...*#', '#.#.#.#', '#..*..#', '#######'),
+        ('#######', '#P...*#', '#.#.#.#', '#*.*..#', '###.#.#', '#*....#', '#######'),
+    )
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % len(self.MAPS)
+        self.LEVEL = self.MAPS[self.map_index]
         self.reset()
 
     def reset(self):
@@ -5189,8 +5249,14 @@ class SonarGame(FrameLoopGame):
         "#C....#E#",
         "#########",
     )
+    MAPS = (LEVEL,
+        ('#########', '#P....C.#', '#.###.#.#', '#C..#...#', '#.#.#.#.#', '#...C.#E#', '#########'),
+        ('#########', '#P#...C.#', '#.#.#.#.#', '#...#...#', '#C###.#.#', '#.....CE#', '#########'),
+    )
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % len(self.MAPS)
+        self.LEVEL = self.MAPS[self.map_index]
         self.reset()
 
     def reset(self):

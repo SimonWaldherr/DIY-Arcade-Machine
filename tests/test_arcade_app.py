@@ -62,6 +62,7 @@ class ArcadeGameTests(unittest.TestCase):
             "60_games_extended.py",
             "70_games_classics.py",
             "80_games_original.py",
+            "85_games_adventure.py",
             "90_menus_and_main.py",
         )
         header = (
@@ -172,6 +173,75 @@ class ArcadeGameTests(unittest.TestCase):
 
             self.assertTrue(step())
 
+    def test_slide_shuffles_are_unsolved_and_solvable(self):
+        for unused in range(50):
+            game = app.SlideGame()
+            self.assertFalse(game._is_solved())
+            self.assertEqual(sorted(game.tiles), list(range(9)))
+            values = [tile for tile in game.tiles if tile]
+            inversions = sum(values[i] > values[j]
+                             for i in range(8) for j in range(i + 1, 8))
+            self.assertEqual(inversions % 2, 0)
+            self.assertEqual(game.tiles[game.blank], 0)
+            self.assertEqual(game.moves, 0)
+
+    def test_slide_edges_and_winning_move(self):
+        game = app.SlideGame()
+        game.tiles = bytearray((1, 2, 3, 4, 5, 6, 7, 0, 8))
+        game.blank = 7
+        game.moves = 0
+        self.assertFalse(game._move(0, 1))
+        self.assertFalse(game._move(0, 0))
+        self.assertEqual(game.moves, 0)
+        self.assertTrue(game._move(1, 0))
+        self.assertTrue(game._is_solved())
+        self.assertEqual(game.moves, 1)
+
+    def test_catch_rewards_gems_and_penalizes_bombs_and_misses(self):
+        game = app.CatchGame()
+        drops = game.drops
+        game.drops.append([2, 48.9, False])
+        self.assertTrue(game._advance())
+        self.assertEqual((game.score, game.lives), (10, 3))
+        for lane, bomb, lives in ((1, True, 3), (1, False, 2), (2, True, 1)):
+            game.drops.append([lane, 48.9, bomb])
+            self.assertTrue(game._advance())
+            self.assertEqual(game.lives, lives)
+        game.drops.append([2, 48.9, True])
+        self.assertFalse(game._advance())
+        self.assertEqual(game.lives, 0)
+        self.assertIs(game.drops, drops)
+
+    def test_added_games_play_exit_and_register(self):
+        for name, kind in (("CATCH", app.CatchGame), ("SLIDE", app.SlideGame)):
+            self.assertIn((name, kind, 0), app.GameSelect.GAME_REGISTRY)
+            joystick = _JoystickStub()
+            step = kind()._build_step(joystick)
+            self.assertTrue(step())
+            joystick.buttons = (True, False)
+            self.assertFalse(step())
+
+    def test_slide_idle_frame_does_not_repaint_board(self):
+        display = _CountingDisplay()
+        app.display = display
+        game = app.SlideGame()
+        game._draw()
+        first = display.pixel_writes
+        display.pixel_writes = 0
+        game._draw()
+        self.assertLess(display.pixel_writes, first // 3)
+
+    def test_flood_reuses_bounded_storage_and_fills_entire_board(self):
+        game = app.FloodGame()
+        pending = game._pending
+        game.grid = [0] * 49
+        self.assertEqual(game._flood(1), 49)
+        self.assertTrue(game._is_solved())
+        self.assertEqual(game._flood(1), 0)
+        self.assertEqual(game._flood(2), 49)
+        self.assertIs(game._pending, pending)
+        self.assertEqual(len(pending), 49)
+
     def test_polarity_changes_force_and_particles_reach_collectors(self):
         game = app.PolarGame()
         game.magnet_x = 30.0
@@ -198,7 +268,7 @@ class ArcadeGameTests(unittest.TestCase):
         self.assertEqual((game.player_x, game.player_y), game.start)
         self.assertEqual(len(game.ghost_paths), 1)
 
-        game.ghost_paths = [((1, 1), (6, 5))]
+        game.ghost_paths = [((1, 1), game.pads[1])]
         game.step_index = 1
         game.player_x, game.player_y = (1, 3)
         self.assertTrue(game._pads_active())

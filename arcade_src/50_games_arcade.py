@@ -1373,7 +1373,8 @@ class GolfGame(FrameLoopGame):
 
     FRAME_MS = 36
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.reset()
 
     def reset(self):
@@ -1383,7 +1384,7 @@ class GolfGame(FrameLoopGame):
 
     def _new_hole(self):
         # Ball starts near bottom-left tee, hole at randomised position
-        seed = self.hole * 31
+        seed = self.hole * 31 + self.map_index * 17
         self.ball_x = float(5 + (seed % 4))
         self.ball_y = float(PLAY_HEIGHT - 8 - (seed % 6))
         self.vx = 0.0
@@ -1596,7 +1597,8 @@ class LaserGame(FrameLoopGame):
     GRID_H = 7
     CELL = 7
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.reset()
 
     def reset(self):
@@ -1624,6 +1626,10 @@ class LaserGame(FrameLoopGame):
         step = (self.GRID_W - 2) // (n_kinks + 1)
         kink_xs = [min(1 + (i + 1) * step, self.GRID_W - 2) for i in range(n_kinks)]
 
+        if self.map_index == 1:
+            kink_xs = (1, 3, 5)[:n_kinks]
+        elif self.map_index == 2:
+            kink_xs = (2, 4, 6)[:n_kinks]
         cur_y = random.randint(0, self.GRID_H - 1)
         self.start_y = cur_y
         prev_x = 0
@@ -2046,7 +2052,8 @@ class BomberGame(FrameLoopGame):
     GRID_H = 8
     CELL = 7
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.reset()
 
     def reset(self):
@@ -2055,6 +2062,13 @@ class BomberGame(FrameLoopGame):
         self.last_move = ticks_ms()
         self.last_z = False
         self._new_level()
+
+    def _fixed_block(self, x, y):
+        if self.map_index == 1:
+            return x in (2, 5) and y in (2, 3, 5, 6)
+        if self.map_index == 2:
+            return y in (2, 5) and x in (2, 3, 5, 6)
+        return x % 2 == 1 and y % 2 == 1
 
     def _new_level(self):
         self.px = 0
@@ -2066,7 +2080,7 @@ class BomberGame(FrameLoopGame):
         ]
         for y in range(self.GRID_H):
             for x in range(self.GRID_W):
-                fixed = x % 2 == 1 and y % 2 == 1
+                fixed = self._fixed_block(x, y)
                 loose = (x > 1 or y > 1) and random.randint(0, 4) == 0
                 self.blocks[y][x] = fixed or loose
         self.blocks[0][0] = False
@@ -2139,7 +2153,7 @@ class BomberGame(FrameLoopGame):
         until = ticks_ms() + 360
         for x, y in cells:
             self.blasts.append([x, y, until])
-            if self.blocks[y][x] and not (x % 2 == 1 and y % 2 == 1):
+            if self.blocks[y][x] and not self._fixed_block(x, y):
                 self.blocks[y][x] = False
                 self.score += 1
         survivors = []
@@ -2199,7 +2213,7 @@ class BomberGame(FrameLoopGame):
                 px = ox + x * self.CELL
                 py = oy + y * self.CELL
                 if self.blocks[y][x]:
-                    fixed = x % 2 == 1 and y % 2 == 1
+                    fixed = self._fixed_block(x, y)
                     col = (70, 70, 90) if fixed else (110, 70, 20)
                     draw_rectangle(px, py, px + 5, py + 5, *col)
         for x, y, _until in self.blasts:

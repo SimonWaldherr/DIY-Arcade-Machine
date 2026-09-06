@@ -2416,6 +2416,20 @@ class GameSettings:
     # The selector uses this declarative data to draw settings screens; games read
     # the stored values from the context passed by GameSelect._make_game_instance().
     DEFINITIONS = {
+        "ARTILL": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "MARBLE": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "DONKEY": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "PEGGLE": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "TILT": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "SONAR": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "LOOP": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "WIRES": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "MAZE": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "BOMBER": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "GOLF": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "LASER": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "RAYRCR": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
+        "DIGDUG": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
         "DEMOS": (
             (
                 "slide_ms",
@@ -2444,6 +2458,7 @@ class GameSettings:
             ("multi_shot", "MULTI", ((False, "OFF"), (True, "ON")), 0),
         ),
         "RACING": (
+            ("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),
             ("laps", "LAPS", ((2, "2"), (3, "3"), (5, "5")), 1),
             ("traffic", "TRAF", ((True, "ON"), (False, "OFF")), 0),
         ),
@@ -2455,7 +2470,7 @@ class GameSettings:
             ("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),
             ("goals", "GOALS", ((3, "3"), (5, "5"), (7, "7")), 1),
         ),
-        "BRKOUT": (("powerups", "POWER", ((False, "OFF"), (True, "ON")), 0),),
+        "BRKOUT": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0), ("powerups", "POWER", ((False, "OFF"), (True, "ON")), 0),),
         "BTLZON": (
             (
                 "difficulty",
@@ -2466,6 +2481,7 @@ class GameSettings:
             ("obstacles", "ROCKS", ((False, "OFF"), (True, "ON")), 1),
         ),
         "CITY": (
+            ("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),
             ("jobs", "JOBS", ((3, "3"), (5, "5")), 0),
             ("traffic", "TRAF", ((True, "ON"), (False, "OFF")), 0),
         ),
@@ -2477,6 +2493,7 @@ class GameSettings:
         "PONG": (("players", "PLAYR", (("cpu", "1P"), ("two", "2P")), 0),),
         "TRON": (("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),),
         "WORMS": (
+            ("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),
             ("players", "PLAYR", (("cpu", "CPU"), ("two", "2P")), 0),
             ("worms", "TEAM", ((2, "2"), (3, "3")), 0),
         ),

@@ -1148,6 +1148,7 @@ class BreakoutGame:
     """
 
     def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.powerups_enabled = bool(get_context_setting(ctx, "powerups", False))
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_y = PLAY_HEIGHT - PADDLE_HEIGHT
@@ -1166,6 +1167,10 @@ class BreakoutGame:
         bricks = []
         for row in range(BRICK_ROWS):
             for col in range(BRICK_COLS):
+                if self.map_index == 1 and (row + col) % 2:
+                    continue
+                if self.map_index == 2 and abs(col - 3.5) > row + 0.5:
+                    continue
                 x = col * (BRICK_WIDTH + 1) + 1
                 y = row * (BRICK_HEIGHT + 1)
                 bricks.append((x, y))
@@ -2169,7 +2174,9 @@ class MazeGame:
     MazeWaySize = 3
     BORDER = 2
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
+        self.MazeWaySize = (3, 4, 5)[self.map_index]
         self.projectiles = []
         self.gems = []
         self.enemies = []

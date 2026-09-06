@@ -22,6 +22,8 @@ class LunarLanderGame:
         (7, 8, 35, (39, 42, 45, 40, 37), 630, 0.130, 0.32),
         (49, 7, 33, (50, 45, 39, 35, 34), 610, 0.136, 0.33),
         (27, 7, 31, (44, 40, 36, 32, 38), 590, 0.142, 0.33),
+        (12, 9, 42, (48, 44, 47, 38, 45), 720, 0.12, 0.32),
+        (42, 8, 38, (43, 50, 45, 39, 46), 700, 0.125, 0.33),
     )
 
     @classmethod
@@ -1632,8 +1634,46 @@ class DoomLiteGame:
             b"#..##########..#",
             b"################",
         ),
+        (
+            b'################',
+            b'#....K.........#',
+            b'#..#..#..#..#..#',
+            b'#.....#.....#..#',
+            b'#.....#.....#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#.D#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#.Q#.....#.....#',
+            b'#..#.....#...X.#',
+            b'#..............#',
+            b'################',
+        ),
+        (
+            b'################',
+            b'#....K.........#',
+            b'#..#..#..#..#..#',
+            b'#..#.....#.....#',
+            b'#..#.....#.....#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#.D#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#..#..#..#..#..#',
+            b'#.Q...#.....#..#',
+            b'#.....#.....#X.#',
+            b'#..............#',
+            b'################',
+        ),
     )
     STARTS = ((2.5, 2.5), (1.5, 1.5), (2.5, 13.5), (1.5, 7.5), (1.5, 1.5), (1.5, 13.5))
+
+    STARTS += ((1.5, 1.5), (1.5, 1.5))
 
     # Raycaster Parameter
     ANGLE_MAX = 256  # 0..255 entspricht 0..360°
@@ -2170,7 +2210,7 @@ class DoomLiteGame:
                 or map_y < 0
                 or map_y >= MAP_H
                 or MAP[map_y][map_x] == 35
-                or (map_x, map_y) in closed_doors
+                or (closed_doors and (map_x, map_y) in closed_doors)
             ):
                 if side == 0:
                     dist = side_x - delta_x
@@ -2549,6 +2589,9 @@ class DoomLiteGame:
         # On MicroPython each 'self.X' lookup costs a dictionary probe;
         # reading a local is a single LOAD_FAST bytecode.
         sp = display.set_pixel
+        # Native fills avoid thousands of Python pixel calls on PyGame/Web.
+        # Buffered HUB75 output must retain its dirty-pixel bookkeeping.
+        fill = None if USE_BUFFERED_DISPLAY else getattr(display, "fill_rect", None)
         PLAY_H = self.PLAY_H
         zbuf = self.zbuf
         COS = self._COS
@@ -2690,10 +2733,14 @@ class DoomLiteGame:
 
             # Inline single-column draw (avoids draw_rectangle call overhead).
             # Draw sky, wall, and floor in order!
-            for y in range(skip_top, start):
-                sp(x, y, sky_r, sky_g, sky_b)
-                if draw_pair:
-                    sp(x2, y, sky_r, sky_g, sky_b)
+            if fill is not None:
+                if skip_top < start:
+                    fill(x, skip_top, x2, start - 1, sky_r, sky_g, sky_b)
+            else:
+                for y in range(skip_top, start):
+                    sp(x, y, sky_r, sky_g, sky_b)
+                    if draw_pair:
+                        sp(x2, y, sky_r, sky_g, sky_b)
 
             wall_start = start if start > skip_top else skip_top
             for y in range(wall_start, end + 1):
@@ -2717,10 +2764,14 @@ class DoomLiteGame:
             floor_start = end + 1
             if floor_start < skip_top:
                 floor_start = skip_top
-            for y in range(floor_start, PLAY_H):
-                sp(x, y, fl_r, fl_g, fl_b)
-                if draw_pair:
-                    sp(x2, y, fl_r, fl_g, fl_b)
+            if fill is not None:
+                if floor_start < PLAY_H:
+                    fill(x, floor_start, x2, PLAY_H - 1, fl_r, fl_g, fl_b)
+            else:
+                for y in range(floor_start, PLAY_H):
+                    sp(x, y, fl_r, fl_g, fl_b)
+                    if draw_pair:
+                        sp(x2, y, fl_r, fl_g, fl_b)
 
         # sprites (enemies) als billboards
         # sortiert nach Entfernung (weit -> nah)
@@ -3058,6 +3109,8 @@ class CityChaseGame(FrameLoopGame):
     MAX_SPEED = 2.45
 
     def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
+        self.BLOCK, self.ROAD_W = ((32, 10), (64, 12), (32, 7))[self.map_index]
         self.target_jobs = int(get_context_setting(ctx, "jobs", 3) or 3)
         self.traffic_enabled = bool(get_context_setting(ctx, "traffic", True))
         self.reset()
@@ -3462,6 +3515,7 @@ class TopDownRacerGame(FrameLoopGame):
     LAP_LEN = 760.0
 
     def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.target_laps = int(get_context_setting(ctx, "laps", 3) or 3)
         self.traffic_enabled = bool(get_context_setting(ctx, "traffic", True))
         self.reset()
@@ -3482,6 +3536,10 @@ class TopDownRacerGame(FrameLoopGame):
         self._spawn_until(self.world_y + 190.0)
 
     def _track_center(self, z):
+        if self.map_index == 1:
+            return WIDTH // 2 + math.sin(z * 0.016) * 15.0 + math.sin(z * 0.040) * 3.0
+        if self.map_index == 2:
+            return WIDTH // 2 + math.sin(z * 0.038) * 10.0 + math.sin(z * 0.019) * 6.0
         return WIDTH // 2 + math.sin(z * 0.028) * 12.0 + math.sin(z * 0.010 + 1.8) * 7.0
 
     def _sample_world_for_row(self, row):
@@ -3721,7 +3779,8 @@ class RayRacerGame:
     BOOST_MAX_SPEED = 3.10
     CRUISE_SPEED = NORMAL_MAX_SPEED * 0.5
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.row_depth = [0.0] * self.PLAY_H
         self.row_center = [WIDTH // 2] * self.PLAY_H
         self.row_half = [0] * self.PLAY_H
@@ -3755,6 +3814,10 @@ class RayRacerGame:
             self.row_depth[y] = depth
 
     def _track_curve(self, z):
+        if self.map_index == 1:
+            return math.sin(z * 0.010) * 25.0 + math.sin(z * 0.022) * 9.0
+        if self.map_index == 2:
+            return math.sin(z * 0.025) * 16.0 + math.sin(z * 0.009 + 0.8) * 20.0
         # Three broad waves create readable F-Zero-like sweepers without maps.
         return (
             math.sin(z * 0.013) * 18.0

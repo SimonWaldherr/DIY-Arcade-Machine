@@ -8,7 +8,9 @@ class DonkeyGame(FrameLoopGame):
     LEVEL_Y = (50, 38, 26, 14)
     LADDERS = (50, 14, 47)
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
+        self.LADDERS = ((50, 14, 47), (42, 20, 50), (53, 10, 39))[self.map_index]
         self.reset()
 
     def reset(self):
@@ -817,7 +819,13 @@ class MarbleGame(FrameLoopGame):
     WALLS = ((18, 8, 22, 42), (39, 18, 43, 52), (24, 47, 38, 51))
     HOLES = ((31, 20), (51, 39))
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
+        self.WALLS, self.HOLES = (
+            (self.WALLS, self.HOLES),
+            (((17, 16, 21, 54), (36, 3, 40, 37)), ((28, 26), (49, 46))),
+            (((14, 26, 38, 30), (40, 12, 44, 43)), ((25, 42), (51, 22))),
+        )[self.map_index]
         self.reset()
 
     def reset(self):
@@ -979,19 +987,26 @@ class PeggleGame(FrameLoopGame):
     """Aim a bouncing ball, clear orange pegs, and conserve limited shots."""
 
     FRAME_MS = 30
+    AIM_SPEEDS = (-2.0, -1.4, -0.7, 0.0, 0.7, 1.4, 2.0)
     PEG_LAYOUT = (
         (11, 16, 0), (23, 13, 1), (35, 16, 0), (47, 13, 1),
         (17, 27, 1), (29, 25, 0), (41, 27, 0), (53, 25, 1),
         (10, 38, 0), (24, 40, 1), (38, 38, 0), (52, 40, 0),
     )
 
-    def __init__(self):
+    def __init__(self, ctx=None):
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
+        if self.map_index == 1:
+            self.PEG_LAYOUT = tuple((x, y, int((x + y) % 3 == 0)) for y in (16, 26, 36) for x in (12, 25, 38, 51))
+        elif self.map_index == 2:
+            self.PEG_LAYOUT = ((32, 14, 1), (23, 21, 0), (41, 21, 0), (14, 28, 1), (32, 28, 0), (50, 28, 1), (23, 35, 0), (41, 35, 0), (32, 42, 1))
         self.reset()
 
     def reset(self):
         self.pegs = [[x, y, orange, 1] for x, y, orange in self.PEG_LAYOUT]
-        self.aim = 0
+        self.aim = 3
         self.ball = None
+        self.ball_frames = 0
         self.shots = 8
         self.score = 0
         self.bucket_x = 24
@@ -1002,10 +1017,40 @@ class PeggleGame(FrameLoopGame):
     def _launch(self):
         if self.ball is not None or self.shots <= 0:
             return False
-        angle = (-1.1, -0.75, -0.4, 0.0, 0.4, 0.75, 1.1)[self.aim]
-        self.ball = [32.0, 5.0, angle, 1.2]
+        self.ball = [32.0, 5.0, self.AIM_SPEEDS[self.aim], 1.2]
+        self.ball_frames = 0
         self.shots -= 1
         return True
+
+    def _move_ball(self, ball):
+        # Four small steps keep even fast balls from skipping a peg.
+        ball[3] = min(4.0, ball[3] + 0.13 / 4)
+        ball[0] += ball[2] / 4
+        ball[1] += ball[3] / 4
+        if ball[0] < 2 or ball[0] > 61:
+            ball[2] = -ball[2]
+            ball[0] = clamp(ball[0], 2, 61)
+        if ball[1] < 2:
+            ball[1] = 2
+            ball[3] = abs(ball[3])
+
+    def _touching_peg(self, ball):
+        for peg in self.pegs:
+            if peg[3] and (ball[0] - peg[0]) ** 2 + (ball[1] - peg[1]) ** 2 <= 16:
+                return peg
+        return None
+
+    def _aim_points(self):
+        ball = [32.0, 5.0, self.AIM_SPEEDS[self.aim], 1.2]
+        points = []
+        for frame in range(18):
+            for _ in range(4):
+                self._move_ball(ball)
+                if self._touching_peg(ball) is not None or ball[1] >= 54:
+                    return points
+            if frame % 2 == 0:
+                points.append((int(ball[0]), int(ball[1])))
+        return points
 
     def _advance_ball(self):
         self.bucket_x += self.bucket_direction
@@ -1014,23 +1059,31 @@ class PeggleGame(FrameLoopGame):
         if self.ball is None:
             return
         ball = self.ball
-        ball[3] += 0.13
-        ball[0] += ball[2]
-        ball[1] += ball[3]
-        if ball[0] < 2 or ball[0] > 61:
-            ball[2] = -ball[2]
-            ball[0] = clamp(ball[0], 2, 61)
-        for peg in self.pegs:
-            if peg[3] and (ball[0] - peg[0]) ** 2 + (ball[1] - peg[1]) ** 2 < 18:
+        self.ball_frames += 1
+        for _ in range(4):
+            self._move_ball(ball)
+            peg = self._touching_peg(ball)
+            if peg is not None:
                 peg[3] = 0
-                ball[3] = -abs(ball[3]) * 0.8
-                ball[2] += (ball[0] - peg[0]) * 0.12
+                dx, dy = ball[0] - peg[0], ball[1] - peg[1]
+                distance = (dx * dx + dy * dy) ** 0.5
+                if distance < 0.001:
+                    dx, dy, distance = 0.0, -1.0, 1.0
+                nx, ny = dx / distance, dy / distance
+                inward_speed = ball[2] * nx + ball[3] * ny
+                if inward_speed < 0:
+                    ball[2] -= 1.8 * inward_speed * nx
+                    ball[3] -= 1.8 * inward_speed * ny
+                ball[0], ball[1] = peg[0] + nx * 4.1, peg[1] + ny * 4.1
                 self.score += 100 if peg[2] else 25
+            if ball[1] >= 54:
+                if self.bucket_x <= ball[0] <= self.bucket_x + 16:
+                    self.shots += 1
+                    self.score += 50
+                self.ball = None
                 break
-        if ball[1] > 54:
-            if self.bucket_x <= ball[0] <= self.bucket_x + 16:
-                self.shots += 1
-                self.score += 50
+        # Safety limit for an unusually long bounce sequence (15 seconds).
+        if self.ball_frames >= 500:
             self.ball = None
 
     def _orange_left(self):
@@ -1042,12 +1095,15 @@ class PeggleGame(FrameLoopGame):
             if active:
                 color = (255, 145, 45) if orange else (80, 170, 255)
                 draw_rectangle(x - 2, y - 2, x + 2, y + 2, *color)
-        aim_x = 32 + (-18, -12, -6, 0, 6, 12, 18)[self.aim]
-        draw_line(32, 4, aim_x, 13, 180, 180, 210)
+        if self.ball is None:
+            for x, y in self._aim_points():
+                display.set_pixel(x, y, 130, 140, 170)
+        draw_rectangle(30, 2, 34, 4, 180, 180, 210)
         if self.ball is not None:
             draw_rectangle(int(self.ball[0]) - 2, int(self.ball[1]) - 2, int(self.ball[0]) + 2, int(self.ball[1]) + 2, 255, 245, 170)
         draw_line(self.bucket_x, 55, self.bucket_x + 16, 55, 100, 240, 160)
         draw_text_small(1, 1, "B" + str(self.shots), 220, 230, 255)
+        draw_text_small(46, 1, "O" + str(self._orange_left()), 255, 145, 45)
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -1071,7 +1127,7 @@ class PeggleGame(FrameLoopGame):
                 self._launch()
             self.last_z = z_button
             self._advance_ball()
-            if not self._orange_left():
+            if not self._orange_left() and self.ball is None:
                 set_game_over_score(self.score + self.shots * 100, won=True)
                 return False
             if self.shots <= 0 and self.ball is None:
