@@ -500,6 +500,9 @@ class HarborAdventureGame(FrameLoopGame):
             self.dirty = False
         display_score_and_time(self.score)
 
+    def uses_secondary_action(self):
+        return bool(self.pages or self.choices or self.selected)
+
     def _build_step(self, joystick):
         begin_game(0)
         self.reset()

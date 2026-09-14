@@ -1,4 +1,4 @@
-class LunarLanderGame:
+class LunarLanderGame(FrameLoopGame):
     """
     LUNAR LANDER MINI
     Steuerung:
@@ -8,6 +8,7 @@ class LunarLanderGame:
     Ziel: weich & gerade auf dem grünen Pad landen.
     """
 
+    FRAME_MS = 35
     _STEP = 5
     _LUT = None
     # pad_x, pad_w, pad_y, terrain control points, fuel, gravity, thrust.
@@ -387,318 +388,108 @@ class LunarLanderGame:
         self._draw_v2_scene(thrust_on)
         return True
 
-    def _main_loop_v2(self, joystick):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self._reset_v2()
-        frame_ms = 35
-        last_frame = ticks_ms()
-        while not game_over:
-            if ticks_diff(ticks_ms(), last_frame) < frame_ms:
-                sleep_ms(2)
-                continue
-            last_frame = ticks_ms()
-            if not self._run_v2_frame(joystick):
-                return
-
-    async def _main_loop_v2_async(self, joystick):
-        if asyncio is None:
-            return self._main_loop_v2(joystick)
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self._reset_v2()
-        frame_ms = 35
-        last_frame = ticks_ms()
-        while not game_over:
-            if ticks_diff(ticks_ms(), last_frame) < frame_ms:
-                await asyncio.sleep(0.002)
-                continue
-            last_frame = ticks_ms()
-            if not self._run_v2_frame(joystick):
-                return
-
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
+        begin_game(0)
+        self._landing_phase = None
+        self._landing_until = 0
         if self.mode == "scroll":
-            return self._main_loop_v2(joystick)
-        global game_over, global_score
-        game_over = False
-        global_score = 0
+            self._reset_v2()
+        else:
+            self.reset()
 
-        self.reset()
+        def step():
+            if game_over:
+                return False
+            if self.mode == "scroll":
+                return self._run_v2_frame(joystick)
+            return self._run_classic_frame(joystick)
 
-        frame_ms = 35
-        last_frame = ticks_ms()
+        return step
 
-        while not game_over:
-            try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
+    def _run_classic_frame(self, joystick):
+        global global_score
+        c_button, z_button = joystick.read_buttons()
+        if c_button:
+            return False
+        now = ticks_ms()
 
-                now = ticks_ms()
-                if ticks_diff(now, last_frame) < frame_ms:
-                    sleep_ms(2)
-                    continue
-                last_frame = now
-                self.frame += 1
-
-                # time bonus counts down (faster landing = more points)
-                if ticks_diff(now, self.last_points_ms) >= 500:
-                    self.last_points_ms = now
-                    if self.points > 0:
-                        self.points -= 1
-
-                # input
-                d = joystick.read_direction(
-                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
-                )
-                if d == JOYSTICK_LEFT:
-                    self.angle = (self.angle + 5) % 360
-                elif d == JOYSTICK_RIGHT:
-                    self.angle = (self.angle - 5) % 360
-
-                thrust_on = (z_button or d == JOYSTICK_UP) and (self.fuel > 0)
-
-                ax = 0.0
-                ay = self.g
-                if thrust_on:
-                    c, s = self._cos_sin256(self.angle)
-                    ax += (c / 256.0) * self.thrust
-                    ay += (-s / 256.0) * self.thrust
-                    self.fuel -= 1
-
-                # physics
-                self.vx += ax
-                self.vy += ay
-
-                # clamp velocity
-                if self.vx > 2.2:
-                    self.vx = 2.2
-                if self.vx < -2.2:
-                    self.vx = -2.2
-                if self.vy > 3.0:
-                    self.vy = 3.0
-                if self.vy < -3.0:
-                    self.vy = -3.0
-
-                self.x += self.vx
-                self.y += self.vy
-
-                # bounds
-                if self.x < 0:
-                    self.x = 0
-                    self.vx = 0
-                elif self.x > WIDTH - 1:
-                    self.x = WIDTH - 1
-                    self.vx = 0
-
-                if self.y < 0:
-                    self.y = 0
-                    self.vy = 0
-
-                # landing/crash
-                ix = int(self.x)
-                gy = self.terrain[ix]
-                if self.y >= gy - 1:
-                    on_pad = self.pad_x <= ix <= (self.pad_x + self.pad_w - 1)
-                    soft = abs(self.vx) < 0.65 and abs(self.vy) < 1.2
-                    upright = self._angle_diff(self.angle, 90) <= 25
-
-                    if on_pad and soft and upright:
-                        # Successful landing: award points and advance level
-                        level_bonus = (
-                            self.points + int(self.fuel) + 200 + (self.level * 150)
-                        )
-                        self.total_score += level_bonus
-                        global_score = self.total_score
-
-                        display.clear()
-                        draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
-                        draw_text(2, 24, "DONE", 0, 255, 0)
-                        display_score_and_time(global_score)
-                        sleep_ms(1800)
-
-                        # Next level
-                        self.level += 1
-                        self.reset(keep_level=True)
-
-                        # Short preview of new terrain
-                        display.clear()
-                        self._draw_terrain()
-                        draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
-                        display_score_and_time(global_score)
-                        sleep_ms(1500)
-
-                        last_frame = ticks_ms()
-                        continue
-                    else:
-                        global_score = (
-                            self.total_score
-                            if hasattr(self, "total_score")
-                            else self.points
-                        )
-                        game_over = True
-                        return
-
-                # render
+        # Landings and terrain previews remain frames of the same session, so
+        # the shared pause menu can interrupt either without losing the level.
+        if self._landing_phase is not None:
+            if ticks_diff(now, self._landing_until) < 0:
+                return True
+            if self._landing_phase == "landed":
+                self.level += 1
+                self.reset(keep_level=True)
+                self._landing_phase = "preview"
+                self._landing_until = ticks_add(now, 1500)
                 display.clear()
                 self._draw_terrain()
-                self._draw_ship(thrust_on=thrust_on)
-                self._draw_fuel_bar()
-                display_score_and_time(self.points)
-                global_score = self.points
+                draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
+                display_score_and_time(global_score)
+                return True
+            self._landing_phase = None
+            self.last_points_ms = now
 
-                if self.frame % 45 == 0:
-                    gc.collect()
+        self.frame += 1
+        if ticks_diff(now, self.last_points_ms) >= 500:
+            self.last_points_ms = now
+            if self.points > 0:
+                self.points -= 1
 
-            except RestartProgram:
-                return
+        direction = joystick.read_direction(
+            [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
+        )
+        if direction == JOYSTICK_LEFT:
+            self.angle = (self.angle + 5) % 360
+        elif direction == JOYSTICK_RIGHT:
+            self.angle = (self.angle - 5) % 360
+        thrust_on = (z_button or direction == JOYSTICK_UP) and self.fuel > 0
+        ax = 0.0
+        ay = self.g
+        if thrust_on:
+            c, sine = self._cos_sin256(self.angle)
+            ax += (c / 256.0) * self.thrust
+            ay += (-sine / 256.0) * self.thrust
+            self.fuel -= 1
+        self.vx = clamp(self.vx + ax, -2.2, 2.2)
+        self.vy = clamp(self.vy + ay, -3.0, 3.0)
+        self.x += self.vx
+        self.y += self.vy
+        if self.x < 0:
+            self.x, self.vx = 0, 0
+        elif self.x > WIDTH - 1:
+            self.x, self.vx = WIDTH - 1, 0
+        if self.y < 0:
+            self.y, self.vy = 0, 0
 
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        if self.mode == "scroll":
-            return await self._main_loop_v2_async(joystick)
+        ix = int(self.x)
+        if self.y >= self.terrain[ix] - 1:
+            on_pad = self.pad_x <= ix < self.pad_x + self.pad_w
+            soft = abs(self.vx) < 0.65 and abs(self.vy) < 1.2
+            upright = self._angle_diff(self.angle, 90) <= 25
+            if not (on_pad and soft and upright):
+                set_game_over_score(self.total_score)
+                return False
+            self.total_score += self.points + int(self.fuel) + 200 + self.level * 150
+            global_score = self.total_score
+            self._landing_phase = "landed"
+            self._landing_until = ticks_add(now, 1800)
+            display.clear()
+            draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
+            draw_text(2, 24, "DONE", 0, 255, 0)
+            display_score_and_time(global_score)
+            return True
 
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-
-        frame_ms = 35
-        last_frame = ticks_ms()
-
-        while not game_over:
-            try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
-                now = ticks_ms()
-                if ticks_diff(now, last_frame) < frame_ms:
-                    await asyncio.sleep(0.002)
-                    continue
-                last_frame = now
-                self.frame += 1
-
-                # time bonus counts down (faster landing = more points)
-                if ticks_diff(now, self.last_points_ms) >= 500:
-                    self.last_points_ms = now
-                    if self.points > 0:
-                        self.points -= 1
-
-                # input
-                d = joystick.read_direction(
-                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
-                )
-                if d == JOYSTICK_LEFT:
-                    self.angle = (self.angle + 5) % 360
-                elif d == JOYSTICK_RIGHT:
-                    self.angle = (self.angle - 5) % 360
-
-                thrust_on = (z_button or d == JOYSTICK_UP) and (self.fuel > 0)
-
-                ax = 0.0
-                ay = self.g
-                if thrust_on:
-                    c, s = self._cos_sin256(self.angle)
-                    ax += (c / 256.0) * self.thrust
-                    ay += (-s / 256.0) * self.thrust
-                    self.fuel -= 1
-
-                # physics
-                self.vx += ax
-                self.vy += ay
-
-                # clamp velocity
-                if self.vx > 2.2:
-                    self.vx = 2.2
-                if self.vx < -2.2:
-                    self.vx = -2.2
-                if self.vy > 3.0:
-                    self.vy = 3.0
-                if self.vy < -3.0:
-                    self.vy = -3.0
-
-                self.x += self.vx
-                self.y += self.vy
-
-                # bounds
-                if self.x < 0:
-                    self.x = 0
-                    self.vx = 0
-                elif self.x > WIDTH - 1:
-                    self.x = WIDTH - 1
-                    self.vx = 0
-
-                if self.y < 0:
-                    self.y = 0
-                    self.vy = 0
-
-                # landing/crash
-                ix = int(self.x)
-                gy = self.terrain[ix]
-                if self.y >= gy - 1:
-                    on_pad = self.pad_x <= ix <= (self.pad_x + self.pad_w - 1)
-                    soft = abs(self.vx) < 0.65 and abs(self.vy) < 1.2
-                    upright = self._angle_diff(self.angle, 90) <= 25
-
-                    if on_pad and soft and upright:
-                        # Successful landing: award points and advance level
-                        level_bonus = (
-                            self.points + int(self.fuel) + 200 + (self.level * 150)
-                        )
-                        self.total_score += level_bonus
-                        global_score = self.total_score
-
-                        display.clear()
-                        draw_text(2, 12, "LVL" + str(self.level), 0, 255, 0)
-                        draw_text(2, 24, "DONE", 0, 255, 0)
-                        display_score_and_time(global_score)
-                        await asyncio.sleep(1.8)
-
-                        # Next level
-                        self.level += 1
-                        self.reset(keep_level=True)
-
-                        # Short preview of new terrain
-                        display.clear()
-                        self._draw_terrain()
-                        draw_text(2, 4, "LVL" + str(self.level), 255, 255, 0)
-                        display_score_and_time(global_score)
-                        await asyncio.sleep(1.5)
-
-                        last_frame = ticks_ms()
-                        continue
-                    else:
-                        global_score = (
-                            self.total_score
-                            if hasattr(self, "total_score")
-                            else self.points
-                        )
-                        game_over = True
-                        return
-
-                # render
-                display.clear()
-                self._draw_terrain()
-                self._draw_ship(thrust_on=thrust_on)
-                self._draw_fuel_bar()
-                display_score_and_time(self.points)
-                global_score = self.points
-
-                if self.frame % 45 == 0:
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-
-            except RestartProgram:
-                return
+        display.clear()
+        self._draw_terrain()
+        self._draw_ship(thrust_on=thrust_on)
+        self._draw_fuel_bar()
+        display_score_and_time(self.points)
+        global_score = self.points
+        if self.frame % 45 == 0:
+            gc.collect()
+        return True
 
 
 class KerbalGame(FrameLoopGame):
@@ -707,7 +498,7 @@ class KerbalGame(FrameLoopGame):
     Controls:
       - Left / Right: rotate rocket
       - Z or Up: thrust
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Arcade orbital flight: launch, circularize, optionally return and land.
     """
 
@@ -1018,7 +809,7 @@ class KerbalGame(FrameLoopGame):
         return step
 
 
-class UFODefenseGame:
+class UFODefenseGame(FrameLoopGame):
     """
     UFO DEFENSE / Missile Command Mini
     Steuerung:
@@ -1400,99 +1191,37 @@ class UFODefenseGame:
 
         display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
+    def _build_step(self, joystick):
+        begin_game(0)
         self.reset()
 
-        frame_ms = 35
-        last_frame = ticks_ms()
-
-        while not game_over:
-            try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
-                now = ticks_ms()
-
-                self._move_crosshair(joystick, now)
-
-                # shoot
-                if self.shot_cd > 0:
-                    self.shot_cd -= 1
-                if z_button and self.shot_cd == 0 and len(self.player_missiles) < 4:
-                    self._fire_player()
-                    self.shot_cd = 8
-
-                self._advance_spawning(now)
-
-                # frame pacing
-                if ticks_diff(now, last_frame) < frame_ms:
-                    sleep_ms(2)
-                    continue
-                last_frame = now
-                self.frame += 1
-
-                self._update_missiles()
-                if game_over:
-                    global_score = self.score
-                    return
-
-                self._update_explosions_and_hits()
-                self._draw_world()
+        def step():
+            global global_score
+            c_button, z_button = joystick.read_buttons()
+            if c_button or game_over:
+                return False
+            now = ticks_ms()
+            self._move_crosshair(joystick, now)
+            # Cooldowns advance with simulation frames on all runtimes.
+            if self.shot_cd > 0:
+                self.shot_cd -= 1
+            if z_button and self.shot_cd == 0 and len(self.player_missiles) < 4:
+                self._fire_player()
+                self.shot_cd = 8
+            self._advance_spawning(now)
+            self.frame += 1
+            self._update_missiles()
+            if game_over:
                 global_score = self.score
+                return False
+            self._update_explosions_and_hits()
+            self._draw_world()
+            global_score = self.score
+            if self.frame % 45 == 0:
+                gc.collect()
+            return True
 
-                if self.frame % 45 == 0:
-                    gc.collect()
-
-            except RestartProgram:
-                return
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag/browser runtimes."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self.reset()
-        frame_ms = 35
-        last_frame = ticks_ms()
-        while not game_over:
-            try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-                now = ticks_ms()
-                self._move_crosshair(joystick, now)
-                if self.shot_cd > 0:
-                    self.shot_cd -= 1
-                if z_button and self.shot_cd == 0 and len(self.player_missiles) < 4:
-                    self._fire_player()
-                    self.shot_cd = 8
-                self._advance_spawning(now)
-                if ticks_diff(now, last_frame) < frame_ms:
-                    await asyncio.sleep(0.002)
-                    continue
-                last_frame = now
-                self.frame += 1
-                self._update_missiles()
-                if game_over:
-                    global_score = self.score
-                    return
-                self._update_explosions_and_hits()
-                self._draw_world()
-                global_score = self.score
-                if self.frame % 45 == 0:
-                    try:
-                        gc.collect()
-                    except Exception:
-                        pass
-            except RestartProgram:
-                return
+        return step
 
 
 # -----------------------------
@@ -1504,7 +1233,7 @@ except ImportError:
     array = None
 
 
-class DoomLiteGame:
+class DoomLiteGame(FrameLoopGame):
     """
     DOOM-LITE (extrem abgesteckt) = Wolf3D-Raycaster + Sprites
 
@@ -1810,6 +1539,7 @@ class DoomLiteGame:
         self.frame_ms = (
             45 if CONFIG_LOW_RAM_MODE else CONFIG_FRAME_MS_DEFAULT
         )  # ~22-28 fps
+        self.FRAME_MS = self.frame_ms
         self.frame = 0
 
     # --- helpers ---
@@ -3048,47 +2778,17 @@ class DoomLiteGame:
             gc.collect()
         return True
 
-    def main_loop(self, joystick):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
+    def _build_step(self, joystick):
+        begin_game(0)
         self.reset()
-        display_score_and_time(0)
 
-        while not game_over:
-            try:
-                now = ticks_ms()
-                if ticks_diff(now, self.last_frame) < self.frame_ms:
-                    sleep_ms(2)
-                    continue
-                self.last_frame = now
-                if not self._advance_game_frame(joystick):
-                    return
-            except RestartProgram:
-                return
+        def step():
+            if game_over:
+                return False
+            self.last_frame = ticks_ms()
+            return self._advance_game_frame(joystick)
 
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields between shared simulation frames."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self.reset()
-        display_score_and_time(0)
-
-        while not game_over:
-            try:
-                now = ticks_ms()
-                if ticks_diff(now, self.last_frame) < self.frame_ms:
-                    await asyncio.sleep(0.002)
-                    continue
-                self.last_frame = now
-                if not self._advance_game_frame(joystick):
-                    return
-            except RestartProgram:
-                return
+        return step
 
 
 class CityChaseGame(FrameLoopGame):
@@ -3098,7 +2798,7 @@ class CityChaseGame(FrameLoopGame):
       - Up / Down: accelerate / brake
       - Left / Right: steer
       - Z: boost
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Top-down city chase inspired by early overhead open-world crime games.
     """
 
@@ -3505,7 +3205,7 @@ class TopDownRacerGame(FrameLoopGame):
       - Up / Down: accelerate / brake
       - Left / Right: steer
       - Z: boost
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Top-down circuit racer with scrolling road, traffic, boost, and lap finish.
     """
 
@@ -3758,7 +3458,7 @@ class TopDownRacerGame(FrameLoopGame):
         return step
 
 
-class RayRacerGame:
+class RayRacerGame(FrameLoopGame):
     """
     RAY RACER
     Raycaster-style anti-grav racer for the 64x64 matrix.
@@ -3767,7 +3467,7 @@ class RayRacerGame:
       - UP/DOWN: accelerate/brake
       - LEFT/RIGHT: steer
       - Z: boost
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     """
 
     PLAY_H = HEIGHT - 6
@@ -4132,6 +3832,10 @@ class RayRacerGame:
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
+        begin_game(0)
+        self.reset()
+        display.clear()
+
         def step():
             c_button, z_button = joystick.read_buttons()
             if c_button:
@@ -4158,17 +3862,3 @@ class RayRacerGame:
             return True
 
         return step
-
-    def main_loop(self, joystick):
-        begin_game(0)
-        self.reset()
-        display.clear()
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        self.reset()
-        display.clear()
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))

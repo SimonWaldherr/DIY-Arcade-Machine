@@ -599,6 +599,14 @@ body.ios-fullscreen-variant #ios-touch-controls {
     grid-column: 2;
     grid-row: 3;
 }
+.touch-menu {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: 44px;
+    font-size: 16px;
+    border-color: rgba(255, 223, 100, 0.55);
+    color: var(--arcade-yellow);
+}
 .touch-x,
 .touch-space {
     min-height: 70px;
@@ -609,12 +617,12 @@ body.ios-fullscreen-variant #ios-touch-controls {
 }
 .touch-space {
     grid-column: 2;
-    grid-row: 1;
+    grid-row: 2;
     font-size: 24px;
 }
 .touch-x {
     grid-column: 1;
-    grid-row: 1;
+    grid-row: 2;
     align-self: end;
     font-size: 22px;
     transform: translateY(20px);
@@ -716,6 +724,12 @@ body.ios-touch-enabled .sound-toggle {
         font-size: 18px;
     }
 }
+@media (max-width: 359px) and (orientation: portrait) {
+    body.ios-touch-enabled #ios-touch-controls {
+        grid-template-columns: minmax(154px, 1.2fr) minmax(128px, 1fr);
+        gap: 12px;
+    }
+}
 @media (orientation: landscape) {
     body.ios-touch-enabled {
         --ios-controls-width: clamp(224px, 40dvw, 330px);
@@ -760,6 +774,9 @@ body.ios-touch-enabled .sound-toggle {
     }
     .touch-button {
         min-height: 40px;
+    }
+    .touch-menu {
+        min-height: 44px;
     }
     .touch-x,
     .touch-space {
@@ -806,7 +823,7 @@ body.ios-touch-enabled .sound-toggle {
     </div>
 </div>
 
-<p id="canvas-description" class="sr-only" data-i18n="canvasDescription">Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, and X or Escape for back or cancel.</p>
+<p id="canvas-description" class="sr-only" data-i18n="canvasDescription">Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, X for the secondary action, and Escape or P to open the game menu.</p>
 <canvas class="emscripten" id="canvas" width="1px" height="1px" oncontextmenu="event.preventDefault()" tabindex="1" role="application" aria-label="DIY Arcade Machine game canvas" aria-describedby="canvas-description" data-i18n-aria-label="canvasLabel"></canvas>
 
 <button type="button" id="sound-toggle" class="sound-toggle" aria-label="Enable arcade sounds" data-i18n-aria-label="soundToggleOff">♪</button>
@@ -819,6 +836,7 @@ body.ios-touch-enabled .sound-toggle {
         <button type="button" class="touch-button touch-down" data-touch-key="down" aria-label="Arrow Down" data-i18n-aria-label="arrowDown">↓</button>
     </div>
     <div class="touch-actions" role="group" aria-label="Action controls" data-i18n-aria-label="actionControls">
+        <button type="button" class="touch-button touch-menu" data-touch-key="menu" aria-label="Pause and open game menu" data-i18n-aria-label="pauseMenu" data-i18n="menuButton">Menu</button>
         <button type="button" class="touch-button touch-x" data-touch-key="x" aria-label="Back or cancel" data-i18n-aria-label="backCancel">B</button>
         <button type="button" class="touch-button touch-space" data-touch-key="space" aria-label="Primary action" data-i18n-aria-label="primaryAction" data-i18n="spaceButton">Space</button>
     </div>
@@ -869,13 +887,15 @@ const DIY_ARCADE_TRANSLATIONS = {
         arrowRight: "Arrow Right",
         arrowUp: "Arrow Up",
         backCancel: "Back or cancel",
-        canvasDescription: "Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, and X or Escape for back or cancel.",
+        canvasDescription: "Interactive arcade game canvas. Use arrow keys to move, Space or Z for the primary action, X for the secondary action, and Escape or P to open the game menu.",
         canvasLabel: "DIY Arcade Machine game canvas",
         directionalControls: "Directional controls",
         githubLabel: "Open DIY Arcade Machine on GitHub",
         githubText: "GitHub Repo",
         loaderSubtitle: "Loading WebAssembly arcade...",
         loadingProgress: "Loading progress",
+        menuButton: "Menu",
+        pauseMenu: "Pause and open game menu",
         primaryAction: "Primary action",
         spaceButton: "A",
         statusDownloading: "Downloading...",
@@ -889,13 +909,15 @@ const DIY_ARCADE_TRANSLATIONS = {
         arrowRight: "Pfeil nach rechts",
         arrowUp: "Pfeil nach oben",
         backCancel: "Zurueck oder abbrechen",
-        canvasDescription: "Interaktive Arcade-Spielflaeche. Bewege dich mit den Pfeiltasten, nutze Leertaste oder Z fuer die Hauptaktion und X oder Escape fuer Zurueck oder Abbrechen.",
+        canvasDescription: "Interaktive Arcade-Spielflaeche. Bewege dich mit den Pfeiltasten, nutze Leertaste oder Z fuer die Hauptaktion, X fuer die zweite Aktion und Escape oder P fuer das Spielmenü.",
         canvasLabel: "DIY Arcade Machine Spielflaeche",
         directionalControls: "Richtungssteuerung",
         githubLabel: "DIY Arcade Machine auf GitHub oeffnen",
         githubText: "GitHub Repo",
         loaderSubtitle: "WebAssembly-Arcade wird geladen...",
         loadingProgress: "Ladefortschritt",
+        menuButton: "Menü",
+        pauseMenu: "Pausieren und Spielmenü öffnen",
         primaryAction: "Hauptaktion",
         spaceButton: "A",
         statusDownloading: "Wird heruntergeladen...",
@@ -1123,7 +1145,7 @@ window.DIYArcadeLoaderHardTimeout = setTimeout(() => {
 }, 20000);
 
 (function setupIOSTouchControls() {
-    const keys = ["up", "down", "left", "right", "x", "space"];
+    const keys = ["up", "down", "left", "right", "x", "space", "menu"];
     const state = {};
     const presses = {};
     const activeSources = {};

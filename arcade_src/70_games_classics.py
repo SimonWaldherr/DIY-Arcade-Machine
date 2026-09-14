@@ -984,41 +984,81 @@ class BlobbyVolleyGame(FrameLoopGame):
 
 
 class PeggleGame(FrameLoopGame):
-    """Aim a bouncing ball, clear orange pegs, and conserve limited shots."""
+    """Three six-board campaigns with precision shots, combos and power pegs."""
 
     FRAME_MS = 30
-    AIM_SPEEDS = (-2.0, -1.4, -0.7, 0.0, 0.7, 1.4, 2.0)
-    PEG_LAYOUT = (
-        (11, 16, 0), (23, 13, 1), (35, 16, 0), (47, 13, 1),
-        (17, 27, 1), (29, 25, 0), (41, 27, 0), (53, 25, 1),
-        (10, 38, 0), (24, 40, 1), (38, 38, 0), (52, 40, 0),
+    AIM_SPEEDS = (-2.4, -2.1, -1.8, -1.5, -1.2, -0.9, -0.6, -0.3,
+                  0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4)
+    POWERS = (0.8, 1.0, 1.25)
+    PEG_COLORS = ((80, 170, 255), (255, 145, 45), (90, 245, 130), (220, 90, 255))
+    # A dot is empty; b = blue, o = orange objective, + = bonus, * = burst.
+    # The 7 x 5 designs use eight-pixel spacing, leaving room to bounce.
+    # MAP selects a complete campaign, rather than skipping its early boards.
+    CAMPAIGNS = (
+        (
+            ("GARDEN", 8, 16, (".o...o.", "b..b..b", ".o.+.o.", "b..b..b", "..o.o..")),
+            ("ARCHES", 8, 16, ("..o.o..", ".b.+.b.", "o..b..o", "b.....b", "o..o..o")),
+            ("WATERFALL", 9, 16, ("b..b..b", ".b.+.b.", "..o.o..", ".b.*.b.", "o..o..o")),
+            ("PINWHEEL", 9, 14, (".o..b..", "..b.o.o", "o.*.+.o", "o.o.b..", "..b..o.")),
+            ("BLOSSOM", 9, 14, ("..o.o..", ".o.*.o.", "o.b+b.o", ".b.o.b.", "..o.o..")),
+            ("ORCHARD", 10, 14, ("b.bob.b", ".o.+.o.", "b.*b*.b", ".o.o.o.", "o.bob.o")),
+        ),
+        (
+            ("LADDERS", 8, 16, (".o...o.", ".b.b.b.", ".o.+.o.", ".b.b.b.", ".o...o.")),
+            ("GATES", 8, 16, ("b.b.b.b", "b.o.o.b", "o..+..o", "b.*.*.b", "o.b.b.o")),
+            ("STAIRS", 9, 16, ("b+o....", ".bob...", "..b*b..", "...bob.", "....b+o")),
+            ("CHECKERS", 9, 14, ("b.o.o.b", ".o.+.o.", "b.o.b.o", ".*.*.*.", "o.b.o.b")),
+            ("FORTRESS", 9, 14, ("bo.+.ob", "b.o.o.b", "o.*b*.o", "b.o.o.b", "o..o..o")),
+            ("CIRCUIT", 10, 12, ("bob+bob", "b.*.*.b", "o.bob.o", "b.*.*.b", "oo.b.oo")),
+        ),
+        (
+            ("DIAMOND", 8, 16, ("...o...", "..b.b..", ".o.+.o.", "..b.b..", "...o...")),
+            ("ORBIT", 8, 16, ("..o.o..", ".b.+.b.", "o..*..o", ".b.o.b.", "..o.o..")),
+            ("COMET", 9, 16, (".o..o..", "b.+b..o", ".o.*b..", "..o.ob.", "...o..o")),
+            ("ECLIPSE", 9, 14, (".o.o.o.", "o.b+b.o", "b.*.*.b", "o.bob.o", ".o.o.o.")),
+            ("GALAXY", 9, 14, ("bo.o.ob", ".o.*.o.", "b.+o+.b", ".o.*.o.", "o..o..o")),
+            ("SUPERNOVA", 10, 12, ("b.o+o.b", ".o.*.o.", "o*obo*o", ".o.*.o.", "o.o.o.o")),
+        ),
     )
 
     def __init__(self, ctx=None):
-        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
-        if self.map_index == 1:
-            self.PEG_LAYOUT = tuple((x, y, int((x + y) % 3 == 0)) for y in (16, 26, 36) for x in (12, 25, 38, 51))
-        elif self.map_index == 2:
-            self.PEG_LAYOUT = ((32, 14, 1), (23, 21, 0), (41, 21, 0), (14, 28, 1), (32, 28, 0), (50, 28, 1), (23, 35, 0), (41, 35, 0), (32, 42, 1))
+        self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % len(self.CAMPAIGNS)
         self.reset()
 
     def reset(self):
-        self.pegs = [[x, y, orange, 1] for x, y, orange in self.PEG_LAYOUT]
-        self.aim = 3
-        self.ball = None
-        self.ball_frames = 0
-        self.shots = 8
+        self.level = 0
         self.score = 0
-        self.bucket_x = 24
-        self.bucket_direction = 1
         self.last_move = ticks_ms()
         self.last_z = False
+        self.level_banner = 0
+        self._new_level()
+
+    def _new_level(self):
+        self.level_name, self.shots, self.base_bucket_width, rows = self.CAMPAIGNS[self.map_index][self.level]
+        self.PEG_LAYOUT = tuple((8 + x * 8, 12 + y * 8, "bo+*".index(char))
+                                for y, row in enumerate(rows)
+                                for x, char in enumerate(row) if char != ".")
+        self.pegs = [[x, y, kind, 1] for x, y, kind in self.PEG_LAYOUT]
+        self.aim = len(self.AIM_SPEEDS) // 2
+        self.power = 1
+        self.ball = None
+        self.ball_frames = 0
+        self.shot_hits = 0
+        self.bucket_width = self.base_bucket_width
+        self.bucket_x = (64 - self.bucket_width) // 2
+        self.bucket_direction = 1
+
+    def _new_ball(self):
+        strength = self.POWERS[self.power]
+        return [32.0, 5.0, self.AIM_SPEEDS[self.aim] * strength, 1.2 * strength]
 
     def _launch(self):
-        if self.ball is not None or self.shots <= 0:
+        if self.ball is not None or self.shots <= 0 or self.level_banner:
             return False
-        self.ball = [32.0, 5.0, self.AIM_SPEEDS[self.aim], 1.2]
+        self.ball = self._new_ball()
         self.ball_frames = 0
+        self.shot_hits = 0
+        self.bucket_width = self.base_bucket_width
         self.shots -= 1
         return True
 
@@ -1041,7 +1081,7 @@ class PeggleGame(FrameLoopGame):
         return None
 
     def _aim_points(self):
-        ball = [32.0, 5.0, self.AIM_SPEEDS[self.aim], 1.2]
+        ball = self._new_ball()
         points = []
         for frame in range(18):
             for _ in range(4):
@@ -1052,9 +1092,31 @@ class PeggleGame(FrameLoopGame):
                 points.append((int(ball[0]), int(ball[1])))
         return points
 
+    def _hit_peg(self, peg):
+        # A small explicit queue supports burst chains without recursion.
+        pending = [peg]
+        while pending:
+            hit = pending.pop()
+            if not hit[3]:
+                continue
+            hit[3] = 0
+            self.shot_hits += 1
+            self.score += 100 if hit[2] == 1 else 25
+            if self.shot_hits >= 3:
+                self.score += min(200, (self.shot_hits - 2) * 25)
+            if hit[2] == 2:
+                self.shots += 1
+                self.bucket_width = 24
+                self.bucket_x = min(self.bucket_x, 60 - self.bucket_width)
+            elif hit[2] == 3:
+                for nearby in self.pegs:
+                    if nearby[3] and (nearby[0] - hit[0]) ** 2 + (nearby[1] - hit[1]) ** 2 <= 144:
+                        pending.append(nearby)
+
     def _advance_ball(self):
         self.bucket_x += self.bucket_direction
-        if self.bucket_x <= 4 or self.bucket_x >= 44:
+        if self.bucket_x <= 4 or self.bucket_x >= 60 - self.bucket_width:
+            self.bucket_x = clamp(self.bucket_x, 4, 60 - self.bucket_width)
             self.bucket_direction = -self.bucket_direction
         if self.ball is None:
             return
@@ -1064,7 +1126,7 @@ class PeggleGame(FrameLoopGame):
             self._move_ball(ball)
             peg = self._touching_peg(ball)
             if peg is not None:
-                peg[3] = 0
+                self._hit_peg(peg)
                 dx, dy = ball[0] - peg[0], ball[1] - peg[1]
                 distance = (dx * dx + dy * dy) ** 0.5
                 if distance < 0.001:
@@ -1075,9 +1137,8 @@ class PeggleGame(FrameLoopGame):
                     ball[2] -= 1.8 * inward_speed * nx
                     ball[3] -= 1.8 * inward_speed * ny
                 ball[0], ball[1] = peg[0] + nx * 4.1, peg[1] + ny * 4.1
-                self.score += 100 if peg[2] else 25
             if ball[1] >= 54:
-                if self.bucket_x <= ball[0] <= self.bucket_x + 16:
+                if self.bucket_x <= ball[0] <= self.bucket_x + self.bucket_width:
                     self.shots += 1
                     self.score += 50
                 self.ball = None
@@ -1087,23 +1148,45 @@ class PeggleGame(FrameLoopGame):
             self.ball = None
 
     def _orange_left(self):
-        return sum(1 for peg in self.pegs if peg[2] and peg[3])
+        return sum(1 for peg in self.pegs if peg[2] == 1 and peg[3])
+
+    def _complete_level(self):
+        if self.ball is not None or self._orange_left():
+            return False
+        self.score += self.shots * 100
+        if self.level + 1 == len(self.CAMPAIGNS[self.map_index]):
+            set_game_over_score(self.score, won=True)
+            return True
+        self.level += 1
+        self._new_level()
+        self.level_banner = 45
+        return False
 
     def _draw(self):
         display.clear()
-        for x, y, orange, active in self.pegs:
+        if self.level_banner:
+            draw_text_small(8, 12, "LEVEL " + str(self.level + 1), 255, 210, 110)
+            draw_text_small((64 - len(self.level_name) * 6) // 2, 25, self.level_name, 160, 210, 255)
+            draw_text_small(8, 38, "B" + str(self.shots) + " READY", 100, 240, 160)
+            display_score_and_time(self.score)
+            return
+        for x, y, kind, active in self.pegs:
             if active:
-                color = (255, 145, 45) if orange else (80, 170, 255)
+                color = self.PEG_COLORS[kind]
                 draw_rectangle(x - 2, y - 2, x + 2, y + 2, *color)
+                if kind >= 2:
+                    display.set_pixel(x, y, 255, 255, 255)
         if self.ball is None:
             for x, y in self._aim_points():
                 display.set_pixel(x, y, 130, 140, 170)
         draw_rectangle(30, 2, 34, 4, 180, 180, 210)
         if self.ball is not None:
             draw_rectangle(int(self.ball[0]) - 2, int(self.ball[1]) - 2, int(self.ball[0]) + 2, int(self.ball[1]) + 2, 255, 245, 170)
-        draw_line(self.bucket_x, 55, self.bucket_x + 16, 55, 100, 240, 160)
+        draw_line(self.bucket_x, 55, self.bucket_x + self.bucket_width, 55, 100, 240, 160)
         draw_text_small(1, 1, "B" + str(self.shots), 220, 230, 255)
         draw_text_small(46, 1, "O" + str(self._orange_left()), 255, 145, 45)
+        draw_text_small(1, 48, "L" + str(self.level + 1), 160, 210, 255)
+        draw_text_small(46, 48, "P" + str(self.power + 1), 200, 180, 255)
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
@@ -1114,23 +1197,33 @@ class PeggleGame(FrameLoopGame):
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
+            if self.level_banner:
+                self.level_banner -= 1
+                self.last_z = z_button
+                self._draw()
+                return True
             now = ticks_ms()
-            direction = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT], debounce=False)
+            direction = joystick.read_direction(
+                [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP, JOYSTICK_DOWN], debounce=False)
             if self.ball is None and ticks_diff(now, self.last_move) >= 100:
                 if direction == JOYSTICK_LEFT:
                     self.aim = max(0, self.aim - 1)
-                    self.last_move = now
                 elif direction == JOYSTICK_RIGHT:
-                    self.aim = min(6, self.aim + 1)
+                    self.aim = min(len(self.AIM_SPEEDS) - 1, self.aim + 1)
+                elif direction == JOYSTICK_UP:
+                    self.power = min(len(self.POWERS) - 1, self.power + 1)
+                elif direction == JOYSTICK_DOWN:
+                    self.power = max(0, self.power - 1)
+                if direction is not None:
                     self.last_move = now
             if z_button and not self.last_z:
                 self._launch()
             self.last_z = z_button
             self._advance_ball()
             if not self._orange_left() and self.ball is None:
-                set_game_over_score(self.score + self.shots * 100, won=True)
-                return False
-            if self.shots <= 0 and self.ball is None:
+                if self._complete_level():
+                    return False
+            elif self.shots <= 0 and self.ball is None:
                 set_game_over_score(self.score)
                 return False
             self._draw()

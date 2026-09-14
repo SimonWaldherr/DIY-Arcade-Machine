@@ -1,9 +1,9 @@
-class StackerGame:
+class StackerGame(FrameLoopGame):
     """
     STACKER
     Controls:
       - Z: lock the moving block
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Stack each moving layer on top of the previous one. Missing overlap ends the run.
     """
 
@@ -115,35 +115,7 @@ class StackerGame:
             return True
 
         return step
-    def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-        if self.won:
-            show_center_message(
-                ("YOU", "WON"),
-                start_y=18,
-                line_height=15,
-                r=0,
-                g=255,
-                b=0,
-                score=global_score,
-                delay_ms=900,
-            )
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-        if self.won:
-            await show_center_message_async(
-                ("YOU", "WON"),
-                start_y=18,
-                line_height=15,
-                r=0,
-                g=255,
-                b=0,
-                score=global_score,
-                delay_ms=900,
-            )
 
 
 class FroggerGame(FrameLoopGame):
@@ -151,7 +123,7 @@ class FroggerGame(FrameLoopGame):
     FROGGR
     Controls:
       - Left / Right / Up / Down: hop
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Cross traffic lanes. Each successful crossing makes the next level harder.
     """
 
@@ -289,7 +261,7 @@ class CatchGame(FrameLoopGame):
     Controls:
       - Left / Right: move basket
       - Z: quick slide
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Catch stars, avoid bombs, and do not miss too many stars.
     """
 
@@ -415,7 +387,7 @@ class MinesGame(GridCursorGame):
     Controls:
       - Directions: move cursor
       - Z: reveal field
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Reveal every safe field without stepping on a mine.
     """
 
@@ -544,7 +516,7 @@ class ClimberGame(FrameLoopGame):
     Controls:
       - Left / Right: drift
       - Z: short jet jump
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Jump from platform to platform while the tower scrolls down.
     """
 
@@ -655,7 +627,7 @@ class ArenaGame(FrameLoopGame):
     Controls:
       - Directions: move
       - Z: fire
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Survive enemy waves in a small arena.
     """
 
@@ -836,7 +808,7 @@ class DefuseGame(FrameLoopGame):
     Controls:
       - Left / Right: choose wire
       - Z: cut wire
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Memorize and cut wire colors in the requested order before the timer expires.
     """
 
@@ -996,7 +968,7 @@ class BilliardsGame(FrameLoopGame):
       - Left / Right: aim
       - Up / Down: set power
       - Z: strike cue ball
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Compact billiards with Pool/Snooker setups, pockets, rails, and ball physics.
     """
 
@@ -1367,7 +1339,7 @@ class GolfGame(FrameLoopGame):
       - Left / Right: aim
       - Up / Down: set power
       - Z: shoot
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Put the ball into the hole across compact obstacle courses.
     """
 
@@ -1588,7 +1560,7 @@ class LaserGame(FrameLoopGame):
     Controls:
       - Directions: move cursor
       - Z: rotate mirror
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Rotate mirrors until the beam reaches the target.
     """
 
@@ -1898,7 +1870,7 @@ class PairsGame(FrameLoopGame):
     Controls:
       - Directions: move cursor
       - Z: flip card
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Match all hidden pairs with as few attempts as possible.
     """
 
@@ -2043,7 +2015,7 @@ class BomberGame(FrameLoopGame):
     Controls:
       - Directions: move
       - Z: place bomb
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Clear enemies with timed bombs in a compact block maze.
     """
 
@@ -2276,7 +2248,7 @@ class SkyWarGame(FrameLoopGame):
     Controls:
       - Directions: fly
       - Z: fire cannon
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Helicopter battlefield shooter with air and ground targets.
     """
 
@@ -2470,7 +2442,7 @@ class WingsGame(FrameLoopGame):
       - Up / Down: altitude
       - Left / Right: accelerate / decelerate (can reverse)
       - Z: fire (gun when low, bomb when high)
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Carrier-based strike: take off, bomb island targets, return and land.
     """
 

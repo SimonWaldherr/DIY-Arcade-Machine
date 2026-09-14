@@ -1,11 +1,13 @@
-class SimonGame:
+class SimonGame(FrameLoopGame):
     """
     SIMON
     Controls:
       - Directions: move white selector frame
       - Z: confirm selected color
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 30
 
     INPUT_BAR_Y = PLAY_HEIGHT - 6
 
@@ -55,215 +57,113 @@ class SimonGame:
             draw_rectangle(x, y + 1, x + 3, y + 4, *colors[idx])
             x += 5
 
-    def flash_color(self, idx, duration_ms=250):
+    def _draw_flash(self, idx):
+        self.draw_quad_screen()
         x1, y1, x2, y2 = self._quad_rect(idx)
-
         draw_rectangle(x1, y1, x2, y2, *colors[idx])
-        sleep_ms(duration_ms)
-        draw_rectangle(x1, y1, x2, y2, *inactive_colors[idx])
-        if self.user_input:
-            self.draw_input_bar()
-        if idx == self.cursor:
-            self.draw_selector_frame()
-        display_flush()
+        display_score_and_time(len(self.sequence) - 1)
 
-    def play_sequence(self):
-        for c in self.sequence:
-            self.flash_color(c, 300)
-            sleep_ms(200)
+    def _begin_sequence(self, now):
+        self.sequence.append(random.randint(0, 3))
+        self.user_input = []
+        self._sequence_index = 0
+        self._phase = "show"
+        self._phase_started = now
+        self._draw_flash(self.sequence[0])
 
-    def get_user_input(self, joystick):
-        self.redraw_input_view()
-        last_move = ticks_ms()
-        last_z = False
-        while True:
+    def _build_step(self, joystick):
+        self.sequence = []
+        self.user_input = []
+        self.cursor = 0
+        self._last_z = False
+        self._last_move = ticks_ms()
+        begin_game(0)
+        self._begin_sequence(self._last_move)
+
+        def step():
+            global global_score
             c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return None
-            if z_button and not last_z:
-                return self.cursor
-            last_z = z_button
+            if c_button or game_over:
+                return False
+            z_pressed = z_button and not self._last_z
+            self._last_z = z_button
             now = ticks_ms()
+            elapsed = ticks_diff(now, self._phase_started)
+
+            # Sequence playback and selection feedback remain ordinary frames:
+            # the shared runner can pause even during a long sequence.
+            if self._phase == "show":
+                if elapsed >= 300:
+                    self.draw_quad_screen()
+                    self._phase = "gap"
+                    self._phase_started = now
+                return True
+            if self._phase == "gap":
+                if elapsed >= 200:
+                    self._sequence_index += 1
+                    self._phase_started = now
+                    if self._sequence_index < len(self.sequence):
+                        self._phase = "show"
+                        self._draw_flash(self.sequence[self._sequence_index])
+                    else:
+                        self._phase = "input"
+                        self._last_move = now
+                        self.redraw_input_view()
+                return True
+            if self._phase == "feedback":
+                if elapsed >= 120:
+                    self.user_input.append(self.cursor)
+                    self.redraw_input_view()
+                    if self.user_input != self.sequence[:len(self.user_input)]:
+                        set_game_over_score(len(self.sequence) - 1)
+                        return False
+                    self._phase_started = now
+                    if len(self.user_input) == len(self.sequence):
+                        global_score = len(self.sequence)
+                        self._phase = "round_wait"
+                    else:
+                        self._phase = "input"
+                return True
+            if self._phase == "round_wait":
+                if elapsed >= 300:
+                    self._begin_sequence(now)
+                return True
+
             d = joystick.read_direction(
-                [
-                    JOYSTICK_UP,
-                    JOYSTICK_RIGHT,
-                    JOYSTICK_LEFT,
-                    JOYSTICK_DOWN,
-                    JOYSTICK_UP_LEFT,
-                    JOYSTICK_UP_RIGHT,
-                    JOYSTICK_DOWN_LEFT,
-                    JOYSTICK_DOWN_RIGHT,
-                ],
+                JOYSTICK_DIRECTIONS_8,
                 debounce=False,
             )
-            if d:
+            if d and ticks_diff(now, self._last_move) >= 130:
                 dx, dy = direction_to_delta_8way(d)
                 col = self.cursor % 2
                 row = self.cursor // 2
-                if ticks_diff(now, last_move) >= 130:
-                    if dx < 0:
-                        col = 0
-                    elif dx > 0:
-                        col = 1
-                    if dy < 0:
-                        row = 0
-                    elif dy > 0:
-                        row = 1
-                    new_cursor = row * 2 + col
-                    if new_cursor != self.cursor:
-                        self.cursor = new_cursor
-                        self.redraw_input_view()
-                    last_move = now
-            sleep_ms(30)
+                if dx:
+                    col = 0 if dx < 0 else 1
+                if dy:
+                    row = 0 if dy < 0 else 1
+                new_cursor = row * 2 + col
+                if new_cursor != self.cursor:
+                    self.cursor = new_cursor
+                    self.redraw_input_view()
+                self._last_move = now
+            if z_pressed:
+                self._phase = "feedback"
+                self._phase_started = now
+                self._draw_flash(self.cursor)
+            return True
 
-    def translate(self, direction):
-        return direction if direction in (0, 1, 2, 3) else None
-
-    def main_loop(self, joystick):
-        global game_over, global_score
-        game_over = False
-        self.sequence = []
-        self.user_input = []
-        display.clear()
-        self.draw_quad_screen()
-        display_score_and_time(0, force=True)
-
-        while True:
-            c_button, _ = joystick.read_buttons()
-            if c_button:
-                return
-
-            self.sequence.append(random.randint(0, 3))
-            display_score_and_time(len(self.sequence) - 1)
-            self.play_sequence()
-            self.user_input = []
-
-            for _ in range(len(self.sequence)):
-                direction = self.get_user_input(joystick)
-                if direction is None:
-                    return
-                sel = self.translate(direction)
-                if sel is None:
-                    continue
-                self.flash_color(sel, 120)
-                self.user_input.append(sel)
-                self.redraw_input_view()
-                # check prefix
-                if self.user_input != self.sequence[: len(self.user_input)]:
-                    global_score = len(self.sequence) - 1
-                    game_over = True
-                    return
-
-            sleep_ms(300)
-            maybe_collect(120)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        self.sequence = []
-        self.user_input = []
-        display.clear()
-        self.draw_quad_screen()
-        display_score_and_time(0, force=True)
-
-        while True:
-            c_button, _ = joystick.read_buttons()
-            if c_button:
-                return
-
-            self.sequence.append(random.randint(0, 3))
-            display_score_and_time(len(self.sequence) - 1)
-
-            # play sequence (async flashes)
-            for c in self.sequence:
-                x1, y1, x2, y2 = self._quad_rect(c)
-                draw_rectangle(x1, y1, x2, y2, *colors[c])
-                display_flush()
-                await asyncio.sleep(0.3)
-                draw_rectangle(x1, y1, x2, y2, *inactive_colors[c])
-                display_flush()
-                await asyncio.sleep(0.2)
-
-            self.user_input = []
-
-            for _ in range(len(self.sequence)):
-                self.redraw_input_view()
-                sel = None
-                last_move = ticks_ms()
-                last_z = False
-                while sel is None:
-                    c_button, z_button = joystick.read_buttons()
-                    if c_button:
-                        return
-                    if z_button and not last_z:
-                        sel = self.cursor
-                        break
-                    last_z = z_button
-                    now = ticks_ms()
-                    d = joystick.read_direction(
-                        [
-                            JOYSTICK_UP,
-                            JOYSTICK_RIGHT,
-                            JOYSTICK_LEFT,
-                            JOYSTICK_DOWN,
-                            JOYSTICK_UP_LEFT,
-                            JOYSTICK_UP_RIGHT,
-                            JOYSTICK_DOWN_LEFT,
-                            JOYSTICK_DOWN_RIGHT,
-                        ],
-                        debounce=False,
-                    )
-                    if d:
-                        dx, dy = direction_to_delta_8way(d)
-                        col = self.cursor % 2
-                        row = self.cursor // 2
-                        if ticks_diff(now, last_move) >= 130:
-                            if dx < 0:
-                                col = 0
-                            elif dx > 0:
-                                col = 1
-                            if dy < 0:
-                                row = 0
-                            elif dy > 0:
-                                row = 1
-                            new_cursor = row * 2 + col
-                            if new_cursor != self.cursor:
-                                self.cursor = new_cursor
-                                self.redraw_input_view()
-                            last_move = now
-                    await asyncio.sleep(0.030)
-
-                # flash selected quadrant
-                x1, y1, x2, y2 = self._quad_rect(sel)
-                draw_rectangle(x1, y1, x2, y2, *colors[sel])
-                display_flush()
-                await asyncio.sleep(0.12)
-                draw_rectangle(x1, y1, x2, y2, *inactive_colors[sel])
-                display_flush()
-
-                self.user_input.append(sel)
-                self.redraw_input_view()
-                if self.user_input != self.sequence[: len(self.user_input)]:
-                    global_score = len(self.sequence) - 1
-                    game_over = True
-                    return
-
-            await asyncio.sleep(0.3)
-            maybe_collect(120)
+        return step
 
 
-class SnakeGame:
+class SnakeGame(FrameLoopGame):
     """
     SNAKE
     Controls:
       - Left / Right / Up / Down: steer snake
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 35
 
     def __init__(self):
         self.restart_game()
@@ -429,43 +329,34 @@ class SnakeGame:
         display_score_and_time(self.score)
         return True
 
-    def main_loop(self, joystick):
-        global game_over
-        game_over = False
+    def _build_step(self, joystick):
+        begin_game(0)
         self.restart_game()
+        self._last_step = None
 
-        while True:
-            if not self._step(joystick):
-                return
-
-            delay = 112 - max(10, self.snake_length // 3)
-            if delay < 30:
-                delay = 30
-            sleep_ms(delay)
-            maybe_collect(120)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over
-        game_over = False
-        self.restart_game()
-
-        def loop_iteration():
+        def step():
+            c_button, _ = joystick.read_buttons()
+            if c_button or game_over:
+                return False
+            now = ticks_ms()
+            move_ms = max(30, 112 - max(10, self.snake_length // 3))
+            if self._last_step is not None and ticks_diff(now, self._last_step) < move_ms:
+                return True
+            self._last_step = now
             return self._step(joystick)
 
-        await _run_game_loop_async(56, loop_iteration)
+        return step
 
 
-class PongGame:
+class PongGame(FrameLoopGame):
     """
     PONG
     Controls:
       - Up / Down: move paddle
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 45
 
     def __init__(self, ctx=None):
         self.players_mode = get_context_setting(ctx, "players", "cpu")
@@ -681,13 +572,7 @@ class PongGame:
             return True
 
         return step
-    def main_loop(self, joystick):
-        _run_game_loop_sync(45, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(45, self._build_step(joystick))
 
 
 class AirHockeyGame(FrameLoopGame):
@@ -695,7 +580,7 @@ class AirHockeyGame(FrameLoopGame):
     AIRHKY
     Controls:
       - Left / Right / Up / Down: move mallet
-      - C: return to menu
+      - C: pause menu
     Fast puck-and-mallet air hockey with CPU or local 2-player support.
     """
 
@@ -1139,141 +1024,234 @@ BRICK_ROWS = const(5)
 BRICK_COLS = const(8)
 
 
-class BreakoutGame:
-    """
-    BREAKOUT
-    Controls:
-      - Left / Right: move paddle
-      - C: return to menu
-    """
+class BreakoutGame(FrameLoopGame):
+    """Twelve-stage brick campaign. Left/right moves, Z serves, C pauses."""
+
+    FRAME_MS = 35
+
+    # Digits are hit points; dots leave channels through each handmade layout.
+    # MAP retains its three values and rotates the three opening boards.
+    LEVELS = (
+        ("WALL", ("11111111", "11111111", "11111111", "11111111", "11111111")),
+        ("CHECKER", ("1.1.1.1.", ".1.1.1.1", "1.1.1.1.", ".1.1.1.1", "1.1.1.1.")),
+        ("PYRAMID", ("...11...", "..1111..", ".111111.", "11111111", "11111111")),
+        ("GATES", ("22222222", "11.11.11", "11.11.11", "...11...", "111..111", "11....11")),
+        ("DIAMOND", ("...22...", "..2112..", ".211112.", "21111112", ".211112.", "..2112..")),
+        ("TOWERS", ("22....22", "21.22.12", "21.11.12", "21.11.12", "21.11.12", "11.11.11")),
+        ("ZIGZAG", ("2222....", "..1222..", "....1222", "..2221..", "2221....", "11222211")),
+        ("FORTRESS", ("32322323", "21....12", "21.22.12", "21.11.12", "21111112", "11....11")),
+        ("ORBIT", ("..2222..", ".21..12.", "21.33.12", "21.33.12", ".21..12.", "..2222..")),
+        ("CROSS", ("11.33.11", "...22...", "22233222", "22233222", "...22...", "11.22.11")),
+        ("CROWN", ("3..33..3", "32.22.23", "22222222", ".211112.", "..2112..", "11111111")),
+        ("CITADEL", ("33333333", "32.22.23", "22.33.22", "21122112", "12.22.21", "11111111")),
+    )
 
     def __init__(self, ctx=None):
         self.map_index = int(get_context_setting(ctx, "map", 0) or 0) % 3
         self.powerups_enabled = bool(get_context_setting(ctx, "powerups", False))
-        self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
+        self.paddle_speed = 2
+        self.level = 1
+        self.lives = 3
+        self.score = 0
         self.paddle_y = PLAY_HEIGHT - PADDLE_HEIGHT
+        self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
         self.paddle_w = PADDLE_WIDTH
         self.wide_timer = 0
-        self.ball_x = WIDTH // 2
-        self.ball_y = PLAY_HEIGHT // 2
-        self.ball_dx = 1
-        self.ball_dy = -1
-        self.bricks = self.create_bricks()
-        self.score = 0
-        self.paddle_speed = 2
+        self.slow_timer = 0
         self.powerups = []
+        self.bricks = self.create_bricks()
+        self._reset_ball()
+
+    def _layout_index(self):
+        if self.level <= 3:
+            return (self.level - 1 + self.map_index) % 3
+        return self.level - 1
 
     def create_bricks(self):
+        self.level_name, rows = self.LEVELS[self._layout_index()]
         bricks = []
-        for row in range(BRICK_ROWS):
-            for col in range(BRICK_COLS):
-                if self.map_index == 1 and (row + col) % 2:
+        self.brick_health = {}
+        for row, cells in enumerate(rows):
+            for col, hp in enumerate(cells):
+                if hp == ".":
                     continue
-                if self.map_index == 2 and abs(col - 3.5) > row + 0.5:
-                    continue
-                x = col * (BRICK_WIDTH + 1) + 1
-                y = row * (BRICK_HEIGHT + 1)
-                bricks.append((x, y))
+                brick = (col * (BRICK_WIDTH + 1) + 1, row * (BRICK_HEIGHT + 1))
+                bricks.append(brick)
+                self.brick_health[brick] = int(hp)
         return bricks
+
+    def _reset_ball(self):
+        self.ball_x = self.paddle_x + self.paddle_w // 2 - 1
+        self.ball_y = self.paddle_y - BALL_SIZE - 1
+        self.ball_dx = 1 if self.level % 2 else -1
+        self.ball_dy = -(1 + min(0.8, (self.level - 1) * 0.075))
+        self.previous_ball_x = self.ball_x
+        self.previous_ball_y = self.ball_y
+        self.last_paddle_move = None
+        self.serve_timer = 35
 
     def draw_paddle(self):
         draw_rectangle(
-            self.paddle_x,
-            self.paddle_y,
+            self.paddle_x, self.paddle_y,
             self.paddle_x + self.paddle_w - 1,
-            self.paddle_y + PADDLE_HEIGHT - 1,
-            255,
-            255,
-            255,
+            self.paddle_y + PADDLE_HEIGHT - 1, 255, 255, 255,
         )
 
     def clear_paddle(self):
         draw_rectangle(
-            self.paddle_x,
-            self.paddle_y,
+            self.paddle_x, self.paddle_y,
             self.paddle_x + self.paddle_w - 1,
-            self.paddle_y + PADDLE_HEIGHT - 1,
-            0,
-            0,
-            0,
+            self.paddle_y + PADDLE_HEIGHT - 1, 0, 0, 0,
         )
 
     def draw_ball(self):
         bx, by = int(self.ball_x), int(self.ball_y)
-        draw_rectangle(bx, by, bx + 1, by + 1, 255, 255, 255)
+        color = (80, 220, 255) if self.slow_timer else (255, 255, 255)
+        draw_rectangle(bx, by, bx + 1, by + 1, *color)
 
     def clear_ball(self):
         bx, by = int(self.ball_x), int(self.ball_y)
         draw_rectangle(bx, by, bx + 1, by + 1, 0, 0, 0)
 
+    def _draw_brick(self, brick):
+        x, y = brick
+        hp = self.brick_health.get(brick, 1)
+        hue = (y * 300) // max(1, 6 * (BRICK_HEIGHT + 1))
+        r, g, b = hsb_to_rgb(hue, 1, 1)
+        draw_rectangle(x, y, x + BRICK_WIDTH - 1, y + BRICK_HEIGHT - 1, r, g, b)
+        # White pips make durability visible even on the small LED display.
+        if hp > 1:
+            for pip in range(hp):
+                display.set_pixel(x + 1 + pip * 2, y + 1, 255, 255, 255)
+
     def draw_bricks(self):
-        for x, y in self.bricks:
-            hue = (y * 300) // max(1, (BRICK_ROWS * (BRICK_HEIGHT + 1)))
-            r, g, b = hsb_to_rgb(hue, 1, 1)
-            draw_rectangle(x, y, x + BRICK_WIDTH - 1, y + BRICK_HEIGHT - 1, r, g, b)
+        for brick in self.bricks:
+            self._draw_brick(brick)
+
+    def _draw_field(self):
+        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 0, 0, 0)
+        self.draw_bricks()
+        self.draw_paddle()
+        self.draw_ball()
+
+    def _draw_hud(self, show_hud=True):
+        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        if show_hud:
+            draw_text_small(1, PLAY_HEIGHT, str(self.score), 255, 255, 255)
+            draw_text_small(34, PLAY_HEIGHT, "L" + str(self.level), 80, 220, 255)
+            for life in range(self.lives):
+                draw_rectangle(54 + life * 2, PLAY_HEIGHT + 1,
+                               54 + life * 2, PLAY_HEIGHT + 3, 255, 90, 90)
+        if not _FRAME_PRESENT_MANAGED:
+            display_flush()
 
     def update_ball(self):
-        global game_over, global_score
         self.clear_ball()
-        self.ball_x += self.ball_dx
-        self.ball_y += self.ball_dy
-
-        # wall bounce (ball is 2x2; top-left coords)
-        if self.ball_x <= 0:
-            self.ball_x = 0
-            self.ball_dx = abs(self.ball_dx)
-        elif self.ball_x >= WIDTH - 2:
-            self.ball_x = WIDTH - 2
-            self.ball_dx = -abs(self.ball_dx)
-
-        if self.ball_y <= 0:
-            self.ball_dy = -self.ball_dy
-
-        # paddle bounce
-        if self.ball_y + 1 >= self.paddle_y:
-            if (
-                self.paddle_x <= self.ball_x + 1
-                and self.ball_x <= self.paddle_x + self.paddle_w - 1
-            ):
-                self.ball_dy = -abs(self.ball_dy)
-                self.ball_y = self.paddle_y - 2
-
-                # apply spin based on paddle movement
-                last_move = getattr(self, "last_paddle_move", None)
-                if last_move == JOYSTICK_LEFT:
-                    self.ball_dx -= 0.5
-                elif last_move == JOYSTICK_RIGHT:
-                    self.ball_dx += 0.5
-                # clamp max x speed
-                self.ball_dx = max(-1.8, min(1.8, self.ball_dx))
-
-        # below paddle -> lost
-        if self.ball_y >= PLAY_HEIGHT:
-            global_score = self.score
-            game_over = True
+        if self.serve_timer:
+            self.serve_timer -= 1
+            self.ball_x = self.paddle_x + self.paddle_w // 2 - 1
+            self.ball_y = self.paddle_y - BALL_SIZE - 1
+            self.draw_ball()
             return
 
+        # Substeps prevent a fast ball tunnelling through a brick or the paddle.
+        factor = 0.65 if self.slow_timer else 1
+        steps = max(1, int(max(abs(self.ball_dx), abs(self.ball_dy))) + 1)
+        for unused in range(steps):
+            self.previous_ball_x = self.ball_x
+            self.previous_ball_y = self.ball_y
+            self.ball_x += self.ball_dx * factor / steps
+            self.ball_y += self.ball_dy * factor / steps
+            if self.ball_x < 0:
+                self.ball_x = 0
+                self.ball_dx = abs(self.ball_dx)
+            elif self.ball_x > WIDTH - BALL_SIZE:
+                self.ball_x = WIDTH - BALL_SIZE
+                self.ball_dx = -abs(self.ball_dx)
+            if self.ball_y < 0:
+                self.ball_y = 0
+                self.ball_dy = abs(self.ball_dy)
+
+            if (self.ball_dy > 0
+                    and self.previous_ball_y + BALL_SIZE <= self.paddle_y
+                    and self.ball_y + BALL_SIZE >= self.paddle_y
+                    and self.paddle_x < self.ball_x + BALL_SIZE
+                    and self.ball_x < self.paddle_x + self.paddle_w):
+                self.ball_dy = -abs(self.ball_dy)
+                self.ball_y = self.paddle_y - BALL_SIZE
+                offset = (self.ball_x + 1 - self.paddle_x) / self.paddle_w
+                self.ball_dx = (offset - 0.5) * 3.2
+                if self.last_paddle_move == JOYSTICK_LEFT:
+                    self.ball_dx -= 0.35
+                elif self.last_paddle_move == JOYSTICK_RIGHT:
+                    self.ball_dx += 0.35
+                self.ball_dx = max(-1.8, min(1.8, self.ball_dx))
+                if abs(self.ball_dx) < 0.35:
+                    self.ball_dx = 0.35 if self.ball_dx >= 0 else -0.35
+
+            self.check_collision_with_bricks()
+            if not self.bricks:
+                break
+            if self.ball_y >= PLAY_HEIGHT:
+                self.lives -= 1
+                if self.lives <= 0:
+                    set_game_over_score(self.score)
+                    return
+                self.clear_paddle()
+                self.paddle_w = PADDLE_WIDTH
+                self.paddle_x = min(self.paddle_x, WIDTH - self.paddle_w)
+                self.wide_timer = 0
+                self.slow_timer = 0
+                self.powerups = []
+                self._reset_ball()
+                self._draw_field()
+                return
         self.draw_ball()
 
     def check_collision_with_bricks(self):
         global global_score
-        bx = int(self.ball_x)
-        by = int(self.ball_y)
         for brick in self.bricks:
             x, y = brick
-            if point_in_rect(bx, by, x, y, BRICK_WIDTH, BRICK_HEIGHT):
+            if not rects_overlap(self.ball_x, self.ball_y, BALL_SIZE, BALL_SIZE,
+                                 x, y, BRICK_WIDTH, BRICK_HEIGHT):
+                continue
+            # Resolve the entry face and move outside it, so armor cannot take
+            # another hit until the ball actually returns to the brick.
+            if self.previous_ball_y + BALL_SIZE <= y:
+                self.ball_y = y - BALL_SIZE
+                self.ball_dy = -abs(self.ball_dy)
+            elif self.previous_ball_y >= y + BRICK_HEIGHT:
+                self.ball_y = y + BRICK_HEIGHT
+                self.ball_dy = abs(self.ball_dy)
+            elif self.previous_ball_x + BALL_SIZE <= x:
+                self.ball_x = x - BALL_SIZE
+                self.ball_dx = -abs(self.ball_dx)
+            elif self.previous_ball_x >= x + BRICK_WIDTH:
+                self.ball_x = x + BRICK_WIDTH
+                self.ball_dx = abs(self.ball_dx)
+            elif self.ball_dy < 0:
+                self.ball_y = y + BRICK_HEIGHT
+                self.ball_dy = abs(self.ball_dy)
+            else:
+                self.ball_y = y - BALL_SIZE
+                self.ball_dy = -abs(self.ball_dy)
+            hp = self.brick_health.get(brick, 1) - 1
+            self.score += 10
+            global_score = self.score
+            if hp:
+                self.brick_health[brick] = hp
+                self._draw_brick(brick)
+            else:
                 self.bricks.remove(brick)
-                self.ball_dy = -self.ball_dy
-                self.score += 10
-                global_score = self.score
+                self.brick_health.pop(brick, None)
                 draw_rectangle(x, y, x + BRICK_WIDTH - 1, y + BRICK_HEIGHT - 1, 0, 0, 0)
-                if (
-                    self.powerups_enabled
-                    and random.randint(0, 99) < 18
-                    and len(self.powerups) < 3
-                ):
-                    self.powerups.append([x + BRICK_WIDTH // 2, y + BRICK_HEIGHT, 0])
-                break
+                if (self.powerups_enabled and len(self.powerups) < 3
+                        and random.randint(0, 99) < 18):
+                    roll = random.randint(0, 4)
+                    kind = 0 if roll < 3 else roll - 2
+                    self.powerups.append([x + BRICK_WIDTH // 2, y + BRICK_HEIGHT, kind])
+            return True
+        return False
 
     def update_paddle(self, joystick):
         d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
@@ -1283,9 +1261,7 @@ class BreakoutGame:
             self.paddle_x = max(self.paddle_x - self.paddle_speed, 0)
         elif d == JOYSTICK_RIGHT:
             self.clear_paddle()
-            self.paddle_x = min(
-                self.paddle_x + self.paddle_speed, WIDTH - self.paddle_w
-            )
+            self.paddle_x = min(self.paddle_x + self.paddle_speed, WIDTH - self.paddle_w)
         self.draw_paddle()
 
     def update_powerups(self):
@@ -1293,29 +1269,28 @@ class BreakoutGame:
             return
         keep = []
         for p in self.powerups:
-            draw_rectangle(
-                int(p[0]) - 1, int(p[1]) - 1, int(p[0]) + 1, int(p[1]) + 1, 0, 0, 0
-            )
+            draw_rectangle(int(p[0]) - 1, int(p[1]) - 1,
+                           int(p[0]) + 1, int(p[1]) + 1, 0, 0, 0)
+            previous_y = p[1]
             p[1] += 0.65
-            if p[1] >= self.paddle_y - 1:
-                if self.paddle_x - 1 <= p[0] <= self.paddle_x + self.paddle_w:
+            if (previous_y < self.paddle_y <= p[1] + 1
+                    and self.paddle_x - 1 <= p[0] <= self.paddle_x + self.paddle_w):
+                if p[2] == 0:
                     self.wide_timer = 360
                     self.clear_paddle()
                     self.paddle_w = min(20, PADDLE_WIDTH + 6)
                     self.paddle_x = min(self.paddle_x, WIDTH - self.paddle_w)
-                    play_sound("coin", 4)
-                    continue
+                elif p[2] == 1:
+                    self.slow_timer = 240
+                else:
+                    self.lives = min(5, self.lives + 1)
+                play_sound("coin", 4)
+                continue
             if p[1] < PLAY_HEIGHT:
                 keep.append(p)
-                draw_rectangle(
-                    int(p[0]) - 1,
-                    int(p[1]) - 1,
-                    int(p[0]) + 1,
-                    int(p[1]) + 1,
-                    80,
-                    220,
-                    255,
-                )
+                color = ((80, 220, 255), (255, 220, 70), (100, 255, 120))[p[2]]
+                draw_rectangle(int(p[0]) - 1, int(p[1]) - 1,
+                               int(p[0]) + 1, int(p[1]) + 1, *color)
         self.powerups = keep
         if self.wide_timer > 0:
             self.wide_timer -= 1
@@ -1323,81 +1298,68 @@ class BreakoutGame:
                 self.clear_paddle()
                 center = self.paddle_x + self.paddle_w // 2
                 self.paddle_w = PADDLE_WIDTH
-                self.paddle_x = clamp(
-                    center - self.paddle_w // 2, 0, WIDTH - self.paddle_w
-                )
+                self.paddle_x = clamp(center - self.paddle_w // 2, 0, WIDTH - self.paddle_w)
+        if self.slow_timer > 0:
+            self.slow_timer -= 1
 
-    def _start_round(self, show_hud=True):
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-        self.score = 0
+    def _new_level(self):
         self.paddle_x = (WIDTH - PADDLE_WIDTH) // 2
-        self.paddle_y = PLAY_HEIGHT - PADDLE_HEIGHT
         self.paddle_w = PADDLE_WIDTH
         self.wide_timer = 0
-        self.ball_x = WIDTH // 2
-        self.ball_y = PLAY_HEIGHT // 2
-        self.ball_dx = 1
-        self.ball_dy = -1
-        self.bricks = self.create_bricks()
+        self.slow_timer = 0
         self.powerups = []
-        display.clear()
-        self.draw_bricks()
-        self.draw_paddle()
-        self.draw_ball()
-        if show_hud:
-            display_score_and_time(0, force=True)
-        else:
-            draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        self.bricks = self.create_bricks()
+        self._reset_ball()
+        self._draw_field()
+
+    def _start_round(self, show_hud=True):
+        global game_over, global_score, game_result
+        game_over = False
+        global_score = 0
+        game_result = "LOST"
+        self.score = 0
+        self.level = 1
+        self.lives = 3
+        self._new_level()
+        self._draw_hud(show_hud)
 
     def _step_once(self, joystick, show_win=True, show_hud=True):
-        global game_over
-        c_button, _ = joystick.read_buttons()
+        global global_score
+        c_button, z_button = joystick.read_buttons()
         if c_button or game_over:
             return False
-
+        if z_button:
+            self.serve_timer = 0
+        self.update_paddle(joystick)
         self.update_ball()
         if game_over:
             return False
-        self.check_collision_with_bricks()
         self.update_powerups()
-        self.update_paddle(joystick)
-        if show_hud:
-            display_score_and_time(self.score)
-        else:
-            draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-
         if not self.bricks:
-            set_game_over_score(self.score, won=True)
-            if show_win:
-                show_center_message(
-                    ("YOU", "WON"), start_y=10, line_height=15, delay_ms=1500
-                )
-            return False
+            self.score += 50 * self.level
+            global_score = self.score
+            if self.level == len(self.LEVELS):
+                set_game_over_score(self.score, won=True)
+                self._draw_hud(show_hud)
+                if show_win:
+                    show_center_message(("YOU", "WON"), start_y=10,
+                                        line_height=15, delay_ms=1500)
+                return False
+            if self.level % 3 == 0:
+                self.lives = min(5, self.lives + 1)
+            self.level += 1
+            self._new_level()
+        self._draw_hud(show_hud)
         return True
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         self._start_round()
 
-        while True:
-            if not self._step_once(joystick):
-                return
-
-            sleep_ms(35)
-            maybe_collect(150)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        self._start_round()
-
-        def loop_iteration():
+        def step():
+            # The common result screen handles the completed campaign.
             return self._step_once(joystick, show_win=False)
 
-        await _run_game_loop_async(35, loop_iteration)
+        return step
 
 
 # ---------- Asteroids ----------
@@ -1407,15 +1369,17 @@ PIXEL_WIDTH = WIDTH
 PIXEL_HEIGHT = PLAY_HEIGHT
 
 
-class AsteroidGame:
+class AsteroidGame(FrameLoopGame):
     """
     ASTEROIDS
     Controls:
       - Left / Right: rotate ship
       - Up: thrust
       - Z: shoot
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 50
 
     _SHAPE_CACHE = None
 
@@ -1726,23 +1690,17 @@ class AsteroidGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(50, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(50, self._build_step(joystick))
-
 
 # ---------- Qix ----------
-class QixGame:
+class QixGame(FrameLoopGame):
     """
     QIX
     Controls:
       - Left / Right / Up / Down: move and draw boundary
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 35
 
     def __init__(self):
         self.height = PLAY_HEIGHT
@@ -1916,6 +1874,9 @@ class QixGame:
         global game_over, global_score
         game_over = False
         global_score = 0
+        self.level = 1
+        self.num_opponents = 1
+        self._level_started = None
         self.initialize_game()
 
         def step():
@@ -1923,6 +1884,13 @@ class QixGame:
             c_button, _ = joystick.read_buttons()
             if c_button or game_over:
                 return False
+            if self._level_started is not None:
+                if ticks_diff(ticks_ms(), self._level_started) >= 900:
+                    self.level += 1
+                    self.num_opponents = min(8, self.num_opponents + 1)
+                    self._level_started = None
+                    self.initialize_game()
+                return True
             self.move_player(joystick)
             self.move_opponent()
             if game_over:
@@ -1932,35 +1900,24 @@ class QixGame:
                 display.clear()
                 draw_text(6, 18, "LEVEL", 0, 255, 0)
                 draw_text(6, 33, str(self.level), 0, 255, 0)
-                sleep_ms(900)
-                self.level += 1
-                self.num_opponents += 1
-                if self.num_opponents > 8:
-                    self.num_opponents = 8
-                self.initialize_game()
+                self._level_started = ticks_ms()
             return True
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(35, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(35, self._build_step(joystick))
-
 
 # ---------- Tetris ----------
-class TetrisGame:
+class TetrisGame(FrameLoopGame):
     """
     TETRIS
     Controls:
       - Left / Right: move piece
       - Down: soft drop
       - Up / Z: rotate piece
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 35
 
     GRID_WIDTH = 16
     GRID_HEIGHT = 13
@@ -2145,24 +2102,18 @@ class TetrisGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(35, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(35, self._build_step(joystick))
-
 
 # ---------- Maze ----------
-class MazeGame:
+class MazeGame(FrameLoopGame):
     """
     MAZE
     Controls:
       - Left / Right / Up / Down: move player
       - Z: shoot
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 90
 
     WALL = 0
     PATH = 1
@@ -2481,7 +2432,7 @@ class MazeGame:
             keep_i += 1
         del self.projectiles[keep_i:]
 
-    def _build_step(self, joystick, win_delay_ms=1500):
+    def _build_step(self, joystick, win_delay_ms=0):
         global game_over, global_score
         game_over = False
         global_score = 0
@@ -2530,26 +2481,17 @@ class MazeGame:
         loop_iteration.won = False
         return loop_iteration
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(90, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        step = self._build_step(joystick, win_delay_ms=0)
-        await _run_game_loop_async(90, step)
-        if getattr(step, "won", False):
-            await sleep_ms_async(1500)
-
 
 # ---------- FLAPPY ----------
-class FlappyGame:
+class FlappyGame(FrameLoopGame):
     """
     FLAPPY
     Controls:
       - Z / Up: flap
-      - C: return to menu
+      - C: pause menu
     """
+
+    FRAME_MS = 35
 
     def __init__(self):
         self.reset()
@@ -2660,14 +2602,6 @@ class FlappyGame:
 
         return step
 
-    def main_loop(self, joystick):
-        _run_game_loop_sync(35, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        await _run_game_loop_async(35, self._build_step(joystick))
-
 
 class DodgeGame(FrameLoopGame):
     """
@@ -2675,7 +2609,7 @@ class DodgeGame(FrameLoopGame):
     Steuerung:
       - Links/Rechts: bewegen
       - Z: kurzer Dash in die letzte Richtung
-      - C: zurück ins Menü
+      - C: Pausenmenü
     """
 
     MAX_OBSTACLES = 12
@@ -2813,7 +2747,7 @@ class InvaderGame(FrameLoopGame):
     Controls:
       - Left/Right: move ship
       - Z: fire
-      - C: return to menu
+      - C: pause menu
     """
 
     FRAME_MS = 38
@@ -3169,7 +3103,6 @@ class InvaderGame(FrameLoopGame):
 
         global_score = self.score
         self._draw()
-        maybe_collect(100)
         return True
 
     def _build_step(self, joystick):

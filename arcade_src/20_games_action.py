@@ -1,4 +1,4 @@
-class RTypeGame:
+class RTypeGame(FrameLoopGame):
     """
     R-TYPE / GRADIUS MINI (Endlos-Side-Shooter)
     Steuerung:
@@ -6,6 +6,8 @@ class RTypeGame:
       - Z: schießen
       - C: zurück ins Menü
     """
+
+    FRAME_MS = 35
 
     # kleine Sinus-LUT (±4) für "wobble" Gegner ohne math.sin
     _SIN = (0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1)
@@ -307,98 +309,9 @@ class RTypeGame:
         # HUD
         display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display_score_and_time(0, force=True)
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, self.last_logic) < self.logic_ms:
-                sleep_ms(2)
-                continue
-            self.last_logic = now
-            self.frame += 1
-
-            # power timer
-            if self.power_t > 0:
-                self.power_t -= 1
-
-            # input
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            step = 2
-            if d == JOYSTICK_UP:
-                self.py -= step
-            elif d == JOYSTICK_DOWN:
-                self.py += step
-            elif d == JOYSTICK_LEFT:
-                self.px -= step
-            elif d == JOYSTICK_RIGHT:
-                self.px += step
-
-            # bounds
-            if self.px < 0:
-                self.px = 0
-            if self.px > WIDTH - self.pw - 1:
-                self.px = WIDTH - self.pw - 1
-            if self.py < 0:
-                self.py = 0
-            if self.py > PLAY_HEIGHT - self.ph:
-                self.py = PLAY_HEIGHT - self.ph
-
-            # shoot
-            if self.fire_cd > 0:
-                self.fire_cd -= 1
-            cd_min = 4 if self.power_t > 0 else 7
-            if z_button and self.fire_cd == 0 and len(self.bullets) < self.MAX_BULLETS:
-                # normal bullet
-                self.bullets.append([self.px + self.pw + 1, self.py + 1])
-                # powered double-shot
-                if self.power_t > 0 and len(self.bullets) < self.MAX_BULLETS:
-                    self.bullets.append([self.px + self.pw + 1, self.py])
-                self.fire_cd = cd_min
-
-            # spawn
-            self._difficulty_update()
-            if (
-                ticks_diff(now, self.last_spawn) >= self.spawn_ms
-                and len(self.enemies) < self.MAX_ENEMIES
-            ):
-                self.last_spawn = now
-                self._spawn_enemy()
-
-            # update world
-            self._update_stars()
-            self._update_powerups()
-            self._update_bullets()
-            self._bullet_hits()
-            self._update_enemies()
-
-            global_score = self.score
-            self._draw()
-
-            if self.frame % 80 == 0:
-                gc.collect()
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset()
         display_score_and_time(0, force=True)
@@ -417,7 +330,7 @@ class RTypeGame:
 
             # input
             d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                JOYSTICK_DIRECTIONS_4
             )
             step = 2
             if d == JOYSTICK_UP:
@@ -472,16 +385,18 @@ class RTypeGame:
             self._draw()
             return True
 
-        await _run_game_loop_async(35, loop_iteration)
+        return loop_iteration
 
 
-class PacmanGame:
+class PacmanGame(FrameLoopGame):
     """
     PACMAN-lite (Maze + Pellets + 2 Ghosts)
     Steuerung:
       - Stick: Richtung
       - C: zurück ins Menü
     """
+
+    FRAME_MS = 10
 
     W = 16
     H = 14
@@ -928,10 +843,9 @@ class PacmanGame:
         draw_text_small(46, PLAY_HEIGHT, "L" + str(self.level + 1), 120, 120, 120)
         display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset()
         display_score_and_time(0, force=True)
@@ -940,251 +854,130 @@ class PacmanGame:
         self._draw_background()
         self._draw()
 
-        while True:
-            c_button, _z = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-
-            # read input often
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d == JOYSTICK_UP:
-                self.want_dir = 0
-            elif d == JOYSTICK_DOWN:
-                self.want_dir = 1
-            elif d == JOYSTICK_LEFT:
-                self.want_dir = 2
-            elif d == JOYSTICK_RIGHT:
-                self.want_dir = 3
-
-            if ticks_diff(now, self.last_logic) >= self.logic_ms:
-                self.last_logic = now
-                self.frame += 1
-
-                old_px, old_py = self.px, self.py
-                old_ghosts = [(g[0], g[1]) for g in self.ghosts]
-                old_power = self.power_timer
-
-                if self.power_timer > 0:
-                    self.power_timer -= 1
-
-                self._move_player()
-                self._eat()
-                self._update_ghost_states()
-                self._move_ghosts()
-
-                if self._check_collisions():
-                    global_score = self.score
+        def frames():
+            global game_over, global_score
+            while True:
+                yield 0
+                c_button, _z = joystick.read_buttons()
+                if c_button:
+                    return
+                if game_over:
                     return
 
-                # win?
-                if self.pellet_count <= 0:
-                    self.score += 100 + self.level * 50
-                    global_score = self.score
-                    if self.level + 1 >= len(self.MAPS):
-                        show_center_message(
-                            ("YOU", "WON"),
-                            start_y=18,
-                            line_height=15,
-                            r=0,
-                            g=255,
-                            b=0,
-                            score=global_score,
-                            delay_ms=1300,
-                        )
+                now = ticks_ms()
+
+                # read input often
+                d = joystick.read_direction(
+                    JOYSTICK_DIRECTIONS_4
+                )
+                if d == JOYSTICK_UP:
+                    self.want_dir = 0
+                elif d == JOYSTICK_DOWN:
+                    self.want_dir = 1
+                elif d == JOYSTICK_LEFT:
+                    self.want_dir = 2
+                elif d == JOYSTICK_RIGHT:
+                    self.want_dir = 3
+
+                if ticks_diff(now, self.last_logic) >= self.logic_ms:
+                    self.last_logic = now
+                    self.frame += 1
+
+                    old_px, old_py = self.px, self.py
+                    old_ghosts = [(g[0], g[1]) for g in self.ghosts]
+                    old_power = self.power_timer
+
+                    if self.power_timer > 0:
+                        self.power_timer -= 1
+
+                    self._move_player()
+                    self._eat()
+                    self._update_ghost_states()
+                    self._move_ghosts()
+
+                    if self._check_collisions():
+                        global_score = self.score
                         return
-                    self.level += 1
-                    self._load_level()
-                    self._draw_background()
-                    self._draw()
-                    show_center_message(
-                        ("LVL", str(self.level + 1)),
-                        start_y=18,
-                        line_height=15,
-                        r=255,
-                        g=255,
-                        b=0,
-                        score=global_score,
-                        delay_ms=700,
-                    )
-                    self.last_logic = ticks_ms()
-                    self._drawn_bg = False
-                    self._dirty = True
-                    continue
 
-                global_score = self.score
-
-                # incremental redraw: old/new sprite cells without allocating a set
-                dirty = []
-
-                def add_dirty(cell):
-                    if cell not in dirty:
-                        dirty.append(cell)
-
-                add_dirty((old_px, old_py))
-                add_dirty((self.px, self.py))
-                for p in old_ghosts:
-                    add_dirty(p)
-                for g in self.ghosts:
-                    add_dirty((g[0], g[1]))
-                if (old_power > 0) != (self.power_timer > 0):
-                    for g in self.ghosts:
-                        add_dirty((g[0], g[1]))
-
-                self._draw_dirty_cells(dirty)
-
-                if self.frame % 90 == 0:
-                    gc.collect()
-
-            else:
-                sleep_ms(6)
-
-            if self._dirty:
-                self._draw()
-            else:
-                sleep_ms(8)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display_score_and_time(0, force=True)
-
-        # initial full draw
-        self._draw_background()
-        self._draw()
-
-        while True:
-            c_button, _z = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-
-            # read input often
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d == JOYSTICK_UP:
-                self.want_dir = 0
-            elif d == JOYSTICK_DOWN:
-                self.want_dir = 1
-            elif d == JOYSTICK_LEFT:
-                self.want_dir = 2
-            elif d == JOYSTICK_RIGHT:
-                self.want_dir = 3
-
-            if ticks_diff(now, self.last_logic) >= self.logic_ms:
-                self.last_logic = now
-                self.frame += 1
-
-                old_px, old_py = self.px, self.py
-                old_ghosts = [(g[0], g[1]) for g in self.ghosts]
-                old_power = self.power_timer
-
-                if self.power_timer > 0:
-                    self.power_timer -= 1
-
-                self._move_player()
-                self._eat()
-                self._update_ghost_states()
-                self._move_ghosts()
-
-                if self._check_collisions():
-                    global_score = self.score
-                    return
-
-                # win?
-                if self.pellet_count <= 0:
-                    self.score += 100 + self.level * 50
-                    global_score = self.score
-                    if self.level + 1 >= len(self.MAPS):
+                    # win?
+                    if self.pellet_count <= 0:
+                        self.score += 100 + self.level * 50
+                        global_score = self.score
+                        if self.level + 1 >= len(self.MAPS):
+                            show_center_message(
+                                ("YOU", "WON"),
+                                start_y=18,
+                                line_height=15,
+                                r=0,
+                                g=255,
+                                b=0,
+                                score=global_score,
+                            )
+                            yield 1300
+                            return
+                        self.level += 1
+                        self._load_level()
+                        self._draw_background()
+                        self._draw()
                         show_center_message(
-                            ("YOU", "WON"),
+                            ("LVL", str(self.level + 1)),
                             start_y=18,
                             line_height=15,
-                            r=0,
+                            r=255,
                             g=255,
                             b=0,
                             score=global_score,
                         )
-                        await asyncio.sleep(1.3)
-                        return
-                    self.level += 1
-                    self._load_level()
-                    self._draw_background()
-                    self._draw()
-                    show_center_message(
-                        ("LVL", str(self.level + 1)),
-                        start_y=18,
-                        line_height=15,
-                        r=255,
-                        g=255,
-                        b=0,
-                        score=global_score,
-                    )
-                    await asyncio.sleep(0.7)
-                    self.last_logic = ticks_ms()
-                    self._drawn_bg = False
-                    self._dirty = True
-                    continue
+                        yield 700
+                        self.last_logic = ticks_ms()
+                        self._drawn_bg = False
+                        self._dirty = True
+                        continue
 
-                global_score = self.score
+                    global_score = self.score
 
-                # incremental redraw: old/new sprite cells without allocating a set
-                dirty = []
+                    # incremental redraw: old/new sprite cells without allocating a set
+                    dirty = []
 
-                def add_dirty(cell):
-                    if cell not in dirty:
-                        dirty.append(cell)
+                    def add_dirty(cell):
+                        if cell not in dirty:
+                            dirty.append(cell)
 
-                add_dirty((old_px, old_py))
-                add_dirty((self.px, self.py))
-                for p in old_ghosts:
-                    add_dirty(p)
-                for g in self.ghosts:
-                    add_dirty((g[0], g[1]))
-                if (old_power > 0) != (self.power_timer > 0):
+                    add_dirty((old_px, old_py))
+                    add_dirty((self.px, self.py))
+                    for p in old_ghosts:
+                        add_dirty(p)
                     for g in self.ghosts:
                         add_dirty((g[0], g[1]))
+                    if (old_power > 0) != (self.power_timer > 0):
+                        for g in self.ghosts:
+                            add_dirty((g[0], g[1]))
 
-                self._draw_dirty_cells(dirty)
+                    self._draw_dirty_cells(dirty)
 
-                if self.frame % 90 == 0:
-                    try:
+                    if self.frame % 90 == 0:
                         gc.collect()
-                    except Exception:
-                        pass
 
-            else:
-                await asyncio.sleep(0.006)
+                else:
+                    yield 6
 
-            if self._dirty:
-                self._draw()
-            else:
-                await asyncio.sleep(0.008)
+                if self._dirty:
+                    self._draw()
+                else:
+                    yield 8
+
+        return _timed_game_step(frames())
 
 
-class CaveFlyGame:
+class CaveFlyGame(FrameLoopGame):
     """
     CAVE FLYER
     Steuerung:
       - Links/Rechts: seitlich durch die Höhle steuern
       - C: zurück ins Menü
     """
+
+    FRAME_MS = 33
 
     def __init__(self):
         self.reset()
@@ -1293,16 +1086,18 @@ class CaveFlyGame:
 
     def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
         self.reset()
-        display_score_and_time(0, force=True)
+        self._draw()
+        self._ready_at = ticks_add(ticks_ms(), 900)
 
         def step():
             global game_over, global_score
             c_button, z_button = joystick.read_buttons()
             if c_button:
                 return False
+            if ticks_diff(ticks_ms(), self._ready_at) < 0:
+                return True
             self.frame += 1
             d = joystick.read_direction([JOYSTICK_LEFT, JOYSTICK_RIGHT])
             move_amount = 2
@@ -1321,38 +1116,14 @@ class CaveFlyGame:
 
         return step
 
-    def main_loop(self, joystick):
-        step = self._build_step(joystick)
-        self._draw()
-        start_wait = ticks_ms()
-        while ticks_diff(ticks_ms(), start_wait) < 900:
-            c_button, _z_button = joystick.read_buttons()
-            if c_button:
-                return
-            sleep_ms(20)
-        _run_game_loop_sync(33, step)
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        step = self._build_step(joystick)
-        self._draw()
-        start_wait = ticks_ms()
-        while ticks_diff(ticks_ms(), start_wait) < 900:
-            c_button, _z_button = joystick.read_buttons()
-            if c_button:
-                return
-            await asyncio.sleep(0.020)
-        await _run_game_loop_async(33, step)
-
-
-class CentipedeGame:
+class CentipedeGame(FrameLoopGame):
     """
     CENTI
     Controls:
       - Directions: move in the bottom player zone
       - Z: fire upward
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Atari-inspired centipede shooter with mushrooms, segmented enemies, and
     wave progression on a compact 32x29 logical grid.
     """
@@ -1403,7 +1174,7 @@ class CentipedeGame:
 
     def _move_player(self, joystick):
         d = joystick.read_direction(
-            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            JOYSTICK_DIRECTIONS_4
         )
         dx, dy = direction_to_delta(d)
         if dx or dy:
@@ -1504,6 +1275,7 @@ class CentipedeGame:
 
     def _build_step(self, joystick):
         self.reset()
+        begin_game(0)
 
         def step():
             c_button, z_button = joystick.read_buttons()
@@ -1528,25 +1300,15 @@ class CentipedeGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class ArtilleryGame:
+class ArtilleryGame(FrameLoopGame):
     """
     ARTILL
     Controls:
       - Up / Down: aim barrel
       - Left / Right: adjust power
       - Z: fire
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Turn-based artillery duel with wind, terrain craters, and a CPU gunner.
     """
 
@@ -1706,6 +1468,7 @@ class ArtilleryGame:
 
     def _build_step(self, joystick):
         self.reset()
+        begin_game(0)
 
         def step():
             c_button, z_button = joystick.read_buttons()
@@ -1713,7 +1476,7 @@ class ArtilleryGame:
                 return False
             if self.turn == "player" and not self.shell:
                 d = joystick.read_direction(
-                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+                    JOYSTICK_DIRECTIONS_4
                 )
                 if d == JOYSTICK_UP:
                     self.angle = min(80, self.angle + 1)
@@ -1734,16 +1497,6 @@ class ArtilleryGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
 
 class WormsGame(FrameLoopGame):
     """
@@ -1752,7 +1505,7 @@ class WormsGame(FrameLoopGame):
       - Left / Right: move active worm, or adjust power while holding Z
       - Up / Down: aim
       - Z: fire
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Tiny turn-based worms/artillery game with teams and destructible terrain.
     """
 
@@ -2056,12 +1809,12 @@ class WormsGame(FrameLoopGame):
     def _read_turn_input(self, joystick, joystick_fire):
         if self.players_mode == "two" and self.turn_team == 0:
             d, fire = read_wasd_input(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT],
+                JOYSTICK_DIRECTIONS_4,
                 debounce=True,
             )
             return d, fire
         d = joystick.read_direction(
-            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            JOYSTICK_DIRECTIONS_4
         )
         return d, joystick_fire
 
@@ -2108,14 +1861,14 @@ class WormsGame(FrameLoopGame):
         return step
 
 
-class BattlezoneGame:
+class BattlezoneGame(FrameLoopGame):
     """
     BTLZON
     Controls:
       - Left / Right: rotate
       - Up / Down: drive
       - Z: fire
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Vector-style first-person tank combat with radar, shells, rocks, and waves.
     """
 
@@ -2205,7 +1958,7 @@ class BattlezoneGame:
 
     def _move_player(self, joystick):
         d = joystick.read_direction(
-            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
+            JOYSTICK_DIRECTIONS_4
         )
         if d == JOYSTICK_LEFT:
             self._rotate_view(0.095)
@@ -2414,6 +2167,7 @@ class BattlezoneGame:
 
     def _build_step(self, joystick):
         self.reset()
+        begin_game(0)
 
         def step():
             c_button, z_button = joystick.read_buttons()
@@ -2432,24 +2186,14 @@ class BattlezoneGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class KeenGame:
+class KeenGame(FrameLoopGame):
     """
     KEEN
     Controls:
       - Left / Right: run
       - Up or Z: jump
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Compact Keen-style platformer with gems, keys, enemies, and exits.
     """
 
@@ -2746,6 +2490,7 @@ class KeenGame:
 
     def _build_step(self, joystick):
         self.reset()
+        begin_game(0)
 
         def step():
             c_button, z_button = joystick.read_buttons()
@@ -2762,18 +2507,8 @@ class KeenGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
-
-
-class PitfallGame:
+class PitfallGame(FrameLoopGame):
     """
     PITFALL MINI (Endlos-Runner)
     Steuerung:
@@ -2781,6 +2516,8 @@ class PitfallGame:
       - Z oder Stick UP: springen
       - C: zurück ins Menü
     """
+
+    FRAME_MS = 33
 
     def __init__(self):
         self.reset()
@@ -2973,134 +2710,9 @@ class PitfallGame:
 
         display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        self._ensure_obstacles()
-
-        frame_ms = 33
-        last_frame = ticks_ms()
-
-        while not game_over:
-            try:
-                c_button, z_button = joystick.read_buttons()
-                if c_button:
-                    return
-
-                now = ticks_ms()
-                if ticks_diff(now, last_frame) < frame_ms:
-                    sleep_ms(2)
-                    continue
-                last_frame = now
-                self.frame += 1
-
-                # difficulty
-                self.speed = 1.2 + (self.distance / 800.0)
-                if self.speed > 2.6:
-                    self.speed = 2.6
-
-                # scroll obstacles
-                for o in self.obstacles:
-                    o["x"] -= self.speed
-
-                # cleanup
-                self.obstacles = [
-                    o for o in self.obstacles if (o.get("x", 0) + o.get("w", 1)) > -2
-                ]
-                self._ensure_obstacles()
-
-                # move
-                d = joystick.read_direction(
-                    [JOYSTICK_LEFT, JOYSTICK_RIGHT, JOYSTICK_UP]
-                )
-                if d == JOYSTICK_LEFT:
-                    self.px = max(0, self.px - 2)
-                elif d == JOYSTICK_RIGHT:
-                    self.px = min(WIDTH - self.pw, self.px + 2)
-
-                # jump with variable height
-                if self.jump_cd > 0:
-                    self.jump_cd -= 1
-
-                jump_pressed = z_button or d == JOYSTICK_UP
-                if jump_pressed and self.on_ground and self.jump_cd == 0:
-                    if not self.jump_charging:
-                        self.jump_charging = True
-                        self.jump_start_frame = self.frame
-                    else:
-                        # cap charge: auto-release after max frames
-                        hold_frames = self.frame - self.jump_start_frame
-                        if hold_frames >= self.jump_charge_max_frames:
-                            self.vy = self.jump_max_power
-                            self.on_ground = False
-                            self.jump_cd = 10
-                            self.jump_charging = False
-                elif not jump_pressed and self.jump_charging:
-                    # release: jump with height based on hold duration
-                    hold_frames = self.frame - self.jump_start_frame
-                    if hold_frames < 0:
-                        hold_frames = 0
-                    if hold_frames > self.jump_charge_max_frames:
-                        hold_frames = self.jump_charge_max_frames
-
-                    jump_power = self.jump_min_power - (hold_frames * 0.35)
-                    # clamp: don't exceed max power
-                    if jump_power < self.jump_max_power:
-                        jump_power = self.jump_max_power
-
-                    self.vy = jump_power
-                    self.on_ground = False
-                    self.jump_cd = 10
-                    self.jump_charging = False
-
-                # physics
-                in_pit = self._player_in_pit()
-                self.vy += 0.45
-                self.py += self.vy
-
-                if not in_pit:
-                    if (self.py + self.ph - 1) >= self.ground_y:
-                        self.py = float(self.ground_y - self.ph + 1)
-                        self.vy = 0.0
-                        self.on_ground = True
-                    else:
-                        self.on_ground = False
-                else:
-                    self.on_ground = False
-
-                # collect
-                self._check_treasure()
-
-                # lose
-                if self._check_snake_collision() or self.py > PLAY_HEIGHT + 2:
-                    global_score = self.score
-                    game_over = True
-                    return
-
-                # score
-                self.distance += self.speed
-                self.score = int(self.distance / 6) + self.bonus
-                global_score = self.score
-
-                self._render()
-
-                if self.frame % 40 == 0:
-                    gc.collect()
-
-            except RestartProgram:
-                return
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset()
         self._ensure_obstacles()
@@ -3195,20 +2807,19 @@ class PitfallGame:
             self._render()
             return True
 
-        try:
-            await _run_game_loop_async(33, loop_iteration)
-        except RestartProgram:
-            return
+        return loop_iteration
 
 
-class Game2048:
+class Game2048(FrameLoopGame):
     """
     2048
     Controls:
       - Left / Right / Up / Down: slide tiles
       - Z (hold): reset board
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     """
+
+    FRAME_MS = 10
 
     # 2048 visual and timing constants (class-scoped)
     TILE_PX = 12
@@ -3260,7 +2871,6 @@ class Game2048:
             self.display_score_and_time = _g("display_score_and_time")
             self.ticks_ms = _g("ticks_ms")
             self.ticks_diff = _g("ticks_diff")
-            self.sleep_ms = _g("sleep_ms")
         except Exception:
             # fall back to module globals if lookup fails
             self.display = globals().get("display")
@@ -3269,7 +2879,6 @@ class Game2048:
             self.display_score_and_time = globals().get("display_score_and_time")
             self.ticks_ms = globals().get("ticks_ms")
             self.ticks_diff = globals().get("ticks_diff")
-            self.sleep_ms = globals().get("sleep_ms")
 
         # use fixed 4x4 grid for 2048 (avoid conflicts with global GRID_W/GIRD_H)
         self.GRID_W = 4
@@ -3459,182 +3068,90 @@ class Game2048:
         if self.display_score_and_time:
             self.display_score_and_time(self.score)
 
-    def main_loop(self, joystick):
-        """Main loop for 2048: process input and apply moves."""
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset()
         self.ticks_ms()
 
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            now = self.ticks_ms()
+        def frames():
+            global game_over, global_score
+            while True:
+                yield 0
+                c_button, z_button = joystick.read_buttons()
+                if c_button:
+                    return
+                now = self.ticks_ms()
 
-            if z_button:
-                if self._z_down_ms is None:
-                    self._z_down_ms = now
-                    self._z_armed = True
-                elif (
-                    self._z_armed
-                    and self.ticks_diff(now, self._z_down_ms) >= self.A_LONG_MS
-                ):
-                    self._z_armed = False
-                    self.reset()
-            else:
-                if self._z_down_ms is not None:
-                    self._z_down_ms = None
-                    self._z_armed = False
-
-            if self.ticks_diff(now, self._last_input) < self.INPUT_MS:
-                self.sleep_ms(5)
-                continue
-
-            if self.ticks_diff(now, self._input_locked_until) < 0:
-                self.sleep_ms(5)
-                continue
-
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT]
-            )
-            if d is not None:
-                # Map JOYSTICK_* tokens to numeric directions expected by
-                # _move(): 0=UP, 1=RIGHT, 2=DOWN, 3=LEFT
-                dir_map = {
-                    JOYSTICK_UP: 0,
-                    JOYSTICK_RIGHT: 1,
-                    JOYSTICK_DOWN: 2,
-                    JOYSTICK_LEFT: 3,
-                }
-                dir_idx = dir_map.get(d, None)
-                if dir_idx is not None:
-                    moved = self._move(dir_idx)
+                if z_button:
+                    if self._z_down_ms is None:
+                        self._z_down_ms = now
+                        self._z_armed = True
+                    elif (
+                        self._z_armed
+                        and self.ticks_diff(now, self._z_down_ms) >= self.A_LONG_MS
+                    ):
+                        self._z_armed = False
+                        self.reset()
                 else:
-                    moved = False
-                if moved:
-                    self._draw_board(full=False)
-                    self._input_locked_until = now + self.MOVE_LOCK_MS
-                    if not self._any_moves_possible():
-                        if self.display:
-                            self.display.clear()
-                        draw_centered_text_lines(("LOSE",), start_y=18, r=255, g=0, b=0)
-                        set_game_over_score(self.score, won=False)
-                        if self.display_score_and_time:
-                            self.display_score_and_time(self.score, force=True)
-                        self.sleep_ms(1000)
-                        return
-                    elif self.victory:
-                        if self.display:
-                            self.display.clear()
-                        draw_centered_text_lines(("WIN!",), start_y=18, r=0, g=255, b=0)
-                        set_game_over_score(self.score, won=True)
-                        if self.display_score_and_time:
-                            self.display_score_and_time(self.score, force=True)
-                        self.sleep_ms(700)
-                        return
-                self._last_input = now
+                    if self._z_down_ms is not None:
+                        self._z_down_ms = None
+                        self._z_armed = False
 
-            self.sleep_ms(2)
-            if (now & 0x3FF) == 0:
-                gc.collect()
+                if self.ticks_diff(now, self._last_input) < self.INPUT_MS:
+                    yield 5
+                    continue
 
-    async def main_loop_async(self, joystick):
-        """Async/cooperative version of the 2048 main loop for browsers.
+                if self.ticks_diff(now, self._input_locked_until) < 0:
+                    yield 5
+                    continue
 
-        Uses `await asyncio.sleep()` instead of blocking `sleep_ms()` so the
-        event loop remains responsive in WASM/pygbag environments.
-        """
-        if asyncio is None:
-            return self.main_loop(joystick)
+                d = joystick.read_direction(
+                    [JOYSTICK_UP, JOYSTICK_RIGHT, JOYSTICK_DOWN, JOYSTICK_LEFT]
+                )
+                if d is not None:
+                    # Map JOYSTICK_* tokens to numeric directions expected by
+                    # _move(): 0=UP, 1=RIGHT, 2=DOWN, 3=LEFT
+                    dir_map = {
+                        JOYSTICK_UP: 0,
+                        JOYSTICK_RIGHT: 1,
+                        JOYSTICK_DOWN: 2,
+                        JOYSTICK_LEFT: 3,
+                    }
+                    dir_idx = dir_map.get(d, None)
+                    if dir_idx is not None:
+                        moved = self._move(dir_idx)
+                    else:
+                        moved = False
+                    if moved:
+                        self._draw_board(full=False)
+                        self._input_locked_until = now + self.MOVE_LOCK_MS
+                        if not self._any_moves_possible():
+                            if self.display:
+                                self.display.clear()
+                            draw_centered_text_lines(("LOSE",), start_y=18, r=255, g=0, b=0)
+                            set_game_over_score(self.score, won=False)
+                            if self.display_score_and_time:
+                                self.display_score_and_time(self.score, force=True)
+                            yield 1000
+                            return
+                        elif self.victory:
+                            if self.display:
+                                self.display.clear()
+                            draw_centered_text_lines(("WIN!",), start_y=18, r=0, g=255, b=0)
+                            set_game_over_score(self.score, won=True)
+                            if self.display_score_and_time:
+                                self.display_score_and_time(self.score, force=True)
+                            yield 700
+                            return
+                    self._last_input = now
 
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        self.ticks_ms()
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            now = self.ticks_ms()
-
-            if z_button:
-                if self._z_down_ms is None:
-                    self._z_down_ms = now
-                    self._z_armed = True
-                elif (
-                    self._z_armed
-                    and self.ticks_diff(now, self._z_down_ms) >= self.A_LONG_MS
-                ):
-                    self._z_armed = False
-                    self.reset()
-            else:
-                if self._z_down_ms is not None:
-                    self._z_down_ms = None
-                    self._z_armed = False
-
-            if self.ticks_diff(now, self._last_input) < self.INPUT_MS:
-                await asyncio.sleep(0.005)
-                continue
-
-            if self.ticks_diff(now, self._input_locked_until) < 0:
-                await asyncio.sleep(0.005)
-                continue
-
-            d = joystick.read_direction(
-                [
-                    JOYSTICK_UP,
-                    JOYSTICK_RIGHT,
-                    JOYSTICK_DOWN,
-                    JOYSTICK_LEFT,
-                ]
-            )
-            if d is not None:
-                dir_map = {
-                    JOYSTICK_UP: 0,
-                    JOYSTICK_RIGHT: 1,
-                    JOYSTICK_DOWN: 2,
-                    JOYSTICK_LEFT: 3,
-                }
-                dir_idx = dir_map.get(d, None)
-                if dir_idx is not None:
-                    moved = self._move(dir_idx)
-                else:
-                    moved = False
-                if moved:
-                    self._draw_board(full=False)
-                    self._input_locked_until = now + self.MOVE_LOCK_MS
-                    if not self._any_moves_possible():
-                        if self.display:
-                            self.display.clear()
-                        draw_centered_text_lines(("LOSE",), start_y=18, r=255, g=0, b=0)
-                        set_game_over_score(self.score, won=False)
-                        if self.display_score_and_time:
-                            self.display_score_and_time(self.score, force=True)
-                        await asyncio.sleep(1.0)
-                        return
-                    elif self.victory:
-                        if self.display:
-                            self.display.clear()
-                        draw_centered_text_lines(("WIN!",), start_y=18, r=0, g=255, b=0)
-                        set_game_over_score(self.score, won=True)
-                        if self.display_score_and_time:
-                            self.display_score_and_time(self.score, force=True)
-                        await asyncio.sleep(0.7)
-                        return
-                self._last_input = now
-
-            await asyncio.sleep(0.002)
-            if (now & 0x3FF) == 0:
-                try:
+                yield 2
+                if (now & 0x3FF) == 0:
                     gc.collect()
-                except Exception:
-                    pass
+
+        return _timed_game_step(frames())
 
 
 try:
@@ -3650,15 +3167,17 @@ except ImportError:
         return x
 
 
-class LocoMotionGame:
+class LocoMotionGame(FrameLoopGame):
     """
     LOCO-MOTION
     Controls:
       - Left / Right / Up / Down: move cursor
       - Z (tap): rotate tile under cursor
       - Z (tap on start/end or hold): start / abort train run
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     """
+
+    FRAME_MS = 10
 
     # LocoMotion constants
     RL_TILE = 8
@@ -4210,8 +3729,8 @@ class LocoMotionGame:
     def _step_train(self):
         """Advance the train along the rails one logical step.
 
-        Returns True while the train is still running, False when it
-        reaches the end or an error occurs.
+        Returns True while running, False on derailment, and None when the
+        caller should show the level-complete message before loading a level.
         """
         global game_over, global_score
 
@@ -4258,9 +3777,6 @@ class LocoMotionGame:
             draw_text(10, 18, "OK!", 0, 255, 0)
             draw_text(6, 32, "LVL " + str(self.level_idx + 1), 255, 255, 0)
             display_score_and_time(global_score, force=True)
-            sleep_ms(1100)
-
-            self.load_level(self.level_idx + 1, reset_score=False)
             return None
 
         next_dir = self._choose_next_dir(nxt_bits, incoming, self.tr_dir)
@@ -4272,62 +3788,6 @@ class LocoMotionGame:
         self.tr_dir = next_dir
         return True
 
-    async def _step_train_async(self):
-        """Async version of _step_train() for browser/pygbag runtimes."""
-        global global_score
-        self.tr_prog += self.tr_speed
-        if self.tr_prog < self.RL_TILE:
-            return True
-        self.tr_prog -= self.RL_TILE
-        cur = self._get(self.tr_cx, self.tr_cy)
-        cur_bits = cur & 0x0F
-        out_bit = self._dir_to_bit(self.tr_dir)
-        if not (cur_bits & out_bit):
-            return False
-        nx = self.tr_cx
-        ny = self.tr_cy
-        if self.tr_dir == 0:
-            ny -= 1
-        elif self.tr_dir == 2:
-            ny += 1
-        elif self.tr_dir == 3:
-            nx -= 1
-        else:
-            nx += 1
-        if nx < 0 or nx >= self.RL_W or ny < 0 or ny >= self.RL_H:
-            return False
-        nxt = self._get(nx, ny)
-        nxt_flag = nxt & 0xF0
-        nxt_bits = nxt & 0x0F
-        incoming = self._opp_dir(self.tr_dir)
-        if not (nxt_bits & self._dir_to_bit(incoming)):
-            return False
-        if nx == self.end_x and ny == self.end_y and (nxt_flag == self.TFLAG_END):
-            self.score += 100 + (self.level_idx * 25)
-            global_score = self.score
-            display.clear()
-            draw_text(10, 18, "OK!", 0, 255, 0)
-            draw_text(6, 32, "LVL " + str(self.level_idx + 1), 255, 255, 0)
-            display_score_and_time(global_score, force=True)
-            await sleep_ms_async(1100)
-            self.load_level(self.level_idx + 1, reset_score=False)
-            return None
-        next_dir = self._choose_next_dir(nxt_bits, incoming, self.tr_dir)
-        if next_dir is None:
-            return False
-        self.tr_cx = nx
-        self.tr_cy = ny
-        self.tr_dir = next_dir
-        return True
-
-    async def _fail_derail_async(self):
-        """Async derail handler."""
-        set_game_over_score(self.score, won=False)
-        display.clear()
-        draw_text(6, 18, "DERAIL", 255, 0, 0)
-        display_score_and_time(global_score, force=True)
-        await sleep_ms_async(900)
-        self._abort_run()
 
     def _fail_derail(self):
         """Display a derail message and return to the shared game-over flow."""
@@ -4335,248 +3795,132 @@ class LocoMotionGame:
         display.clear()
         draw_text(6, 18, "DERAIL", 255, 0, 0)
         display_score_and_time(global_score, force=True)
-        sleep_ms(900)
-        self._abort_run()
 
-    def main_loop(self, joystick):
-        """Main loop for LocoMotion: handle editing and running modes."""
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.load_level(self.level_idx, reset_score=False)
         self._last_input_ms = ticks_ms()
         last_frame = ticks_ms()
 
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
+        def frames():
+            global game_over, global_score
+            nonlocal last_frame
+            while True:
+                yield 0
+                c_button, z_button = joystick.read_buttons()
+                if c_button:
+                    return
+                if game_over:
+                    return
 
-            now = ticks_ms()
+                now = ticks_ms()
 
-            if z_button:
-                if self._z_down_ms is None:
-                    self._z_down_ms = now
-                    self._z_armed = True
+                if z_button:
+                    if self._z_down_ms is None:
+                        self._z_down_ms = now
+                        self._z_armed = True
+                    else:
+                        if (
+                            self._z_armed
+                            and ticks_diff(now, self._z_down_ms) >= self.Z_LONG_MS
+                        ):
+                            self._z_armed = False
+                            if not self.mode_run:
+                                self._start_run()
+                            else:
+                                self._abort_run()
                 else:
-                    if (
-                        self._z_armed
-                        and ticks_diff(now, self._z_down_ms) >= self.Z_LONG_MS
-                    ):
+                    if self._z_down_ms is not None:
+                        held = ticks_diff(now, self._z_down_ms)
+                        if held < self.Z_LONG_MS and self._z_armed:
+                            if self.mode_run:
+                                self._abort_run()
+                            elif self._cursor_on_endpoint():
+                                self._start_run()
+                            else:
+                                self._rotate_tile_at_cursor()
+                        self._z_down_ms = None
                         self._z_armed = False
-                        if not self.mode_run:
-                            self._start_run()
-                        else:
-                            self._abort_run()
-            else:
-                if self._z_down_ms is not None:
-                    held = ticks_diff(now, self._z_down_ms)
-                    if held < self.Z_LONG_MS and self._z_armed:
-                        if self.mode_run:
-                            self._abort_run()
-                        elif self._cursor_on_endpoint():
-                            self._start_run()
-                        else:
-                            self._rotate_tile_at_cursor()
-                    self._z_down_ms = None
-                    self._z_armed = False
 
-            if self.mode_run:
-                if ticks_diff(now, last_frame) < self.FRAME_MS_RUN:
-                    sleep_ms(2)
-                    continue
-                last_frame = now
+                if self.mode_run:
+                    if ticks_diff(now, last_frame) < self.FRAME_MS_RUN:
+                        yield 2
+                        continue
+                    last_frame = now
 
-                if self.last_tr_px is not None:
-                    self._repair_under_train(self.last_tr_px, self.last_tr_py)
+                    if self.last_tr_px is not None:
+                        self._repair_under_train(self.last_tr_px, self.last_tr_py)
 
-                st = self._step_train()
-                if st is None:
-                    last_frame = ticks_ms()
-                    continue
-                if st is False:
-                    self._fail_derail()
-                    last_frame = ticks_ms()
-                    continue
+                    st = self._step_train()
+                    if st is None:
+                        yield 1100
+                        self.load_level(self.level_idx + 1, reset_score=False)
+                        last_frame = ticks_ms()
+                        continue
+                    if st is False:
+                        self._fail_derail()
+                        yield 900
+                        self._abort_run()
+                        last_frame = ticks_ms()
+                        continue
 
-                px, py = self._train_pixel_pos()
-                self._draw_train(px, py)
-                self.last_tr_px, self.last_tr_py = px, py
+                    px, py = self._train_pixel_pos()
+                    self._draw_train(px, py)
+                    self.last_tr_px, self.last_tr_py = px, py
 
-                self._hud()
-                display_score_and_time(self.score)
-                global_score = self.score
+                    self._hud()
+                    display_score_and_time(self.score)
+                    global_score = self.score
 
-                if (now & 0x3FF) == 0:
-                    gc.collect()
-
-                continue
-
-            if ticks_diff(now, self._last_input_ms) < self.EDIT_INPUT_MS:
-                sleep_ms(5)
-                continue
-
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if not d:
-                sleep_ms(5)
-                continue
-
-            ox, oy = self.cur_x, self.cur_y
-            if d == JOYSTICK_LEFT and self.cur_x > 0:
-                self.cur_x -= 1
-            elif d == JOYSTICK_RIGHT and self.cur_x < self.RL_W - 1:
-                self.cur_x += 1
-            elif d == JOYSTICK_UP and self.cur_y > 0:
-                self.cur_y -= 1
-            elif d == JOYSTICK_DOWN and self.cur_y < self.RL_H - 1:
-                self.cur_y += 1
-
-            if (ox, oy) != (self.cur_x, self.cur_y):
-                self._repair_cursor_area(ox, oy)
-                self._draw_cursor()
-                self._hud()
-
-            self._last_input_ms = now
-            maybe_collect(120)
-
-    async def main_loop_async(self, joystick):
-        """Async/cooperative version of the LocoMotion loop for browsers.
-
-        Uses `await asyncio.sleep()` instead of blocking `sleep_ms()` so the
-        event loop remains responsive in WASM/pygbag environments.
-        """
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.load_level(self.level_idx, reset_score=False)
-        self._last_input_ms = ticks_ms()
-        last_frame = ticks_ms()
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-
-            if z_button:
-                if self._z_down_ms is None:
-                    self._z_down_ms = now
-                    self._z_armed = True
-                else:
-                    if (
-                        self._z_armed
-                        and ticks_diff(now, self._z_down_ms) >= self.Z_LONG_MS
-                    ):
-                        self._z_armed = False
-                        if not self.mode_run:
-                            self._start_run()
-                        else:
-                            self._abort_run()
-            else:
-                if self._z_down_ms is not None:
-                    held = ticks_diff(now, self._z_down_ms)
-                    if held < self.Z_LONG_MS and self._z_armed:
-                        if self.mode_run:
-                            self._abort_run()
-                        elif self._cursor_on_endpoint():
-                            self._start_run()
-                        else:
-                            self._rotate_tile_at_cursor()
-                    self._z_down_ms = None
-                    self._z_armed = False
-
-            if self.mode_run:
-                if ticks_diff(now, last_frame) < self.FRAME_MS_RUN:
-                    await asyncio.sleep(0.002)
-                    continue
-                last_frame = now
-
-                if self.last_tr_px is not None:
-                    self._repair_under_train(self.last_tr_px, self.last_tr_py)
-
-                st = await self._step_train_async()
-                if st is None:
-                    last_frame = ticks_ms()
-                    continue
-                if st is False:
-                    await self._fail_derail_async()
-                    last_frame = ticks_ms()
-                    continue
-
-                px, py = self._train_pixel_pos()
-                self._draw_train(px, py)
-                self.last_tr_px, self.last_tr_py = px, py
-
-                self._hud()
-                display_score_and_time(self.score)
-                global_score = self.score
-
-                if (now & 0x3FF) == 0:
-                    try:
+                    if (now & 0x3FF) == 0:
                         gc.collect()
-                    except Exception:
-                        pass
 
-                continue
+                    continue
 
-            if ticks_diff(now, self._last_input_ms) < self.EDIT_INPUT_MS:
-                await asyncio.sleep(0.005)
-                continue
+                if ticks_diff(now, self._last_input_ms) < self.EDIT_INPUT_MS:
+                    yield 5
+                    continue
 
-            d = joystick.read_direction(
-                [
-                    JOYSTICK_UP,
-                    JOYSTICK_DOWN,
-                    JOYSTICK_LEFT,
-                    JOYSTICK_RIGHT,
-                ]
-            )
-            if not d:
-                await asyncio.sleep(0.005)
-                continue
+                d = joystick.read_direction(
+                    JOYSTICK_DIRECTIONS_4
+                )
+                if not d:
+                    yield 5
+                    continue
 
-            ox, oy = self.cur_x, self.cur_y
-            if d == JOYSTICK_LEFT and self.cur_x > 0:
-                self.cur_x -= 1
-            elif d == JOYSTICK_RIGHT and self.cur_x < self.RL_W - 1:
-                self.cur_x += 1
-            elif d == JOYSTICK_UP and self.cur_y > 0:
-                self.cur_y -= 1
-            elif d == JOYSTICK_DOWN and self.cur_y < self.RL_H - 1:
-                self.cur_y += 1
+                ox, oy = self.cur_x, self.cur_y
+                if d == JOYSTICK_LEFT and self.cur_x > 0:
+                    self.cur_x -= 1
+                elif d == JOYSTICK_RIGHT and self.cur_x < self.RL_W - 1:
+                    self.cur_x += 1
+                elif d == JOYSTICK_UP and self.cur_y > 0:
+                    self.cur_y -= 1
+                elif d == JOYSTICK_DOWN and self.cur_y < self.RL_H - 1:
+                    self.cur_y += 1
 
-            if (ox, oy) != (self.cur_x, self.cur_y):
-                self._repair_cursor_area(ox, oy)
-                self._draw_cursor()
-                self._hud()
+                if (ox, oy) != (self.cur_x, self.cur_y):
+                    self._repair_cursor_area(ox, oy)
+                    self._draw_cursor()
+                    self._hud()
 
-            self._last_input_ms = now
-            try:
+                self._last_input_ms = now
                 maybe_collect(120)
-            except Exception:
-                pass
+
+        return _timed_game_step(frames())
 
 
-class OthelloGame:
+class OthelloGame(FrameLoopGame):
     """
     REVERSI / OTHELLO
     Controls:
       - Left / Right / Up / Down: move cursor
       - Z: place disc
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     """
+
+    FRAME_MS = 10
 
     BOARD_SIZE = 8
     CELL_SIZE = 6
@@ -4838,172 +4182,96 @@ class OthelloGame:
         self.score = p1 - p2
         return True
 
-    def main_loop(self, joystick):
-        """Main loop for Othello: handle input, apply moves, and update."""
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset()
 
         frame_ms = 80
         last_frame = ticks_ms()
 
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
+        def frames():
+            global game_over, global_score
+            nonlocal last_frame
+            while True:
+                yield 0
+                c_button, z_button = joystick.read_buttons()
+                if c_button:
+                    return
+                if game_over:
+                    return
 
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                sleep_ms(5)
-                continue
-            last_frame = now
-
-            if self.game_finished:
-                display.clear()
-                p1, p2 = self.count_discs()
-                txt = "WIN" if p1 > p2 else ("LOSE" if p1 < p2 else "DRAW")
-                draw_text(8, 18, txt, 255, 255, 255)
-                display_score_and_time(self.score, force=True)
-                global_score = self.score
-                sleep_ms(1500)
-                game_over = True
-                return
-
-            if self.current_player == self.P1:
-                d = joystick.read_direction(
-                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-                )
-
-                if d == JOYSTICK_LEFT and self.cur_x > 0:
-                    self.cur_x -= 1
-                    self._needs_render = True
-                elif d == JOYSTICK_RIGHT and self.cur_x < self.BOARD_SIZE - 1:
-                    self.cur_x += 1
-                    self._needs_render = True
-                elif d == JOYSTICK_UP and self.cur_y > 0:
-                    self.cur_y -= 1
-                    self._needs_render = True
-                elif d == JOYSTICK_DOWN and self.cur_y < self.BOARD_SIZE - 1:
-                    self.cur_y += 1
-                    self._needs_render = True
-
-                if z_button and self.is_valid_move(self.cur_x, self.cur_y, self.P1):
-                    self.apply_move(self.cur_x, self.cur_y, self.P1)
-                    self.current_player = self.P2
-                    self._needs_render = True
-
-            else:
-                if self.cpu_move():
-                    self._needs_render = True
-                self.current_player = self.P1
-                sleep_ms(120)
-
-            if not self.valid_moves_for(self.current_player):
-                if self.check_game_end():
+                now = ticks_ms()
+                if ticks_diff(now, last_frame) < frame_ms:
+                    yield 5
                     continue
-                self.current_player = (
-                    self.P1 if self.current_player == self.P2 else self.P2
-                )
+                last_frame = now
 
-            if self._needs_render:
-                self.render(full=True)
-            global_score = self.score
+                if self.game_finished:
+                    display.clear()
+                    p1, p2 = self.count_discs()
+                    txt = "WIN" if p1 > p2 else ("LOSE" if p1 < p2 else "DRAW")
+                    draw_text(8, 18, txt, 255, 255, 255)
+                    display_score_and_time(self.score, force=True)
+                    global_score = self.score
+                    yield 1500
+                    game_over = True
+                    return
 
-    async def main_loop_async(self, joystick):
-        """Async/cooperative Othello loop for browsers (pygbag).
+                if self.current_player == self.P1:
+                    d = joystick.read_direction(
+                        JOYSTICK_DIRECTIONS_4
+                    )
 
-        Mirrors `main_loop` but yields with `await asyncio.sleep()` to keep
-        the event loop responsive in WASM environments.
-        """
-        if asyncio is None:
-            return self.main_loop(joystick)
+                    if d == JOYSTICK_LEFT and self.cur_x > 0:
+                        self.cur_x -= 1
+                        self._needs_render = True
+                    elif d == JOYSTICK_RIGHT and self.cur_x < self.BOARD_SIZE - 1:
+                        self.cur_x += 1
+                        self._needs_render = True
+                    elif d == JOYSTICK_UP and self.cur_y > 0:
+                        self.cur_y -= 1
+                        self._needs_render = True
+                    elif d == JOYSTICK_DOWN and self.cur_y < self.BOARD_SIZE - 1:
+                        self.cur_y += 1
+                        self._needs_render = True
 
-        global game_over, global_score
-        game_over = False
-        global_score = 0
+                    if z_button and self.is_valid_move(self.cur_x, self.cur_y, self.P1):
+                        self.apply_move(self.cur_x, self.cur_y, self.P1)
+                        self.current_player = self.P2
+                        self._needs_render = True
 
-        self.reset()
+                else:
+                    if self.cpu_move():
+                        self._needs_render = True
+                    self.current_player = self.P1
+                    yield 120
 
-        frame_ms = 80
-        last_frame = ticks_ms()
+                if not self.valid_moves_for(self.current_player):
+                    if self.check_game_end():
+                        continue
+                    self.current_player = (
+                        self.P1 if self.current_player == self.P2 else self.P2
+                    )
 
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                await asyncio.sleep(0.005)
-                continue
-            last_frame = now
-
-            if self.game_finished:
-                display.clear()
-                p1, p2 = self.count_discs()
-                txt = "WIN" if p1 > p2 else ("LOSE" if p1 < p2 else "DRAW")
-                draw_text(8, 18, txt, 255, 255, 255)
-                display_score_and_time(self.score, force=True)
+                if self._needs_render:
+                    self.render(full=True)
                 global_score = self.score
-                await asyncio.sleep(1.5)
-                game_over = True
-                return
 
-            if self.current_player == self.P1:
-                d = joystick.read_direction(
-                    [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-                )
-
-                if d == JOYSTICK_LEFT and self.cur_x > 0:
-                    self.cur_x -= 1
-                    self._needs_render = True
-                elif d == JOYSTICK_RIGHT and self.cur_x < self.BOARD_SIZE - 1:
-                    self.cur_x += 1
-                    self._needs_render = True
-                elif d == JOYSTICK_UP and self.cur_y > 0:
-                    self.cur_y -= 1
-                    self._needs_render = True
-                elif d == JOYSTICK_DOWN and self.cur_y < self.BOARD_SIZE - 1:
-                    self.cur_y += 1
-                    self._needs_render = True
-
-                if z_button and self.is_valid_move(self.cur_x, self.cur_y, self.P1):
-                    self.apply_move(self.cur_x, self.cur_y, self.P1)
-                    self.current_player = self.P2
-                    self._needs_render = True
-
-            else:
-                if self.cpu_move():
-                    self._needs_render = True
-                self.current_player = self.P1
-                await asyncio.sleep(0.12)
-
-            if not self.valid_moves_for(self.current_player):
-                if self.check_game_end():
-                    continue
-                self.current_player = (
-                    self.P1 if self.current_player == self.P2 else self.P2
-                )
-
-            if self._needs_render:
-                self.render(full=True)
-            global_score = self.score
+        return _timed_game_step(frames())
 
 
-class SokobanGame:
+class SokobanGame(FrameLoopGame):
     """
     SOKOBAN
     Controls:
       - Left / Right / Up / Down: move player / push crate
       - Z: undo last move
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     """
+
+    FRAME_MS = 10
 
     # --- Sokoban constants & levels (kept as class attributes) ---
     SOK_TILE = 4
@@ -5360,204 +4628,108 @@ class SokobanGame:
         self._draw_player()
         display_score_and_time(self.moves)
 
-    def main_loop(self, joystick):
-        """Main loop for Sokoban: handle input, moves, undo, and rendering."""
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset_level(reset_all=True)
         self._last_input_ms = ticks_ms()
 
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
+        def frames():
+            global game_over, global_score
+            while True:
+                yield 0
+                c_button, z_button = joystick.read_buttons()
+                if c_button:
+                    return
+                if game_over:
+                    return
 
-            now = ticks_ms()
+                now = ticks_ms()
 
-            if z_button and ticks_diff(now, self._last_input_ms) >= self.input_ms:
-                if self._undo():
-                    self.render(full=True)
-                self._last_input_ms = now
-                maybe_collect(120)
-                continue
-
-            if ticks_diff(now, self._last_input_ms) < self.input_ms:
-                sleep_ms(5)
-                continue
-
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if not d:
-                sleep_ms(5)
-                continue
-
-            dx = dy = 0
-            if d == JOYSTICK_LEFT:
-                dx = -1
-            elif d == JOYSTICK_RIGHT:
-                dx = 1
-            elif d == JOYSTICK_UP:
-                dy = -1
-            elif d == JOYSTICK_DOWN:
-                dy = 1
-
-            moved = False
-            if dx or dy:
-                moved = self._try_move(dx, dy)
-
-            if moved:
-                self.render(full=True)
-                self._last_input_ms = now
-
-                if self._is_solved():
-                    finish_score = max(
-                        1,
-                        1000
-                        - self.moves
-                        + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100,
-                    )
-                    self.score += finish_score
-                    global_score = self.score
-                    display.clear()
-                    draw_text(4, 16, "SOLVED", 0, 255, 0)
-                    draw_text(
-                        4,
-                        30,
-                        "LVL " + str((self.level_idx % len(self.SOK_LEVELS)) + 1),
-                        255,
-                        255,
-                        0,
-                    )
-                    display_score_and_time(global_score, force=True)
-                    sleep_ms(1300)
-                    if self.level_idx + 1 >= len(self.SOK_LEVELS):
-                        set_game_over_score(self.score, won=True)
-                        return
-                    self.level_idx += 1
-                    self.reset_level(reset_all=False)
-                    self._last_input_ms = ticks_ms()
-                    continue
-
-            else:
-                self._last_input_ms = now - (self.input_ms // 2)
-
-            maybe_collect(140)
-
-    async def main_loop_async(self, joystick):
-        """Async/cooperative Sokoban loop for browsers (pygbag).
-
-        Mirrors `main_loop` but yields with `await asyncio.sleep()` instead of
-        blocking `sleep_ms()` so the event loop remains responsive.
-        """
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset_level(reset_all=True)
-        self._last_input_ms = ticks_ms()
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return
-            if game_over:
-                return
-
-            now = ticks_ms()
-
-            if z_button and ticks_diff(now, self._last_input_ms) >= self.input_ms:
-                if self._undo():
-                    self.render(full=True)
-                self._last_input_ms = now
-                try:
+                if z_button and ticks_diff(now, self._last_input_ms) >= self.input_ms:
+                    if self._undo():
+                        self.render(full=True)
+                    self._last_input_ms = now
                     maybe_collect(120)
-                except Exception:
-                    pass
-                continue
-
-            if ticks_diff(now, self._last_input_ms) < self.input_ms:
-                await asyncio.sleep(0.005)
-                continue
-
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if not d:
-                await asyncio.sleep(0.005)
-                continue
-
-            dx = dy = 0
-            if d == JOYSTICK_LEFT:
-                dx = -1
-            elif d == JOYSTICK_RIGHT:
-                dx = 1
-            elif d == JOYSTICK_UP:
-                dy = -1
-            elif d == JOYSTICK_DOWN:
-                dy = 1
-
-            moved = False
-            if dx or dy:
-                moved = self._try_move(dx, dy)
-
-            if moved:
-                self.render(full=True)
-                self._last_input_ms = now
-
-                if self._is_solved():
-                    finish_score = max(
-                        1,
-                        1000
-                        - self.moves
-                        + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100,
-                    )
-                    self.score += finish_score
-                    global_score = self.score
-                    display.clear()
-                    draw_text(4, 16, "SOLVED", 0, 255, 0)
-                    draw_text(
-                        4,
-                        30,
-                        "LVL " + str((self.level_idx % len(self.SOK_LEVELS)) + 1),
-                        255,
-                        255,
-                        0,
-                    )
-                    display_score_and_time(global_score, force=True)
-                    await asyncio.sleep(1.3)
-                    if self.level_idx + 1 >= len(self.SOK_LEVELS):
-                        set_game_over_score(self.score, won=True)
-                        return
-                    self.level_idx += 1
-                    self.reset_level(reset_all=False)
-                    self._last_input_ms = ticks_ms()
                     continue
 
-            else:
-                self._last_input_ms = now - (self.input_ms // 2)
+                if ticks_diff(now, self._last_input_ms) < self.input_ms:
+                    yield 5
+                    continue
 
-            try:
+                d = joystick.read_direction(
+                    JOYSTICK_DIRECTIONS_4
+                )
+                if not d:
+                    yield 5
+                    continue
+
+                dx = dy = 0
+                if d == JOYSTICK_LEFT:
+                    dx = -1
+                elif d == JOYSTICK_RIGHT:
+                    dx = 1
+                elif d == JOYSTICK_UP:
+                    dy = -1
+                elif d == JOYSTICK_DOWN:
+                    dy = 1
+
+                moved = False
+                if dx or dy:
+                    moved = self._try_move(dx, dy)
+
+                if moved:
+                    self.render(full=True)
+                    self._last_input_ms = now
+
+                    if self._is_solved():
+                        finish_score = max(
+                            1,
+                            1000
+                            - self.moves
+                            + ((self.level_idx % len(self.SOK_LEVELS)) + 1) * 100,
+                        )
+                        self.score += finish_score
+                        global_score = self.score
+                        display.clear()
+                        draw_text(4, 16, "SOLVED", 0, 255, 0)
+                        draw_text(
+                            4,
+                            30,
+                            "LVL " + str((self.level_idx % len(self.SOK_LEVELS)) + 1),
+                            255,
+                            255,
+                            0,
+                        )
+                        display_score_and_time(global_score, force=True)
+                        yield 1300
+                        if self.level_idx + 1 >= len(self.SOK_LEVELS):
+                            set_game_over_score(self.score, won=True)
+                            return
+                        self.level_idx += 1
+                        self.reset_level(reset_all=False)
+                        self._last_input_ms = ticks_ms()
+                        continue
+
+                else:
+                    self._last_input_ms = now - (self.input_ms // 2)
+
                 maybe_collect(140)
-            except Exception:
-                pass
+
+        return _timed_game_step(frames())
 
 
-class BejeweledGame:
+class BejeweledGame(FrameLoopGame):
     """Simple Bejeweled-like match-3 puzzle.
 
     Controls:
       - Stick: move cursor (cell-by-cell)
       - Z: select / swap (select one tile, then another adjacent to swap)
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     """
+
+    FRAME_MS = 8
 
     w = 8
     h = 8
@@ -5639,7 +4811,8 @@ class BejeweledGame:
         return matches
 
     def _collapse_and_refill(self):
-        self._collapse_and_refill_animated(delay_ms=0)
+        for unused in self._collapse_and_refill_animated(delay_ms=0):
+            pass
 
     def _draw_tile_at_px(self, x, y_px, value):
         gx = x * self.tile_w
@@ -5713,8 +4886,7 @@ class BejeweledGame:
 
         for frame_px in range(0, max_drop + 1):
             self._draw_falling_tiles(movers, frame_px)
-            if delay_ms > 0:
-                sleep_ms(delay_ms)
+            yield max(0, delay_ms)
 
         self.grid = new_grid
 
@@ -5764,8 +4936,7 @@ class BejeweledGame:
                 self._draw_hud(force=True)
                 display_flush()
                 maybe_collect(10)
-                if delay_ms > 0:
-                    sleep_ms(delay_ms)
+                yield max(0, delay_ms)
 
             # Now actually remove and score
             for rx, ry in removed_coords:
@@ -5773,7 +4944,7 @@ class BejeweledGame:
             # score: 10 per gem removed
             self.score += len(removed_coords) * 10
             # collapse and refill pixel by pixel, then loop to catch cascades
-            self._collapse_and_refill_animated(
+            yield from self._collapse_and_refill_animated(
                 delay_ms=delay_ms // 4 if delay_ms > 0 else 0
             )
             self._full_redraw = True
@@ -5856,10 +5027,9 @@ class BejeweledGame:
         self._needs_redraw = False
         display_flush()
 
-    def main_loop(self, joystick):
+    def _build_step(self, joystick):
         global game_over, global_score
-        game_over = False
-        global_score = 0
+        begin_game(0)
 
         self.reset()
         display.clear()
@@ -5867,141 +5037,70 @@ class BejeweledGame:
         logic_ms = 90
         self._needs_redraw = True
 
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                global_score = self.score
-                game_over = True
-                return
+        def frames():
+            global game_over, global_score
+            nonlocal last_logic
+            while True:
+                yield 0
+                c_button, z_button = joystick.read_buttons()
+                if c_button:
+                    global_score = self.score
+                    game_over = True
+                    return
 
-            now = ticks_ms()
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d and ticks_diff(now, self._last_move) >= self._move_delay:
-                if d == JOYSTICK_UP:
-                    self.cursor_y = max(0, self.cursor_y - 1)
-                elif d == JOYSTICK_DOWN:
-                    self.cursor_y = min(self.rows - 1, self.cursor_y + 1)
-                elif d == JOYSTICK_LEFT:
-                    self.cursor_x = max(0, self.cursor_x - 1)
-                elif d == JOYSTICK_RIGHT:
-                    self.cursor_x = min(self.cols - 1, self.cursor_x + 1)
-                self._last_move = now
-                self._needs_redraw = True
-
-            if z_button and ticks_diff(now, last_logic) >= 0:
-                # select or attempt swap
-                if self.sel is None:
-                    self.sel = (self.cursor_x, self.cursor_y)
+                now = ticks_ms()
+                d = joystick.read_direction(
+                    JOYSTICK_DIRECTIONS_4
+                )
+                if d and ticks_diff(now, self._last_move) >= self._move_delay:
+                    if d == JOYSTICK_UP:
+                        self.cursor_y = max(0, self.cursor_y - 1)
+                    elif d == JOYSTICK_DOWN:
+                        self.cursor_y = min(self.rows - 1, self.cursor_y + 1)
+                    elif d == JOYSTICK_LEFT:
+                        self.cursor_x = max(0, self.cursor_x - 1)
+                    elif d == JOYSTICK_RIGHT:
+                        self.cursor_x = min(self.cols - 1, self.cursor_x + 1)
+                    self._last_move = now
                     self._needs_redraw = True
-                else:
-                    sx, sy = self.sel
-                    cx, cy = self.cursor_x, self.cursor_y
-                    if abs(sx - cx) + abs(sy - cy) == 1:
-                        # adjacent -> try swap
-                        self._swap_tiles((sx, sy), (cx, cy))
-                        if self._find_matches():
-                            # consume matches
-                            self._remove_matches_and_score()
-                        else:
-                            # revert
-                            self._swap_tiles((sx, sy), (cx, cy))
-                        self.sel = None
-                        self._needs_redraw = True
-                    else:
-                        # new selection
+
+                if z_button and ticks_diff(now, last_logic) >= 0:
+                    # select or attempt swap
+                    if self.sel is None:
                         self.sel = (self.cursor_x, self.cursor_y)
                         self._needs_redraw = True
-                # wait until released
-                while joystick.read_buttons()[1]:
-                    sleep_ms(10)
-
-            # regular match processing (in case cascades happen)
-            if ticks_diff(now, last_logic) >= logic_ms:
-                last_logic = now
-                # ensure no leftover matches
-                self._remove_matches_and_score()
-
-            if self._needs_redraw:
-                self._render()
-
-            maybe_collect(60)
-            sleep_ms(8)
-
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        global game_over, global_score
-        game_over = False
-        global_score = 0
-
-        self.reset()
-        display.clear()
-        last_logic = ticks_ms()
-        logic_ms = 90
-        self._needs_redraw = True
-
-        while True:
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                global_score = self.score
-                game_over = True
-                return
-
-            now = ticks_ms()
-            d = joystick.read_direction(
-                [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-            )
-            if d and ticks_diff(now, self._last_move) >= self._move_delay:
-                if d == JOYSTICK_UP:
-                    self.cursor_y = max(0, self.cursor_y - 1)
-                elif d == JOYSTICK_DOWN:
-                    self.cursor_y = min(self.rows - 1, self.cursor_y + 1)
-                elif d == JOYSTICK_LEFT:
-                    self.cursor_x = max(0, self.cursor_x - 1)
-                elif d == JOYSTICK_RIGHT:
-                    self.cursor_x = min(self.cols - 1, self.cursor_x + 1)
-                self._last_move = now
-                self._needs_redraw = True
-
-            if z_button and ticks_diff(now, last_logic) >= 0:
-                # select or attempt swap
-                if self.sel is None:
-                    self.sel = (self.cursor_x, self.cursor_y)
-                    self._needs_redraw = True
-                else:
-                    sx, sy = self.sel
-                    cx, cy = self.cursor_x, self.cursor_y
-                    if abs(sx - cx) + abs(sy - cy) == 1:
-                        # adjacent -> try swap
-                        self._swap_tiles((sx, sy), (cx, cy))
-                        if self._find_matches():
-                            # consume matches
-                            self._remove_matches_and_score(delay_ms=0)
-                        else:
-                            # revert
-                            self._swap_tiles((sx, sy), (cx, cy))
-                        self.sel = None
-                        self._needs_redraw = True
                     else:
-                        # new selection
-                        self.sel = (self.cursor_x, self.cursor_y)
-                        self._needs_redraw = True
-                # wait until released
-                while joystick.read_buttons()[1]:
-                    await asyncio.sleep(0.01)
+                        sx, sy = self.sel
+                        cx, cy = self.cursor_x, self.cursor_y
+                        if abs(sx - cx) + abs(sy - cy) == 1:
+                            # adjacent -> try swap
+                            self._swap_tiles((sx, sy), (cx, cy))
+                            if self._find_matches():
+                                # consume matches
+                                yield from self._remove_matches_and_score()
+                            else:
+                                # revert
+                                self._swap_tiles((sx, sy), (cx, cy))
+                            self.sel = None
+                            self._needs_redraw = True
+                        else:
+                            # new selection
+                            self.sel = (self.cursor_x, self.cursor_y)
+                            self._needs_redraw = True
+                    # wait until released
+                    while joystick.read_buttons()[1]:
+                        yield 10
 
-            # regular match processing (in case cascades happen)
-            if ticks_diff(now, last_logic) >= logic_ms:
-                last_logic = now
-                # ensure no leftover matches
-                self._remove_matches_and_score(delay_ms=0)
+                # regular match processing (in case cascades happen)
+                if ticks_diff(now, last_logic) >= logic_ms:
+                    last_logic = now
+                    # ensure no leftover matches
+                    yield from self._remove_matches_and_score()
 
-            if self._needs_redraw:
-                self._render()
+                if self._needs_redraw:
+                    self._render()
 
-            maybe_collect(60)
-            await asyncio.sleep(0.008)
+                maybe_collect(60)
+                yield 8
+
+        return _timed_game_step(frames())

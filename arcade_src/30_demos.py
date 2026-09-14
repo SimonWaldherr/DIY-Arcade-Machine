@@ -1,6 +1,8 @@
 class CpuPlayerJoystick:
     """State-aware CPU controls for game attract demos."""
 
+    is_demo = True
+
     def __init__(self, real_joystick, game_name, game, duration_ms=9000):
         self.real = real_joystick
         self.name = game_name
@@ -174,6 +176,55 @@ class CpuPlayerJoystick:
                 best = d
         return best
 
+    def _play_tower_defense(self):
+        """Build a small paid defense, then let actual waves play out."""
+        g = self.game
+        if g.wave_active:
+            if g.enemies:
+                g.cursor_x, g.cursor_y = g._point_to_cell(g.enemies[0][0], g.enemies[0][1])
+                g._update_camera()
+            return
+        if g.campaign_complete:
+            return
+        if len(g.towers) < 4:
+            # Gun, sniper and frost cost exactly the initial 60 coins.
+            kind = (0, 3, 2, 0)[len(g.towers)]
+            if g.money < g.TOWER_TYPES[kind][1]:
+                kind = 0
+            if g.money >= g.TOWER_TYPES[kind][1]:
+                route = g.open_route if g.open_level else g.route_cells
+                road = set(route)
+                rng = g.TOWER_TYPES[kind][2]
+                best, best_score = None, 0
+                stride = max(1, len(route) // 32)
+                for y in range(g.GRID_H):
+                    for x in range(g.GRID_W):
+                        if (x, y) in road or (x, y) in g.blocked_cells or g._tower_at(x, y):
+                            continue
+                        tx, ty = g._cell_center(x, y)
+                        score = 0
+                        for index in range(0, len(route), stride):
+                            rx, ry = g._cell_center(*route[index])
+                            if (rx - tx) ** 2 + (ry - ty) ** 2 <= rng * rng:
+                                score += 2 + (len(route) - index) * 4 // len(route)
+                        if score > best_score:
+                            best, best_score = (x, y), score
+                if best is not None:
+                    g.cursor_x, g.cursor_y = best
+                    g.selected_tower = kind
+                    if g._try_build_or_upgrade():
+                        g._update_camera()
+                        return
+        # Reinvest earned bounties before the next wave; use the same prices,
+        # upgrade limits and map relocation refunds as a human player.
+        for tower in g.towers:
+            if tower[2] < 4 and g.money >= g._upgrade_cost(tower):
+                g.cursor_x, g.cursor_y = tower[0], tower[1]
+                if g._try_build_or_upgrade():
+                    g._update_camera()
+                    return
+        g._start_wave()
+
     def _compute(self):
         now = ticks_ms()
         if ticks_diff(now, self._last) < 55:
@@ -184,7 +235,9 @@ class CpuPlayerJoystick:
         n = self.name
         d = None
 
-        if hasattr(g, "ball_x") and hasattr(g, "paddle_x"):
+        if n == "TWRDEF" and hasattr(g, "_start_wave"):
+            self._play_tower_defense()
+        elif hasattr(g, "ball_x") and hasattr(g, "paddle_x"):
             target = float(g.ball_x)
             if getattr(g, "ball_dy", 0) > 0:
                 target = float(g.ball_x)
@@ -366,7 +419,7 @@ class CpuPlayerJoystick:
         return self.read_buttons()[1]
 
 
-class DemosGame:
+class DemosGame(FrameLoopGame):
     """
     DEMOS
     Controls:
@@ -802,6 +855,10 @@ class DemosGame:
         self._winmaze_path_phase = 0
 
         self._game_demo_name = None
+        self._live_game = None
+        self._live_cpu = None
+        self._live_step = None
+        self._live_last_frame = 0
         self._game_demo_selected_ms = 0
         self._last_sound_ms = 0
 
@@ -3034,73 +3091,42 @@ class DemosGame:
         self._draw_clock_overlay()
         display_score_and_time(0)
 
-    def _handle_game_demo_entry(self, name, joystick):
+    def _step_game_demo(self, name, joystick):
+        """Advance a CPU game one frame, never nest another blocking game loop."""
+        global game_over, global_score
         now = ticks_ms()
         if self._game_demo_name != name:
             self._game_demo_name = name
             self._game_demo_selected_ms = now
             self._draw_game_demo_card(name)
-            return False
-        if ticks_diff(now, self._game_demo_selected_ms) < self._game_demo_wait_ms:
-            return False
-        self._run_game_demo_sync(name, joystick)
-        self._advance_demo(1, randomize=self.random_order)
-        return True
-
-    async def _handle_game_demo_entry_async(self, name, joystick):
-        now = ticks_ms()
-        if self._game_demo_name != name:
-            self._game_demo_name = name
-            self._game_demo_selected_ms = now
-            self._draw_game_demo_card(name)
-            try:
-                display_flush()
-            except Exception:
-                pass
-            return False
-        if ticks_diff(now, self._game_demo_selected_ms) < self._game_demo_wait_ms:
-            return False
-        await self._run_game_demo_async(name, joystick)
-        self._advance_demo(1, randomize=self.random_order)
-        return True
-
-    def _run_game_demo_sync(self, name, joystick):
-        cls = self._game_demo_class(name)
-        if cls is None:
             return
-        game = cls()
-        cpu = CpuPlayerJoystick(joystick, name, game, duration_ms=self.slideshow_ms)
+        if ticks_diff(now, self._game_demo_selected_ms) < self._game_demo_wait_ms:
+            return
+        if self._live_step is None:
+            cls = self._game_demo_class(name)
+            if cls is None:
+                self._advance_demo(1, randomize=self.random_order)
+                return
+            self._live_game = cls()
+            self._live_cpu = CpuPlayerJoystick(joystick, name, self._live_game,
+                                               duration_ms=self.slideshow_ms)
+            begin_game(0)
+            self._live_step = self._live_game._build_step(self._live_cpu)
+            self._live_last_frame = ticks_add(now, -self._live_game.FRAME_MS)
+        if ticks_diff(now, self._live_last_frame) < self._live_game.FRAME_MS:
+            return
+        self._live_last_frame = now
         try:
-            game.main_loop(cpu)
+            running = self._live_step()
         except RestartProgram:
             raise
         except Exception:
+            running = False
             reset_menu_display(0)
-        finally:
-            self._reset_demo_state()
-            display.clear()
-            _wait_for_primary_release(joystick, timeout_ms=500)
-
-    async def _run_game_demo_async(self, name, joystick):
-        cls = self._game_demo_class(name)
-        if cls is None:
-            return
-        game = cls()
-        cpu = CpuPlayerJoystick(joystick, name, game, duration_ms=self.slideshow_ms)
-        try:
-            if hasattr(game, "main_loop_async"):
-                await game.main_loop_async(cpu)
-            else:
-                game.main_loop(cpu)
-        except RestartProgram:
-            raise
-        except Exception:
-            reset_menu_display(0)
-        finally:
-            self._reset_demo_state()
-            display.clear()
-            await _wait_for_primary_release_async(joystick, timeout_ms=500)
-            await yield_runtime(0)
+        if not running:
+            game_over = False
+            global_score = 0
+            self._advance_demo(1, randomize=self.random_order)
 
     def _ensure_demo_initialized(self, demo, joystick=None):
         if self._init:
@@ -3276,67 +3302,33 @@ class DemosGame:
         game_over = False
         global_score = 0
 
-    def main_loop(self, joystick):
+    FRAME_MS = 10
+
+    def _build_step(self, joystick):
         self._prepare_demo_loop()
+        self._reset_demo_state()
         last_frame = ticks_ms()
 
-        while True:
-            c_button, _ = joystick.read_buttons()
+        def step():
+            nonlocal last_frame
+            c_button, unused_z = joystick.read_buttons()
             if c_button:
-                return
-
+                return False
             self._select_prev_next_demo(joystick)
             self._maybe_auto_advance_demo()
+            if not self.demos:
+                return False
             demo = self.demos[self.idx]
             if demo.startswith("G:"):
-                self._handle_game_demo_entry(demo[2:], joystick)
-                last_frame = ticks_ms()
-                sleep_ms(10)
-                continue
-
-            frame_ms = self._frame_ms_for_demo(demo)
+                self._step_game_demo(demo[2:], joystick)
+                return True
             now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                sleep_ms(1)
-                continue
+            if ticks_diff(now, last_frame) < self._frame_ms_for_demo(demo):
+                return True
             last_frame = now
             self._frame += 1
             self._step_current_demo(joystick)
             self._draw_clock_overlay()
-            display_flush()
-            maybe_collect(120)
+            return True
 
-    async def main_loop_async(self, joystick):
-        """Async version for pygbag: yields with asyncio.sleep()."""
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        self._prepare_demo_loop()
-        last_frame = ticks_ms()
-
-        while True:
-            c_button, _ = joystick.read_buttons()
-            if c_button:
-                return
-
-            self._select_prev_next_demo(joystick)
-            self._maybe_auto_advance_demo()
-            demo = self.demos[self.idx]
-            if demo.startswith("G:"):
-                await self._handle_game_demo_entry_async(demo[2:], joystick)
-                last_frame = ticks_ms()
-                await asyncio.sleep(0.010)
-                continue
-
-            frame_ms = self._frame_ms_for_demo(demo)
-            now = ticks_ms()
-            if ticks_diff(now, last_frame) < frame_ms:
-                await asyncio.sleep(0.001)
-                continue
-            last_frame = now
-            self._frame += 1
-            self._step_current_demo(joystick)
-            self._draw_clock_overlay()
-            display_flush()
-            maybe_collect(120)
-            await asyncio.sleep(0)
+        return step

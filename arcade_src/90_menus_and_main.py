@@ -496,10 +496,12 @@ class GameSelect:
     async def _run_game_instance(self, game):
         # Prefer async loops when available so pygbag/browser frames keep rendering.
         if asyncio is not None and hasattr(game, "main_loop_async"):
-            await game.main_loop_async(self.joystick)
+            action = await game.main_loop_async(self.joystick)
         else:
-            game.main_loop(self.joystick)
+            action = game.main_loop(self.joystick)
+        await _wait_for_primary_release_async(self.joystick)
         await yield_runtime(0)
+        return action
 
     async def _handle_game_over(self, game_name):
         # Highscore prompts live here so every game can just set global_score.
@@ -628,7 +630,12 @@ class GameSelect:
                 if game_cls is None:
                     break
                 game = self._make_game_instance(game_name, game_cls)
-                await self._run_game_instance(game)
+                action = await self._run_game_instance(game)
+                if action == "RESTART":
+                    continue
+                if action == "EXIT":
+                    game_over = False
+                    break
 
                 if game_over:
                     if await self._handle_game_over(game_name) == "RETRY":

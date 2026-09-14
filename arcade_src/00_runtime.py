@@ -197,6 +197,13 @@ refresh_runtime_config()
 
 _boot_log("constants")
 
+_ACTIVE_GAME_SESSION = None
+
+
+def raw_ticks_ms():
+    """Wall-clock ticks for input and rendering, including while a game is paused."""
+    return time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
+
 
 def sleep_ms(ms):
     try:
@@ -212,7 +219,7 @@ def sleep_ms(ms):
 
 
 def ticks_ms():
-    now = time.ticks_ms() if hasattr(time, "ticks_ms") else int(time.time() * 1000)
+    now = raw_ticks_ms()
     # Desktop: auto-present at ~60 Hz even if the game loop doesn't sleep
     # after drawing (many legacy loops use ticks_ms/ticks_diff for pacing).
     # FrameLoopGame instances manage their own single present at the end of a
@@ -226,7 +233,8 @@ def ticks_ms():
                 display_flush()
         except Exception:
             pass
-    return now
+    session = _ACTIVE_GAME_SESSION
+    return session.game_time(now) if session is not None else now
 
 
 def ticks_diff(a, b):
@@ -405,31 +413,33 @@ async def yield_runtime(delay=0):
         pass
 
 
-def _run_game_loop_sync(frame_ms, loop_fn):
-    """Small sync counterpart to _run_game_loop_async for games with frame callbacks."""
+def _execute_game_frame(loop_fn):
+    """One callback, one optional present, with exception-safe frame ownership."""
     global _FRAME_PRESENT_MANAGED
-    last_frame = ticks_ms()
+    previous = _FRAME_PRESENT_MANAGED
+    _FRAME_PRESENT_MANAGED = True
+    try:
+        keep_running = loop_fn()
+        if getattr(getattr(loop_fn, "__self__", None), "needs_present", True):
+            display_flush()
+        return keep_running
+    finally:
+        _FRAME_PRESENT_MANAGED = previous
+
+
+def _run_game_loop_sync(frame_ms, loop_fn):
+    """Pace shared callbacks using wall time so paused menus keep receiving input."""
+    last_frame = raw_ticks_ms()
     while True:
-        now = ticks_ms()
+        now = raw_ticks_ms()
         if ticks_diff(now, last_frame) < frame_ms:
-            # Pacing must not present a static framebuffer every 4 ms.  A
-            # frame will be flushed below after the game has actually drawn.
             if hasattr(time, "sleep_ms"):
                 time.sleep_ms(4)
             else:
                 time.sleep(0.004)
             continue
         last_frame = now
-        _FRAME_PRESENT_MANAGED = True
-        try:
-            keep_running = loop_fn()
-            try:
-                display_flush()
-            except Exception:
-                pass
-        finally:
-            _FRAME_PRESENT_MANAGED = False
-        if not keep_running:
+        if not _execute_game_frame(loop_fn):
             return
         maybe_collect(150)
 
@@ -445,81 +455,22 @@ def reset_menu_display(score=0):
 
 
 async def _run_game_loop_async(frame_ms, loop_fn):
-    """
-    Generic async game loop runner with frame pacing for pygbag compatibility.
-
-    Eliminates code duplication across all game main_loop_async() methods by
-    centralizing frame pacing, asyncio.sleep() handling, and GC collection logic.
-    Provides cooperative multitasking via asyncio.sleep() and frame pacing via
-    ticks_ms/ticks_diff. Automatically falls back to sync when asyncio unavailable.
-
-    Usage Example:
-    ==========================================
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-
-        # Setup game state
-        display.clear()
-        self.init_game()
-        display_score_and_time(0, force=True)
-
-        # Define one frame of game logic
-        def loop_iteration():
-            # Handle input
-            c_button, z_button = joystick.read_buttons()
-            if c_button:
-                return False  # Exit loop
-
-            # Update and render game
-            self.update(joystick)
-            self.draw()
-            display_score_and_time(self.score)
-
-            return True  # Continue loop
-
-        # Run game with frame pacing (45ms per frame)
-        await _run_game_loop_async(45, loop_iteration)
-    ==========================================
-
-    Args:
-        frame_ms (int): Target frame time in milliseconds (e.g., 45, 35, 60)
-        loop_fn (callable): Function to run each frame.
-                           Return False to exit loop, True to continue.
-                           Should not be async.
-    """
+    """The same frame callback as hardware, with cooperative browser pacing."""
     if asyncio is None:
-        # Fallback: sync mode (MicroPython on hardware)
-        while loop_fn():
-            pass
-        return
-
-    # Async mode: frame pacing with asyncio.sleep()
-    global _FRAME_PRESENT_MANAGED
-    last_frame = ticks_ms()
+        return _run_game_loop_sync(frame_ms, loop_fn)
+    last_frame = raw_ticks_ms()
     while True:
-        now = ticks_ms()
+        now = raw_ticks_ms()
         if ticks_diff(now, last_frame) < frame_ms:
             await asyncio.sleep(0.005)
             continue
         last_frame = now
-
-        _FRAME_PRESENT_MANAGED = True
-        try:
-            keep_running = loop_fn()
-            try:
-                display_flush()
-            except Exception:
-                pass
-            if not keep_running:
-                return
-        finally:
-            _FRAME_PRESENT_MANAGED = False
-
-        try:
-            maybe_collect(150)
-        except Exception:
-            pass
+        if not _execute_game_frame(loop_fn):
+            return
+        maybe_collect(150)
+        # Slow frames must still give the browser time to deliver input and
+        # paint. Pacing alone never yields when every frame exceeds its budget.
+        await asyncio.sleep(0)
 
 
 # ---------- Display ----------
@@ -1018,7 +969,7 @@ JOYSTICK_DIRECTIONS_8 = JOYSTICK_DIRECTIONS_4 + (
 JOYSTICK_DIRECTIONS_HORIZONTAL = (JOYSTICK_LEFT, JOYSTICK_RIGHT)
 JOYSTICK_DIRECTIONS_VERTICAL = (JOYSTICK_UP, JOYSTICK_DOWN)
 
-_WEB_TOUCH_KEYS = ("up", "down", "left", "right", "x", "space")
+_WEB_TOUCH_KEYS = ("up", "down", "left", "right", "x", "space", "menu")
 _WEB_TOUCH_STATE = None
 
 
@@ -1046,8 +997,7 @@ def _read_web_touch_input():
         return None
 
     presses = _js_prop(state, "presses", None)
-    # JS bridge values are copied into one reusable mapping. Allocating twelve
-    # dictionary entries every input frame caused avoidable browser GC churn.
+    # Reuse the mapping to avoid browser GC churn on every input frame.
     result = _WEB_TOUCH_STATE
     if result is None:
         result = {}
@@ -1409,6 +1359,9 @@ def _get_nums_dict():
         " ": ["00000", "00000", "00000", "00000", "00000"],
         ".": ["00000", "00000", "00000", "00000", "00001"],
         ":": ["00000", "00100", "00000", "00100", "00000"],
+        "$": ["01111", "10100", "01110", "00101", "11110"],
+        ">": ["10000", "01000", "00100", "01000", "10000"],
+        "!": ["00100", "00100", "00100", "00000", "00100"],
         "/": ["00001", "00010", "00100", "01000", "10000"],
         "|": ["00100", "00100", "00100", "00100", "00100"],
         "-": ["00000", "00000", "11111", "00000", "00000"],
@@ -1822,7 +1775,7 @@ class _JoystickBase:
         d = _read_direction_from_xy(xy[0], xy[1], possible_directions)
         if not debounce:
             return d
-        now = ticks_ms()
+        now = raw_ticks_ms()
         if d is None:
             self._last_dir = None
             return None
@@ -1884,7 +1837,7 @@ if IS_MICROPYTHON:
                 self.read_len = 6
                 self.buffer = bytearray(6)
 
-            self.last_poll = ticks_ms()
+            self.last_poll = raw_ticks_ms()
             self.polling_threshold = poll_interval if poll else -1
 
         def update(self):
@@ -1892,7 +1845,7 @@ if IS_MICROPYTHON:
             self.i2c.readfrom_into(self.address, self.buffer)
 
         def __poll(self):
-            now = ticks_ms()
+            now = raw_ticks_ms()
             if self.polling_threshold > 0 and ticks_diff(
                 now, self.last_poll
             ) >= self.polling_threshold:
@@ -1904,8 +1857,6 @@ if IS_MICROPYTHON:
             if not self.is_new_controller:
                 c_button = not (self.buffer[5] & 0x02)
                 z_button = not (self.buffer[5] & 0x01)
-                if c_button and z_button:
-                    raise RestartProgram()
                 return c_button, z_button
 
             # Decode only the button bits needed by this API call. The old
@@ -1917,9 +1868,9 @@ if IS_MICROPYTHON:
             # - c_button: secondary/back (B)
             c_button = not (b5 & 0x40)
             z_button = not (b5 & 0x10)
-            # Restart combo on new controller: START + SELECT
+            # The extra START + SELECT buttons open the same in-game menu.
             if not (b4 & 0x04) and not (b4 & 0x10):
-                raise RestartProgram()
+                return True, True
             return c_button, z_button
 
         def joystick(self):
@@ -1948,7 +1899,7 @@ if IS_MICROPYTHON:
             self._reinit_nunchuck()
 
         def _reinit_nunchuck(self):
-            self._last_reinit = ticks_ms()
+            self._last_reinit = raw_ticks_ms()
             try:
                 self.nunchuck = Nunchuck(self.i2c, poll=True, poll_interval=25)
             except Exception:
@@ -1957,7 +1908,7 @@ if IS_MICROPYTHON:
         def _ensure_nunchuck(self):
             if self.nunchuck is not None:
                 return True
-            if ticks_diff(ticks_ms(), self._last_reinit) >= 250:
+            if ticks_diff(raw_ticks_ms(), self._last_reinit) >= 250:
                 self._reinit_nunchuck()
             return self.nunchuck is not None
 
@@ -1997,6 +1948,8 @@ else:
             self._y = 128
             self._z_until = 0
             self._c_until = 0
+            self._menu_until = 0
+            self._menu = False
             self._left_until = 0
             self._right_until = 0
             self._up_until = 0
@@ -2009,7 +1962,7 @@ else:
                 import pygame  # type: ignore
             except Exception:
                 return
-            now = ticks_ms()
+            now = raw_ticks_ms()
             if (
                 self._last_poll_ms >= 0
                 and ticks_diff(now, self._last_poll_ms) < _INPUT_POLL_MS
@@ -2028,8 +1981,10 @@ else:
                 key = getattr(event, "key", None)
                 if key in (pygame.K_z, pygame.K_SPACE, pygame.K_RETURN):
                     self._z_until = now + _KEY_LATCH_MS
-                elif key in (pygame.K_x, pygame.K_ESCAPE):
+                elif key == pygame.K_x:
                     self._c_until = now + _KEY_LATCH_MS
+                elif key in (pygame.K_ESCAPE, pygame.K_p):
+                    self._menu_until = now + _KEY_LATCH_MS
                 elif key == pygame.K_LEFT:
                     self._left_until = now + _KEY_LATCH_MS
                 elif key == pygame.K_RIGHT:
@@ -2048,6 +2003,7 @@ else:
                     ("down", "_down_until"),
                     ("x", "_c_until"),
                     ("space", "_z_until"),
+                    ("menu", "_menu_until"),
                 ):
                     press_count = touch.get(touch_key + "_presses", 0)
                     if press_count != self._touch_press_counts.get(touch_key, 0):
@@ -2084,11 +2040,15 @@ else:
                 or (touch and touch.get("space"))
             )
             self._z = bool(self._held_z or ticks_diff(self._z_until, now) > 0)
-            # C button: x/escape
+            # Keep X available for a game's secondary action. Escape/P and
+            # the dedicated touch button always request the shared menu.
             self._held_c = bool(
-                keys[pygame.K_x] or keys[pygame.K_ESCAPE] or (touch and touch.get("x"))
+                keys[pygame.K_x] or (touch and touch.get("x"))
             )
             self._c = bool(self._held_c or ticks_diff(self._c_until, now) > 0)
+            self._menu = bool(keys[pygame.K_ESCAPE] or keys[pygame.K_p]
+                              or ticks_diff(self._menu_until, now) > 0
+                              or (touch and touch.get("menu")))
 
             # Keyboard/touch only give us digital direction state; funnel it
             # through the shared D-pad encoder so desktop matches hardware.
@@ -2096,8 +2056,8 @@ else:
 
         def buttons(self):
             self._poll()
-            if self._held_c and self._held_z:
-                raise RestartProgram()
+            if self._menu:
+                return True, _ACTIVE_GAME_SESSION is not None
             return self._c, self._z
 
         def joystick(self):
@@ -2416,6 +2376,11 @@ class GameSettings:
     # The selector uses this declarative data to draw settings screens; games read
     # the stored values from the context passed by GameSelect._make_game_instance().
     DEFINITIONS = {
+        "TWRDEF": (
+            ("level", "LEVEL", tuple((i, str(i + 1)) for i in range(24)), 0),
+            ("mode", "MODE", (("campaign", "CAMP"), ("endless", "ENDLS")), 0),
+            ("difficulty", "DIFF", (("easy", "EASY"), ("normal", "NORM"), ("hard", "HARD")), 1),
+        ),
         "ARTILL": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
         "MARBLE": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
         "DONKEY": (("map", "MAP", ((0, "1"), (1, "2"), (2, "3")), 0),),
@@ -2730,26 +2695,334 @@ class InitialsEntryMenu:
 # ======================================================================
 
 
-class FrameLoopGame:
-    """Run callback-based games consistently on every supported runtime.
+def _timed_game_step(frames):
+    """Turn a sequence of yielded delays into a pauseable, nonblocking step."""
+    deadline = None
 
-    Subclasses provide ``FRAME_MS`` and ``_build_step(joystick)``.  Keeping
-    the sync/async dispatch here prevents each small game from maintaining a
-    subtly different browser fallback or frame-pacing implementation.
+    def step():
+        nonlocal deadline
+        now = ticks_ms()
+        if deadline is not None and ticks_diff(now, deadline) < 0:
+            return True
+        try:
+            delay = next(frames)
+        except StopIteration:
+            return False
+        deadline = ticks_add(ticks_ms(), max(0, int(delay or 0)))
+        return True
+
+    return step
+
+
+class _GameDisplayRecorder:
+    """One RGB buffer for restoring incremental games on write-only HUB75 panels.
+
+    Desktop surfaces and already-buffered panels can take snapshots on demand;
+    only an unbuffered, unreadable display needs this recording adapter.
+    """
+
+    def __init__(self, target):
+        self.target = target
+        self.pixels = bytearray(WIDTH * HEIGHT * 3)
+        self.recording = True
+
+    def __getattr__(self, name):
+        return getattr(self.target, name)
+
+    def set_pixel(self, x, y, r, g, b):
+        if self.recording and 0 <= x < WIDTH and 0 <= y < HEIGHT:
+            index = (int(y) * WIDTH + int(x)) * 3
+            self.pixels[index] = int(r) & 255
+            self.pixels[index + 1] = int(g) & 255
+            self.pixels[index + 2] = int(b) & 255
+        self.target.set_pixel(x, y, r, g, b)
+
+    def fill_rect(self, x1, y1, x2, y2, r, g, b):
+        x1, y1 = max(0, int(x1)), max(0, int(y1))
+        x2, y2 = min(WIDTH - 1, int(x2)), min(HEIGHT - 1, int(y2))
+        if x1 > x2 or y1 > y2:
+            return
+        if self.recording:
+            row = bytes((int(r) & 255, int(g) & 255, int(b) & 255)) * (x2 - x1 + 1)
+            for y in range(y1, y2 + 1):
+                index = (y * WIDTH + x1) * 3
+                self.pixels[index:index + len(row)] = row
+        fill = getattr(self.target, "fill_rect", None)
+        if fill is not None:
+            fill(x1, y1, x2, y2, r, g, b)
+        else:
+            for y in range(y1, y2 + 1):
+                for x in range(x1, x2 + 1):
+                    self.target.set_pixel(x, y, r, g, b)
+
+    def clear(self):
+        if self.recording:
+            _zero_framebuffer(self.pixels)
+        self.target.clear()
+
+    def restore(self):
+        put = self.target.set_pixel
+        index = 0
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put(x, y, self.pixels[index], self.pixels[index + 1], self.pixels[index + 2])
+                index += 3
+        self.recording = True
+
+
+class _GameControls:
+    """Keep pause/menu input out of game logic, including held release tails."""
+
+    def __init__(self, real):
+        self.real = real
+        self.buttons = (False, False)
+        self.suppressed = False
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+    def read_buttons(self):
+        return (False, False) if self.suppressed else self.buttons
+
+    def read_direction(self, directions, debounce=True):
+        if self.suppressed:
+            return None
+        return self.real.read_direction(directions, debounce=debounce)
+
+    def read_xy(self):
+        if self.suppressed:
+            return ANALOG_CENTER, ANALOG_CENTER
+        read = getattr(self.real, "read_xy", None)
+        return read() if read is not None else (ANALOG_CENTER, ANALOG_CENTER)
+
+    def is_pressed(self):
+        return self.read_buttons()[1]
+
+
+class GameSession:
+    """Shared pause, input, clock and display lifecycle for every playable game."""
+
+    POLL_MS = 10
+    MENU_ITEMS = ("WEITER", "NEUSTART", "SPIELMENUE")
+
+    def __init__(self, game, joystick):
+        self.game = game
+        self.real = joystick
+        self.controls = _GameControls(joystick)
+        self.paused = False
+        self.pause_started = 0
+        self.paused_ms = 0
+        self.action = None
+        self.selected = 0
+        self.menu_ready = False
+        self.wait_release = False
+        self.last_nav = 0
+        self.nav_direction = None
+        self.snapshot = None
+        self.recorder = None
+        self.previous_session = None
+        self.original_display = None
+        self.cached_display = False
+        self.game_step = None
+        self.last_frame = 0
+        self.started = False
+        self.needs_present = False
+
+    def game_time(self, now):
+        return ticks_add(self.pause_started if self.paused else now, -self.paused_ms)
+
+    def start(self):
+        global _ACTIVE_GAME_SESSION, display
+        self.previous_session = _ACTIVE_GAME_SESSION
+        self.original_display = display
+        # Install capture before initialization: some games paint a static board
+        # once and subsequently touch only the cells that changed.
+        if getattr(display, "_surface", None) is None and not USE_BUFFERED_DISPLAY:
+            self.recorder = _GameDisplayRecorder(display)
+            display = self.recorder
+        # A few old constructors keep a display alias; make it follow the
+        # shared adapter so their clears are recorded too.
+        self.cached_display = getattr(self.game, "display", None) is self.original_display
+        if self.cached_display:
+            self.game.display = display
+        _ACTIVE_GAME_SESSION = self
+        self.started = True
+        begin_game(0)
+        self.game_step = self.game._build_step(self.controls)
+        self.last_frame = ticks_add(ticks_ms(), -self.game.FRAME_MS)
+        self.wait_release = (any(self.real.read_buttons()) or
+                             self.real.read_direction(JOYSTICK_DIRECTIONS_4, debounce=False) is not None)
+        self.controls.suppressed = self.wait_release
+        return self
+
+    def close(self):
+        global _ACTIVE_GAME_SESSION, display
+        if not self.started:
+            return
+        display = self.original_display
+        if self.cached_display:
+            self.game.display = self.original_display
+        _ACTIVE_GAME_SESSION = self.previous_session
+        self.snapshot = None
+        self.recorder = None
+        self.started = False
+
+    def _capture_frame(self):
+        if self.recorder is not None:
+            self.recorder.recording = False
+            return
+        surface = getattr(display, "_surface", None)
+        if surface is not None:
+            self.snapshot = surface.copy()
+        elif USE_BUFFERED_DISPLAY and _fb_current is not None:
+            self.snapshot = bytes(_fb_current)
+
+    def _restore_frame(self):
+        if self.recorder is not None:
+            self.recorder.restore()
+        elif self.snapshot is not None:
+            surface = getattr(display, "_surface", None)
+            if surface is not None:
+                surface.blit(self.snapshot, (0, 0))
+            else:
+                index = 0
+                for y in range(HEIGHT):
+                    for x in range(WIDTH):
+                        display.set_pixel(x, y, self.snapshot[index], self.snapshot[index + 1], self.snapshot[index + 2])
+                        index += 3
+        self.snapshot = None
+
+    def _draw_menu(self):
+        self.needs_present = True
+        display.clear()
+        draw_text_small(17, 3, "PAUSE", 130, 210, 255)
+        for index, label in enumerate(self.MENU_ITEMS):
+            y = 17 + index * 12
+            if index == self.selected:
+                draw_rectangle(0, y - 2, 63, y + 7, 30, 65, 85)
+            color = (255, 235, 140) if index == self.selected else (165, 180, 185)
+            draw_text_small((WIDTH - (len(label) * 6 - 1)) // 2, y, label, *color)
+        draw_text_small(2, 57, "Z:OK X:ESC", 140, 160, 170)
+
+    def _open_menu(self, now):
+        self._capture_frame()
+        self.pause_started = now
+        self.paused = True
+        self.controls.suppressed = True
+        self.selected = 0
+        self.menu_ready = False
+        self.nav_direction = None
+        self._draw_menu()
+
+    def _resume(self, now):
+        self.paused_ms += ticks_diff(now, self.pause_started)
+        self.paused = False
+        self._restore_frame()
+        self.needs_present = True
+        self.wait_release = True
+        self.controls.suppressed = True
+        self.nav_direction = None
+
+    def _menu_step(self, now, buttons, direction):
+        c_button, z_button = buttons
+        if not self.menu_ready:
+            self.menu_ready = not c_button and not z_button and direction is None
+            return True
+        if c_button:
+            self._resume(now)
+            return True
+        if direction in (JOYSTICK_UP, JOYSTICK_DOWN):
+            if direction != self.nav_direction or ticks_diff(now, self.last_nav) >= 180:
+                self.selected = (self.selected + (1 if direction == JOYSTICK_DOWN else -1)) % len(self.MENU_ITEMS)
+                self.last_nav = now
+                self._draw_menu()
+        self.nav_direction = direction
+        if z_button:
+            if self.selected == 0:
+                self._resume(now)
+            else:
+                self.action = "RESTART" if self.selected == 1 else "EXIT"
+                return False
+        return True
+
+    def tick(self):
+        self.needs_present = False
+        now = raw_ticks_ms()
+        # The raw hooks no longer restart the application on a chord. Keep the
+        # exception compatibility here for older/custom controller adapters.
+        try:
+            buttons = self.real.read_buttons()
+        except RestartProgram:
+            buttons = (True, True)
+        self.controls.buttons = buttons
+        direction = self.real.read_direction(JOYSTICK_DIRECTIONS_4, debounce=False)
+        if self.paused:
+            return self._menu_step(now, buttons, direction)
+        if self.wait_release:
+            if not any(buttons) and direction is None:
+                self.wait_release = False
+                self.controls.suppressed = False
+                if hasattr(self.real, "_last_dir"):
+                    self.real._last_dir = None
+            # Gameplay continues, but menu buttons/directions remain filtered
+            # until neutral. No held confirmation becomes an in-game action.
+        else:
+            c_button, z_button = buttons
+            secondary = self.game.uses_secondary_action()
+            if c_button and (z_button or not secondary):
+                self._open_menu(now)
+                return True
+        game_now = self.game_time(now)
+        frame_ms = max(1, int(self.game.FRAME_MS))
+        if ticks_diff(game_now, self.last_frame) < frame_ms:
+            return True
+        self.last_frame = game_now
+        self.needs_present = True
+        keep_running = self.game_step()
+        # A contextual back action can request the shared menu without
+        # pretending that the player lost or escaping a nested game loop.
+        if not keep_running and not game_over and buttons[0]:
+            self._open_menu(now)
+            return True
+        return keep_running
+
+
+class FrameLoopGame:
+    """All games share one session and the same paced sync/async drivers.
+
+    A game only supplies FRAME_MS and _build_step(joystick). CPU attract demos
+    use the same callback but retain their synthetic exit signal.
     """
 
     FRAME_MS = CONFIG_FRAME_MS_DEFAULT
+    SECONDARY_ACTION = False
+
+    def uses_secondary_action(self):
+        return self.SECONDARY_ACTION
 
     def main_loop(self, joystick):
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+        if getattr(joystick, "is_demo", False):
+            return _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
+        session = GameSession(self, joystick)
+        try:
+            session.start()
+            _run_game_loop_sync(session.POLL_MS, session.tick)
+            return session.action
+        finally:
+            session.close()
 
     async def main_loop_async(self, joystick):
         if asyncio is None:
             return self.main_loop(joystick)
-        await _run_game_loop_async(
-            self.FRAME_MS,
-            self._build_step(joystick),
-        )
+        if getattr(joystick, "is_demo", False):
+            return await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
+        session = GameSession(self, joystick)
+        try:
+            session.start()
+            await _run_game_loop_async(session.POLL_MS, session.tick)
+            return session.action
+        finally:
+            session.close()
 
 
 class GridCursorGame(FrameLoopGame):

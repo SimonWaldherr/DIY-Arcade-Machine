@@ -1,11 +1,11 @@
-class CgolgGame:
+class CgolgGame(FrameLoopGame):
     """
     CGOLG
     Controls:
       - Left / Right: select Conway creature
       - Up / Down: move spawn lane in the blue quarter
       - Z: spawn selected creature
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Conway's Game of Life Game. Blue and red cells mix color through neighbor
     ancestry while both sides seed directed movers into opposite quarters.
     """
@@ -469,6 +469,7 @@ class CgolgGame:
         display_score_and_time(self.score)
 
     def _build_step(self, joystick):
+        self.reset()
         def step():
             c_button, z_button = joystick.read_buttons()
             if c_button or game_over:
@@ -488,26 +489,16 @@ class CgolgGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        self.reset()
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
-
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        self.reset()
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
-class PinballGame:
+
+class PinballGame(FrameLoopGame):
     """
     PINBAL
     Controls:
       - Hold Z at launch: charge plunger
       - Left / Right: flippers
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Compact Video Pinball-inspired table with rollover lanes, spinner, drop
     targets, bumpers, flippers, plunger strength, bonus, and multipliers.
     """
@@ -828,17 +819,7 @@ class PinballGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        self.reset()
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        self.reset()
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class SabotrGame(FrameLoopGame):
@@ -847,7 +828,7 @@ class SabotrGame(FrameLoopGame):
     Controls:
       - Directions: move
       - Hold Z: sneak; Z next to a guard from behind: takedown
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Stealth puzzle: avoid enemy sight windows, hide bodies from patrols, and
     reach the target.
     """
@@ -1139,13 +1120,13 @@ class SabotrGame(FrameLoopGame):
         return step
 
 
-class SoccerGame:
+class SoccerGame(FrameLoopGame):
     """
     SOCCER
     Controls:
       - Directions: move blue formation / goalkeeper with ball
       - Z: kick when in possession
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Atari-style 4-player-per-side soccer: striker, two defenders, goalkeeper,
     formation motion, two halves, and timed scoring.
     """
@@ -1468,540 +1449,777 @@ class SoccerGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        self.reset()
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        self.reset()
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class TowerDefenseGame(FrameLoopGame):
-    """
-    TWRDEF
-    Controls:
-      - Directions: move build cursor
-      - Z: build tower / upgrade tower
-      - C: return to menu
-    Stop enemy waves before they reach the base. Towers automatically target
-    enemies; repeated builds upgrade range, damage, slow, and splash.
+    """24-map defense campaign. Directions pan the build cursor; Z builds or
+    upgrades. X/C opens the paused tower shop, wave launch, sale and exit menu.
+    Maps have three waves and refund all tower investment on relocation.
     """
 
-    FRAME_MS = 38
-    CELL = 8
-    GRID_W = WIDTH // CELL
-    GRID_H = PLAY_HEIGHT // CELL
-    OPEN_START = (0, 3)
-    OPEN_BASE = (7, 3)
     LEVELS = (
-        (
-            "PATH",
-            (
-                (0, 1),
-                (2, 1),
-                (2, 3),
-                (6, 3),
-                (6, 1),
-                (7, 1),
-                (7, 5),
-                (2, 5),
-                (2, 6),
-                (7, 6),
-            ),
-        ),
-        ("OPEN", None),
-        ("PATH", ((0, 5), (3, 5), (3, 2), (5, 2), (5, 4), (7, 4), (7, 0))),
-        ("OPEN", None),
-        ("PATH", ((0, 3), (1, 3), (1, 1), (4, 1), (4, 5), (6, 5), (6, 2), (7, 2))),
-        ("PATH", ((0, 6), (3, 6), (3, 4), (1, 4), (1, 2), (5, 2), (5, 0), (7, 0))),
-        ("OPEN", None),
+        ('PATH', ((0, 1), (2, 1), (2, 3), (6, 3), (6, 1), (7, 1), (7, 5), (2, 5), (2, 6), (7, 6))),
+        ('OPEN', ((0, 3), (7, 3))),
+        ('PATH', ((0, 5), (3, 5), (3, 2), (5, 2), (5, 4), (7, 4), (7, 0))),
+        ('OPEN', ((0, 3), (7, 3))),
+        ('PATH', ((0, 3), (1, 3), (1, 1), (4, 1), (4, 5), (6, 5), (6, 2), (7, 2))),
+        ('PATH', ((0, 6), (3, 6), (3, 4), (1, 4), (1, 2), (5, 2), (5, 0), (7, 0))),
+        ('OPEN', ((0, 3), (7, 3))),
         ('PATH', ((0, 0), (6, 0), (6, 2), (1, 2), (1, 4), (5, 4), (5, 6), (7, 6))),
         ('PATH', ((0, 6), (0, 1), (2, 1), (2, 5), (4, 5), (4, 2), (7, 2))),
+        ('PATH', ((0, 1), (9, 1), (9, 3), (2, 3), (2, 6), (10, 6), (10, 8), (11, 8))),
+        ('OPEN', ((0, 4), (11, 4))),
+        ('PATH', ((0, 7), (3, 7), (3, 1), (6, 1), (6, 7), (9, 7), (9, 3), (11, 3))),
+        ('PATH', ((0, 1), (14, 1), (14, 10), (2, 10), (2, 3), (11, 3), (11, 8), (5, 8), (5, 5), (8, 5))),
+        ('OPEN', ((0, 6), (15, 6))),
+        ('PATH', ((0, 10), (2, 10), (2, 2), (6, 2), (6, 8), (10, 8), (10, 4), (13, 4), (13, 1), (15, 1))),
+        ('OPEN', ((0, 5), (15, 6))),
+        ('PATH', ((0, 1), (17, 1), (17, 4), (2, 4), (2, 7), (17, 7), (17, 10), (2, 10), (2, 12), (19, 12))),
+        ('PATH', ((0, 11), (3, 11), (3, 2), (7, 2), (7, 10), (11, 10), (11, 3), (15, 3), (15, 11), (19, 11))),
+        ('OPEN', ((0, 6), (19, 7))),
+        ('PATH', ((0, 12), (18, 12), (18, 1), (2, 1), (2, 9), (15, 9), (15, 4), (5, 4), (5, 6), (12, 6))),
+        ('OPEN', ((0, 8), (23, 8))),
+        ('PATH', ((0, 1), (22, 1), (22, 16), (2, 16), (2, 4), (19, 4), (19, 13), (5, 13), (5, 7), (16, 7), (16, 10), (8, 10))),
+        ('PATH', ((0, 14), (4, 14), (4, 3), (9, 3), (9, 14), (14, 14), (14, 3), (19, 3), (19, 14), (23, 14))),
+        ('OPEN', ((0, 8), (23, 3))),
     )
-    TOWER_COST = (0, 12, 18, 28, 42)
-    TOWER_RANGE = (0, 18, 22, 26, 30)
-    TOWER_DAMAGE = (0, 5, 9, 12, 18)
-    TOWER_COOLDOWN = (0, 18, 16, 14, 12)
 
-    def __init__(self):
+    LEVEL_NAMES = (
+        'OUTPOST',
+        'MEADOW',
+        'CROSSING',
+        'FIELD',
+        'BENDS',
+        'CLIFFSIDE',
+        'PLAINS',
+        'SWITCHBACK',
+        'RAMPART',
+        'RIVERBEND',
+        'QUARRY',
+        'TWIN RIDGE',
+        'SPIRAL',
+        'LOCKS',
+        'MESA',
+        'RUINS',
+        'LONG ROAD',
+        'VALLEY',
+        'ISLANDS',
+        'KEEP',
+        'IRON GATES',
+        'LABYRINTH',
+        'TITAN PASS',
+        'CITADEL',
+    )
+
+    MAP_SIZES = (
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (8, 7),
+        (12, 9),
+        (12, 9),
+        (12, 9),
+        (16, 12),
+        (16, 12),
+        (16, 12),
+        (16, 12),
+        (20, 14),
+        (20, 14),
+        (20, 14),
+        (20, 14),
+        (24, 18),
+        (24, 18),
+        (24, 18),
+        (24, 18),
+    )
+
+    MAP_BLOCKS = (
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        ((4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (8, 3), (8, 4), (8, 5), (8, 6), (8, 7), (8, 8)),
+        (),
+        (),
+        ((4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 11), (10, 0), (10, 4), (10, 5), (10, 6), (10, 7), (10, 8), (10, 9), (10, 10), (10, 11)),
+        (),
+        ((3, 2), (3, 3), (3, 4), (3, 7), (3, 8), (3, 9), (4, 2), (4, 3), (4, 4), (4, 7), (4, 8), (4, 9), (5, 2), (5, 3), (5, 4), (5, 7), (5, 8), (5, 9), (9, 3), (9, 4), (9, 5), (9, 8), (9, 9), (9, 10), (10, 3), (10, 4), (10, 5), (10, 8), (10, 9), (10, 10), (11, 3), (11, 4), (11, 5), (11, 8), (11, 9), (11, 10), (7, 0), (7, 1), (7, 2), (7, 3), (7, 7), (7, 8), (7, 9), (7, 10), (7, 11)),
+        (),
+        (),
+        ((3, 2), (3, 3), (3, 4), (3, 9), (3, 10), (3, 11), (4, 2), (4, 3), (4, 4), (4, 9), (4, 10), (4, 11), (5, 2), (5, 3), (5, 4), (5, 9), (5, 10), (5, 11), (10, 0), (10, 1), (10, 2), (10, 3), (10, 7), (10, 8), (10, 9), (10, 10), (11, 0), (11, 1), (11, 2), (11, 3), (11, 7), (11, 8), (11, 9), (11, 10), (12, 0), (12, 1), (12, 2), (12, 3), (12, 7), (12, 8), (12, 9), (12, 10), (13, 0), (13, 1), (13, 2), (13, 3), (13, 7), (13, 8), (13, 9), (13, 10), (17, 0), (17, 1), (17, 2), (17, 3), (17, 4), (17, 5), (17, 6), (17, 7), (17, 8), (17, 12), (17, 13)),
+        (),
+        ((5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (5, 6), (5, 7), (5, 8), (5, 9), (5, 10), (5, 11), (5, 12), (5, 16), (5, 17), (11, 0), (11, 1), (11, 5), (11, 6), (11, 7), (11, 8), (11, 9), (11, 10), (11, 11), (11, 12), (11, 13), (11, 14), (11, 15), (11, 16), (11, 17), (17, 0), (17, 1), (17, 2), (17, 3), (17, 4), (17, 5), (17, 6), (17, 7), (17, 8), (17, 9), (17, 10), (17, 11), (17, 15), (17, 16), (17, 17)),
+        (),
+        (),
+        ((6, 0), (6, 1), (6, 2), (6, 3), (6, 4), (6, 5), (6, 6), (6, 7), (6, 8), (6, 9), (6, 10), (6, 14), (6, 15), (6, 16), (6, 17), (12, 0), (12, 1), (12, 2), (12, 6), (12, 7), (12, 8), (12, 9), (12, 10), (12, 11), (12, 12), (12, 13), (12, 14), (12, 15), (12, 16), (12, 17), (18, 0), (18, 1), (18, 2), (18, 3), (18, 4), (18, 5), (18, 6), (18, 7), (18, 8), (18, 9), (18, 10), (18, 11), (18, 15), (18, 16), (18, 17), (9, 9), (9, 10), (9, 11), (9, 12), (9, 13), (10, 9), (10, 10), (10, 11), (10, 12), (10, 13), (21, 6), (21, 7), (21, 8), (21, 9), (21, 10), (22, 6), (22, 7), (22, 8), (22, 9), (22, 10)),
+    )
+
+    # World coordinates remain independent of the 64x64 LED viewport.
+    SECONDARY_ACTION = True
+    FRAME_MS = 38
+    CELL = 8
+    VIEW_W = 8
+    VIEW_H = 6
+    VIEW_TOP = 7
+    WAVES_PER_LEVEL = 3
+    MAX_ENEMIES = 48
+    MAX_TOWERS = 48
+    MAX_SHOTS = 64
+    # name, price, range, damage, cooldown, effect, target, colour
+    TOWER_TYPES = (
+        ("GUN", 12, 22, 6, 16, "hit", "all", (90, 235, 100)),
+        ("CANNON", 24, 24, 18, 34, "splash", "ground", (255, 170, 50)),
+        ("FROST", 20, 24, 3, 24, "slow", "all", (70, 220, 255)),
+        ("SNIPER", 28, 48, 38, 48, "pierce", "all", (245, 245, 180)),
+        ("TESLA", 32, 24, 12, 25, "chain", "all", (190, 110, 255)),
+        ("VENOM", 22, 24, 3, 25, "poison", "ground", (150, 255, 35)),
+        ("FLAK", 22, 36, 18, 13, "flak", "air", (255, 115, 210)),
+        ("FLAME", 26, 16, 5, 7, "flame", "ground", (255, 80, 25)),
+    )
+    TOWER_HELP = ("ALLROUND", "AREA HIT", "SLOW", "PIERCING", "CHAIN HIT",
+                  "POISON", "AIR ONLY", "BURN AREA")
+    GRUNT, RUNNER, BOSS, TANK, SWARM, FLYER, SHIELD, HEALER, SPLITTER = range(9)
+    ENEMY_NAMES = ("GRUNT", "RUNNER", "BOSS", "TANK", "SWARM", "FLYER",
+                   "SHIELD", "HEALER", "SPLIT")
+    # Health multiplier, speed multiplier, bounty, base damage, colour.
+    ENEMY_TYPES = (
+        (1.0, 1.0, 3, 1, (255, 65, 65)),
+        (0.65, 1.65, 3, 1, (255, 165, 30)),
+        (6.0, 0.58, 24, 4, (255, 60, 215)),
+        (2.6, 0.65, 6, 2, (165, 175, 185)),
+        (0.4, 1.35, 1, 1, (255, 225, 65)),
+        (0.9, 1.15, 4, 1, (100, 170, 255)),
+        (1.4, 0.9, 5, 1, (60, 235, 225)),
+        (1.2, 0.8, 6, 1, (245, 245, 245)),
+        (1.7, 0.9, 5, 2, (180, 95, 245)),
+    )
+    WAVE_PATTERNS = (
+        (0, 0, 0), (0, 1, 0), (0, 1, 0, 1),
+        (4, 0, 4, 1), (0, 3, 1, 4), (3, 0, 4, 1),
+        (5, 0, 1, 5), (6, 3, 0, 5), (4, 6, 5, 3),
+        (7, 3, 4, 5), (8, 1, 6, 7), (3, 5, 8, 7, 6, 4, 1),
+    )
+
+    def __init__(self, ctx=None):
+        self.start_level = clamp(int(get_context_setting(ctx, "level", 0)), 0, len(self.LEVELS) - 1)
+        self.endless = get_context_setting(ctx, "mode", "campaign") == "endless"
+        self.difficulty = get_context_setting(ctx, "difficulty", "normal")
         self.reset()
 
     def reset(self):
-        self.cursor_x = 3
-        self.cursor_y = 2
         self.last_move = ticks_ms()
         self.last_z = False
-        self.wave = 0
+        self.last_c = False
+        self.wave = self.start_level * self.WAVES_PER_LEVEL
         self.score = 0
-        self.money = 32
-        self.lives = 12
+        self.money = 60 + self.start_level * 8
+        self.lives = 20 if self.difficulty == "easy" else 15
         self.frame = 0
-        self.level = 1
-        self.layout_id = -1
-        self.open_level = False
-        self.path_cells = set()
-        self.route_cells = []
-        self.start_cell = self.OPEN_START
-        self.base_cell = self.OPEN_BASE
+        self.selected_tower = 0
         self.towers = []
         self.enemies = []
         self.shots = []
         self.spawn_queue = 0
-        self.spawn_gap = 34
+        self.spawn_gap = 24
         self.spawn_tick = 0
-        self.next_wave_tick = 20
+        self.wave_active = False
+        self.campaign_complete = False
+        self.shop_open = False
+        self.overview = False
+        self.shop_index = 0
         self.flash_until = 0
-        self._load_layout(0, clear_towers=False)
+        self._load_layout(self.start_level, clear_towers=False)
 
     def _cells_between(self, a, b):
         ax, ay = a
         bx, by = b
+        if ax != bx and ay != by:
+            raise ValueError("defense roads must be axis aligned")
         dx = 1 if bx > ax else -1 if bx < ax else 0
         dy = 1 if by > ay else -1 if by < ay else 0
-        cells = []
-        x, y = ax, ay
-        cells.append((x, y))
-        while (x, y) != (bx, by):
-            x += dx
-            y += dy
-            cells.append((x, y))
+        cells = [(ax, ay)]
+        while (ax, ay) != (bx, by):
+            ax += dx
+            ay += dy
+            cells.append((ax, ay))
         return cells
 
     def _build_route_from_waypoints(self, points):
-        route = []
+        route = [points[0]]
         for i in range(len(points) - 1):
-            segment = self._cells_between(points[i], points[i + 1])
-            if route:
-                segment = segment[1:]
-            route.extend(segment)
+            route.extend(self._cells_between(points[i], points[i + 1])[1:])
         return route
 
     def _load_layout(self, layout_id, clear_towers):
-        if clear_towers and self.towers:
-            self.money += min(36, len(self.towers) * 7)
+        if clear_towers:
+            # Relocation returns all investment, including upgrades.
+            self.money += sum(t[5] for t in self.towers)
             self.towers = []
         self.enemies = []
         self.shots = []
         self.layout_id = layout_id
         self.level = layout_id + 1
+        self.GRID_W, self.GRID_H = self.MAP_SIZES[layout_id]
         kind, points = self.LEVELS[layout_id]
         self.open_level = kind == "OPEN"
-        if self.open_level:
-            self.start_cell = self.OPEN_START
-            self.base_cell = self.OPEN_BASE
-            self.path_cells = set()
-            self.route_cells = []
-        else:
-            self.route_cells = self._build_route_from_waypoints(points)
-            self.path_cells = set(self.route_cells)
-            self.start_cell = self.route_cells[0]
-            self.base_cell = self.route_cells[-1]
-
-    def _near_path(self, px, py, pad=5.8):
-        return self._point_to_cell(px, py) in self.path_cells
+        self.start_cell, self.base_cell = points[0], points[-1]
+        self.blocked_cells = set(self.MAP_BLOCKS[layout_id])
+        self.route_cells = [] if self.open_level else self._build_route_from_waypoints(points)
+        self.path_cells = set(self.route_cells)
+        self._refresh_open_route()
+        self.cursor_x, self.cursor_y = self.start_cell
+        for y in range(self.GRID_H):
+            for x in range(self.GRID_W):
+                if (x, y) not in self.path_cells and (x, y) not in self.blocked_cells and (x, y) not in (self.start_cell, self.base_cell):
+                    self.cursor_x, self.cursor_y = x, y
+                    break
+            else:
+                continue
+            break
+        self.camera_x = self.camera_y = 0
+        self._update_camera()
 
     def _cell_center(self, gx, gy):
-        return gx * self.CELL + self.CELL // 2, gy * self.CELL + self.CELL // 2
+        return gx * self.CELL + 4, gy * self.CELL + 4
 
     def _point_to_cell(self, px, py):
-        return (
-            clamp(int(px) // self.CELL, 0, self.GRID_W - 1),
-            clamp(int(py) // self.CELL, 0, self.GRID_H - 1),
-        )
+        return (clamp(int(px) // self.CELL, 0, self.GRID_W - 1),
+                clamp(int(py) // self.CELL, 0, self.GRID_H - 1))
 
     def _tower_at(self, gx, gy):
-        for t in self.towers:
-            if t[0] == gx and t[1] == gy:
-                return t
+        for tower in self.towers:
+            if tower[0] == gx and tower[1] == gy:
+                return tower
         return None
 
     def _can_build(self, gx, gy):
+        cell = (gx, gy)
         if not (0 <= gx < self.GRID_W and 0 <= gy < self.GRID_H):
             return False
-        if (gx, gy) == self.start_cell or (gx, gy) == self.base_cell:
+        if cell in (self.start_cell, self.base_cell) or cell in self.blocked_cells or cell in self.path_cells:
             return False
-        if self._tower_at(gx, gy):
-            return False
-        if self.path_cells and (gx, gy) in self.path_cells:
+        if self._tower_at(gx, gy) or len(self.towers) >= self.MAX_TOWERS:
             return False
         if self.open_level:
-            for e in self.enemies:
-                if self._point_to_cell(e[0], e[1]) == (gx, gy):
-                    return False
-            if not self._find_route(self.start_cell, blocked_extra=(gx, gy)):
+            if not self._find_route(self.start_cell, cell):
                 return False
-            for e in self.enemies:
-                if not self._find_route(
-                    self._point_to_cell(e[0], e[1]), blocked_extra=(gx, gy)
-                ):
+            for enemy in self.enemies:
+                if enemy[7] == self.FLYER or enemy[3] <= 0:
+                    continue
+                current = self._point_to_cell(enemy[0], enemy[1])
+                # Reserve the cell a moving enemy is entering as well.
+                target = enemy[9][min(int(enemy[2]), len(enemy[9]) - 1)]
+                if cell in (current, target) or not self._find_route(current, cell):
                     return False
-            return True
         return True
+
+    def _upgrade_cost(self, tower):
+        return self.TOWER_TYPES[tower[4]][1] * (tower[2] + 1) // 2
 
     def _try_build_or_upgrade(self):
         tower = self._tower_at(self.cursor_x, self.cursor_y)
         if tower:
-            level = tower[2]
-            if level >= 4:
-                self.flash_until = ticks_ms() + 140
-                return
-            cost = self.TOWER_COST[level + 1]
-            if self.money >= cost:
+            cost = self._upgrade_cost(tower)
+            if tower[2] < 4 and self.money >= cost:
                 self.money -= cost
                 tower[2] += 1
                 tower[3] = 0
-            else:
-                self.flash_until = ticks_ms() + 140
-            return
-
-        if not self._can_build(self.cursor_x, self.cursor_y):
-            self.flash_until = ticks_ms() + 140
-            return
-        cost = self.TOWER_COST[1]
-        if self.money >= cost:
-            self.money -= cost
-            self.towers.append([self.cursor_x, self.cursor_y, 1, 0])
-            if self.open_level:
+                tower[5] += cost
+                return True
+        elif self._can_build(self.cursor_x, self.cursor_y):
+            cost = self.TOWER_TYPES[self.selected_tower][1]
+            if self.money >= cost:
+                self.money -= cost
+                # cell x/y, level, cooldown, type, total investment
+                self.towers.append([self.cursor_x, self.cursor_y, 1, 0, self.selected_tower, cost])
                 self._reroute_open_enemies()
-        else:
-            self.flash_until = ticks_ms() + 140
+                return True
+        self.flash_until = ticks_ms() + 250
+        return False
+
+    def _sell_tower(self):
+        tower = self._tower_at(self.cursor_x, self.cursor_y)
+        if tower:
+            self.money += tower[5] * 3 // 4
+            self.towers.remove(tower)
+            self._reroute_open_enemies()
+            return True
+        return False
+
+    def _update_camera(self):
+        self.camera_x = clamp(self.cursor_x - self.VIEW_W // 2, 0, max(0, self.GRID_W - self.VIEW_W))
+        self.camera_y = clamp(self.cursor_y - self.VIEW_H // 2, 0, max(0, self.GRID_H - self.VIEW_H))
 
     def _move_cursor(self, joystick):
         now = ticks_ms()
         if ticks_diff(now, self.last_move) < 125:
             return
-        d = joystick.read_direction(
-            [JOYSTICK_UP, JOYSTICK_DOWN, JOYSTICK_LEFT, JOYSTICK_RIGHT]
-        )
-        dx, dy = direction_to_delta(d)
+        direction = joystick.read_direction(JOYSTICK_DIRECTIONS_4)
+        dx, dy = direction_to_delta(direction)
         if dx or dy:
-            self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
-            self.cursor_y = clamp(self.cursor_y + dy, 0, self.GRID_H - 1)
+            if self.shop_open and not self.overview:
+                self.shop_index = (self.shop_index + (dy or dx)) % (len(self.TOWER_TYPES) + 4)
+            else:
+                self.cursor_x = clamp(self.cursor_x + dx, 0, self.GRID_W - 1)
+                self.cursor_y = clamp(self.cursor_y + dy, 0, self.GRID_H - 1)
+                self._update_camera()
             self.last_move = now
 
     def _start_wave(self):
-        next_wave = self.wave + 1
-        layout_id = ((next_wave - 1) // 3) % len(self.LEVELS)
-        if layout_id != self.layout_id:
-            self._load_layout(layout_id, clear_towers=self.wave > 0)
-        self.wave = next_wave
-        self.spawn_queue = 7 + self.wave * 2
-        self.spawn_gap = max(12, 34 - self.wave)
-        self.spawn_tick = 0
-        if self.wave % 5 == 0:
-            self.spawn_queue += 1
+        if self.wave_active or self.campaign_complete:
+            return False
+        self.wave += 1
+        self.wave_active = True
+        self.spawn_queue = 7 + min(19, self.wave // 2)
+        self.spawn_gap = max(13, 29 - self.wave // 4)
+        self.spawn_tick = self.spawn_gap - 1
+        return True
 
     def _tower_cells(self):
         return set((t[0], t[1]) for t in self.towers)
 
     def _find_route(self, start, blocked_extra=None):
-        blocked = self._tower_cells()
+        # Packed BFS parents keep large open maps practical on MicroPython.
+        blocked = self._tower_cells() | self.blocked_cells
         if blocked_extra is not None:
             blocked.add(blocked_extra)
-        blocked.discard(start)
-        blocked.discard(self.base_cell)
-        queue = [start]
-        prev = {start: None}
-        qi = 0
-        while qi < len(queue):
-            cell = queue[qi]
-            qi += 1
-            if cell == self.base_cell:
+        if start in blocked or self.base_cell in blocked:
+            return []
+        w, h = self.GRID_W, self.GRID_H
+        parent = bytearray(w * h)
+        start_id = start[1] * w + start[0]
+        parent[start_id] = 5
+        queue = [start_id]
+        index = 0
+        while index < len(queue):
+            pos = queue[index]
+            index += 1
+            x, y = pos % w, pos // w
+            if (x, y) == self.base_cell:
                 route = []
-                while cell is not None:
-                    route.append(cell)
-                    cell = prev[cell]
-                route.reverse()
-                return route
-            x, y = cell
-            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-                n = (nx, ny)
-                if not (0 <= nx < self.GRID_W and 0 <= ny < self.GRID_H):
-                    continue
-                if n in blocked or n in prev:
-                    continue
-                prev[n] = cell
-                queue.append(n)
+                while True:
+                    route.append((pos % w, pos // w))
+                    direction = parent[pos]
+                    if direction == 5:
+                        route.reverse()
+                        return route
+                    pos += (-1, 1, -w, w)[direction - 1]
+            for nx, ny, direction in ((x + 1, y, 1), (x - 1, y, 2), (x, y + 1, 3), (x, y - 1, 4)):
+                if 0 <= nx < w and 0 <= ny < h:
+                    nxt = ny * w + nx
+                    if not parent[nxt] and (nx, ny) not in blocked:
+                        parent[nxt] = direction
+                        queue.append(nxt)
         return []
+
+    def _refresh_open_route(self):
+        self.open_route = self._find_route(self.start_cell) if self.open_level else []
 
     def _route_for_enemy(self, start_cell=None):
         if self.open_level:
-            return self._find_route(start_cell or self.start_cell)
+            return self._find_route(start_cell) if start_cell is not None else self.open_route
         return self.route_cells
 
     def _reroute_open_enemies(self):
-        for e in self.enemies:
-            cell = self._point_to_cell(e[0], e[1])
-            route = self._find_route(cell)
-            if len(route) >= 2:
-                e[9] = route
-                e[2] = 1
+        if not self.open_level:
+            return
+        self._refresh_open_route()
+        routes = {}
+        for enemy in self.enemies:
+            if enemy[7] == self.FLYER:
+                continue
+            cell = self._point_to_cell(enemy[0], enemy[1])
+            if cell not in routes:
+                routes[cell] = self._find_route(cell)
+            route = routes[cell]
+            if route:
+                enemy[9] = route
+                # Return to this cell's centre first: no diagonal corner cutting.
+                enemy[2] = 0
+
+    def _wave_pattern(self):
+        return self.WAVE_PATTERNS[min(len(self.WAVE_PATTERNS) - 1, max(0, self.wave - 1))]
+
+    def _next_enemy_kind(self):
+        if self.wave % self.WAVES_PER_LEVEL == 0 and self.spawn_queue == 1:
+            return self.BOSS
+        pattern = self._wave_pattern()
+        return pattern[(7 + min(19, self.wave // 2) - self.spawn_queue) % len(pattern)]
+
+    def _make_enemy(self, kind, route):
+        health, speed, reward, leak, color = self.ENEMY_TYPES[kind]
+        scale = 0.78 if self.difficulty == "easy" else 1.22 if self.difficulty == "hard" else 1.0
+        hp = (14 + self.wave * 0.85) * health * scale
+        x, y = self._cell_center(*route[0])
+        # x/y, waypoint, hp/max, speed, slow, kind, bounty, route, DOT time/damage, shield
+        return [float(x), float(y), 1, hp, hp,
+                (0.42 + min(0.2, self.wave * 0.003)) * speed,
+                0, kind, reward + min(3, self.wave // 18), route, 0, 0.0,
+                hp * 0.8 if kind == self.SHIELD else 0.0]
 
     def _spawn_enemy(self):
-        boss = self.wave % 5 == 0 and self.spawn_queue == 1
-        runner = self.wave >= 4 and self.spawn_queue % 5 == 0
-        hp = 14 + self.wave * 4
-        speed = 0.48 + min(0.30, self.wave * 0.018)
-        reward = 3 + self.wave // 2
-        kind = 0
-        if runner:
-            hp = max(8, hp - 6)
-            speed += 0.25
-            reward += 1
-            kind = 1
-        if boss:
-            hp = hp * 4
-            speed *= 0.62
-            reward += 12
-            kind = 2
-        route = self._route_for_enemy()
+        if len(self.enemies) >= self.MAX_ENEMIES:
+            return False
+        kind = self._next_enemy_kind()
+        route = [self.start_cell, self.base_cell] if kind == self.FLYER else self._route_for_enemy()
         if len(route) < 2:
-            return
-        x, y = self._cell_center(route[0][0], route[0][1])
-        self.enemies.append(
-            [float(x), float(y), 1, float(hp), float(hp), speed, 0, kind, reward, route]
-        )
+            return False
+        self.enemies.append(self._make_enemy(kind, route))
+        return True
 
     def _advance_waves(self):
-        if self.spawn_queue > 0:
-            self.spawn_tick += 1
-            if self.spawn_tick >= self.spawn_gap:
-                self.spawn_tick = 0
-                self._spawn_enemy()
-                self.spawn_queue -= 1
+        if not self.wave_active:
             return
-        if not self.enemies:
-            self.next_wave_tick -= 1
-            if self.next_wave_tick <= 0:
-                self.next_wave_tick = 55
-                self._start_wave()
+        if self.spawn_queue:
+            self.spawn_tick += 1
+            if self.spawn_tick >= self.spawn_gap and self._spawn_enemy():
+                self.spawn_tick = 0
+                self.spawn_queue -= 1
+        elif not self.enemies:
+            self.wave_active = False
+            self.money += 12 + self.level * 2
+            self.score += self.level * 25
+            if self.wave % self.WAVES_PER_LEVEL == 0:
+                if self.layout_id == len(self.LEVELS) - 1 and not self.endless:
+                    self.campaign_complete = True
+                else:
+                    self.lives = min(20 if self.difficulty == "easy" else 15, self.lives + 2)
+                    self._load_layout((self.layout_id + 1) % len(self.LEVELS), clear_towers=True)
 
     def _advance_enemies(self):
         keep = []
-        for e in self.enemies:
-            if e[6] > 0:
-                e[6] -= 1
-            target_i = int(e[2])
-            route = e[9]
-            if target_i >= len(route):
-                target_i = len(route) - 1
-            tx, ty = self._cell_center(route[target_i][0], route[target_i][1])
-            dx = tx - e[0]
-            dy = ty - e[1]
-            dist = math.sqrt(dx * dx + dy * dy) or 1.0
-            speed = e[5] * (0.52 if e[6] > 0 else 1.0)
+        for enemy in self.enemies:
+            if enemy[3] <= 0:
+                keep.append(enemy)
+                continue
+            if enemy[10] > 0:
+                enemy[10] -= 1
+                enemy[3] -= enemy[11]
+                if enemy[3] <= 0:
+                    keep.append(enemy)
+                    continue
+            if enemy[7] == self.HEALER and self.frame % 42 == 0:
+                for other in self.enemies:
+                    if other is not enemy and other[3] > 0 and (other[0] - enemy[0]) ** 2 + (other[1] - enemy[1]) ** 2 <= 18 ** 2:
+                        other[3] = min(other[4], other[3] + other[4] * 0.06)
+            speed = enemy[5] * (0.48 if enemy[6] > 0 else 1.0)
+            enemy[6] = max(0, enemy[6] - 1)
+            route = enemy[9]
+            tx, ty = self._cell_center(*route[min(int(enemy[2]), len(route) - 1)])
+            dx, dy = tx - enemy[0], ty - enemy[1]
+            dist = math.sqrt(dx * dx + dy * dy)
             if dist <= speed:
-                e[0] = float(tx)
-                e[1] = float(ty)
-                e[2] += 1
-                if e[2] >= len(route):
-                    self.lives -= 2 if e[7] == 2 else 1
-                    self.flash_until = ticks_ms() + 180
+                enemy[0], enemy[1] = float(tx), float(ty)
+                enemy[2] += 1
+                if enemy[2] >= len(route):
+                    self.lives = max(0, self.lives - self.ENEMY_TYPES[enemy[7]][3])
+                    self.flash_until = ticks_ms() + 250
                     continue
             else:
-                e[0] += dx / dist * speed
-                e[1] += dy / dist * speed
-            keep.append(e)
+                enemy[0] += dx / dist * speed
+                enemy[1] += dy / dist * speed
+            keep.append(enemy)
         self.enemies = keep
 
-    def _enemy_progress(self, e):
-        return int(e[2]) * 1000 + int(e[0]) + int(e[1])
+    def _enemy_progress(self, enemy):
+        # Remaining travel, including the current segment, works after rerouting
+        # and on paths that turn back toward the entrance.
+        route = enemy[9]
+        idx = min(int(enemy[2]), len(route) - 1)
+        tx, ty = self._cell_center(*route[idx])
+        remaining = math.sqrt((tx - enemy[0]) ** 2 + (ty - enemy[1]) ** 2)
+        remaining += (len(route) - idx - 1) * self.CELL
+        return -remaining / max(0.01, enemy[5])
 
-    def _tower_target(self, tx, ty, rng):
-        best = None
-        best_p = -1
-        r2 = rng * rng
-        for e in self.enemies:
-            dx = e[0] - tx
-            dy = e[1] - ty
-            if dx * dx + dy * dy <= r2:
-                p = self._enemy_progress(e)
-                if p > best_p:
-                    best = e
-                    best_p = p
+    def _can_target(self, enemy, target_mode):
+        return enemy[3] > 0 and (target_mode == "all" or
+               (enemy[7] == self.FLYER) == (target_mode == "air"))
+
+    def _tower_target(self, tx, ty, rng, target_mode="all"):
+        best, best_progress = None, -1000000
+        for enemy in self.enemies:
+            if self._can_target(enemy, target_mode) and (enemy[0] - tx) ** 2 + (enemy[1] - ty) ** 2 <= rng * rng:
+                progress = self._enemy_progress(enemy)
+                if progress > best_progress:
+                    best, best_progress = enemy, progress
         return best
 
-    def _damage_enemy(self, enemy, damage, slow=False, splash=0):
-        enemy[3] -= damage
-        if slow:
-            enemy[6] = max(enemy[6], 36)
-        if splash:
-            ex, ey = enemy[0], enemy[1]
-            for e in self.enemies:
-                if e is enemy:
-                    continue
-                dx = e[0] - ex
-                dy = e[1] - ey
-                if dx * dx + dy * dy <= splash * splash:
-                    e[3] -= damage * 0.45
-                    e[6] = max(e[6], 18)
+    def _hit_enemy(self, enemy, damage, pierce=False):
+        if enemy[3] <= 0:
+            return
+        if not pierce:
+            damage *= 0.5 if enemy[7] == self.TANK else 0.75 if enemy[7] == self.BOSS else 1.0
+        absorbed = min(enemy[12], damage)
+        enemy[12] -= absorbed
+        enemy[3] -= damage - absorbed
+
+    def _tower_range(self, tower):
+        return self.TOWER_TYPES[tower[4]][2] + (tower[2] - 1) * 3
+
+    def _record_shot(self, x, y, enemy, color):
+        if len(self.shots) < self.MAX_SHOTS:
+            self.shots.append([x, y, int(enemy[0]), int(enemy[1]), 4, color])
 
     def _fire_towers(self):
-        for t in self.towers:
-            if t[3] > 0:
-                t[3] -= 1
+        for tower in self.towers:
+            if tower[3] > 0:
+                tower[3] -= 1
                 continue
-            cx, cy = self._cell_center(t[0], t[1])
-            level = t[2]
-            target = self._tower_target(cx, cy, self.TOWER_RANGE[level])
-            if not target:
+            name, cost, rng, damage, cooldown, effect, mode, color = self.TOWER_TYPES[tower[4]]
+            cx, cy = self._cell_center(tower[0], tower[1])
+            target = self._tower_target(cx, cy, self._tower_range(tower), mode)
+            if target is None:
                 continue
-            self._damage_enemy(
-                target,
-                self.TOWER_DAMAGE[level],
-                slow=level >= 2,
-                splash=4 if level >= 3 else 0,
-            )
-            t[3] = self.TOWER_COOLDOWN[level]
-            color = (0, 220, 255) if level >= 2 else (255, 240, 60)
-            if level >= 3:
-                color = (210, 90, 255)
-            self.shots.append([cx, cy, int(target[0]), int(target[1]), 4, color])
+            damage *= 1 + (tower[2] - 1) * 0.7
+            self._hit_enemy(target, damage, effect in ("pierce", "chain"))
+            if effect == "slow":
+                target[6] = max(target[6], 55 + tower[2] * 8)
+            if effect == "poison":
+                target[10] = max(target[10], 100)
+                target[11] = max(target[11], 0.12 * tower[2])
+            if effect in ("splash", "flak", "flame"):
+                radius = (9 if effect == "flame" else 12) + tower[2]
+                for enemy in self.enemies:
+                    if self._can_target(enemy, mode) and (enemy[0] - target[0]) ** 2 + (enemy[1] - target[1]) ** 2 <= radius * radius:
+                        if enemy is not target:
+                            self._hit_enemy(enemy, damage * 0.55)
+                        if effect == "flame":
+                            enemy[10] = max(enemy[10], 45)
+                            enemy[11] = max(enemy[11], 0.08 * tower[2])
+            if effect == "chain":
+                struck = [target]
+                previous = target
+                for unused in range(2 + tower[2] // 2):
+                    nearest, distance = None, 18 ** 2 + 1
+                    for enemy in self.enemies:
+                        if enemy[3] <= 0 or any(enemy is hit for hit in struck):
+                            continue
+                        d2 = (enemy[0] - previous[0]) ** 2 + (enemy[1] - previous[1]) ** 2
+                        if d2 < distance:
+                            nearest, distance = enemy, d2
+                    if nearest is None:
+                        break
+                    self._hit_enemy(nearest, damage * 0.65, True)
+                    self._record_shot(int(previous[0]), int(previous[1]), nearest, color)
+                    struck.append(nearest)
+                    previous = nearest
+            tower[3] = max(3, cooldown - (tower[2] - 1) * 2)
+            self._record_shot(cx, cy, target, color)
 
     def _collect_dead(self):
-        keep = []
-        for e in self.enemies:
-            if e[3] <= 0:
-                self.money += e[8]
-                self.score += e[8] * 3 + self.wave
+        keep, splitters = [], []
+        for enemy in self.enemies:
+            if enemy[3] <= 0:
+                self.money += enemy[8]
+                self.score += enemy[8] * 3 + self.wave
+                if enemy[7] == self.SPLITTER:
+                    splitters.append(enemy)
             else:
-                keep.append(e)
+                keep.append(enemy)
+        for enemy in splitters:
+            for unused in range(min(2, self.MAX_ENEMIES - len(keep))):
+                child = self._make_enemy(self.SWARM, enemy[9])
+                child[0], child[1], child[2] = enemy[0], enemy[1], enemy[2]
+                child[8] = 1
+                keep.append(child)
         self.enemies = keep
 
     def _advance_shots(self):
-        keep = []
-        for s in self.shots:
-            s[4] -= 1
-            if s[4] > 0:
-                keep.append(s)
-        self.shots = keep
+        self.shots = [shot for shot in self.shots if shot[4] > 1]
+        for shot in self.shots:
+            shot[4] -= 1
+
+    def _screen_point(self, x, y):
+        return int(x) - self.camera_x * self.CELL, int(y) - self.camera_y * self.CELL + self.VIEW_TOP
+
+    def _world_rect(self, x1, y1, x2, y2, color):
+        x1, y1 = self._screen_point(x1, y1)
+        x2, y2 = self._screen_point(x2, y2)
+        bottom = self.VIEW_TOP + self.VIEW_H * self.CELL - 1
+        if x2 < 0 or x1 >= WIDTH or y2 < self.VIEW_TOP or y1 > bottom:
+            return
+        draw_rectangle(max(0, x1), max(self.VIEW_TOP, y1), min(WIDTH - 1, x2), min(bottom, y2), *color)
 
     def _draw_path(self):
-        if self.path_cells:
-            for gx, gy in self.path_cells:
-                x = gx * self.CELL
-                y = gy * self.CELL
-                x2 = x + self.CELL - 1
-                y2 = min(PLAY_HEIGHT - 1, y + self.CELL - 1)
-                draw_rectangle(x, y, x2, y2, 98, 68, 34)
-                edge = (62, 44, 24)
-                if (gx, gy - 1) not in self.path_cells and not (
-                    (gx, gy) == self.base_cell and gy == 0
-                ):
-                    draw_line(x, y, x2, y, *edge)
-                if (gx + 1, gy) not in self.path_cells and not (
-                    (gx, gy) == self.base_cell and gx == self.GRID_W - 1
-                ):
-                    draw_line(x2, y, x2, y2, *edge)
-                if (gx, gy + 1) not in self.path_cells and not (
-                    (gx, gy) == self.base_cell and gy == self.GRID_H - 1
-                ):
-                    draw_line(x, y2, x2, y2, *edge)
-                if (gx - 1, gy) not in self.path_cells and not (
-                    (gx, gy) == self.start_cell and gx == 0
-                ):
-                    draw_line(x, y, x, y2, *edge)
-        else:
-            for x in range(0, WIDTH, self.CELL):
-                draw_line(x, 0, x, PLAY_HEIGHT - 1, 12, 34, 28)
-            for y in range(0, PLAY_HEIGHT, self.CELL):
-                draw_line(0, y, WIDTH - 1, y, 12, 34, 28)
-        sx, sy = self._cell_center(self.start_cell[0], self.start_cell[1])
-        ex, ey = self._cell_center(self.base_cell[0], self.base_cell[1])
-        draw_rectangle(sx - 3, sy - 3, sx + 3, sy + 3, 255, 95, 0)
-        draw_rectangle(ex - 4, ey - 4, ex + 4, ey + 4, 0, 160, 255)
+        for gy in range(self.camera_y, min(self.GRID_H, self.camera_y + self.VIEW_H)):
+            for gx in range(self.camera_x, min(self.GRID_W, self.camera_x + self.VIEW_W)):
+                x, y = gx * self.CELL, gy * self.CELL
+                cell = (gx, gy)
+                color = (86, 61, 35) if cell in self.path_cells else (13, 35, 29)
+                if cell in self.blocked_cells:
+                    color = (60, 73, 77)
+                self._world_rect(x, y, x + 6, y + 6, color)
+        if self.open_level:
+            for gx, gy in self.open_route:
+                x, y = self._cell_center(gx, gy)
+                self._world_rect(x, y, x, y, (65, 95, 65))
+        for cell, color in ((self.start_cell, (255, 120, 20)), (self.base_cell, (40, 170, 255))):
+            x, y = self._cell_center(*cell)
+            self._world_rect(x - 3, y - 3, x + 3, y + 3, color)
+            self._world_rect(x - 1, y - 1, x + 1, y + 1, (240, 240, 220))
 
     def _draw_towers(self):
-        colors = (
-            (0, 0, 0),
-            (60, 220, 90),
-            (60, 185, 255),
-            (205, 85, 255),
-            (255, 230, 90),
-        )
-        for gx, gy, level, cooldown in self.towers:
-            cx, cy = self._cell_center(gx, gy)
-            r, g, b = colors[level]
-            draw_rectangle(cx - 2, cy - 2, cx + 2, cy + 2, r, g, b)
-            if level >= 2:
-                draw_rectangle(cx - 1, cy - 4, cx + 1, cy - 3, r, g, b)
-            if level >= 3:
-                draw_rect_outline(cx - 3, cy - 3, cx + 3, cy + 3, r, g, b)
+        for gx, gy, level, cooldown, kind, investment in self.towers:
+            x, y = self._cell_center(gx, gy)
+            color = self.TOWER_TYPES[kind][7]
+            self._world_rect(x - 2, y - 2, x + 2, y + 2, color)
+            # Distinct barrel/cross silhouettes plus four upgrade pips.
+            if kind in (1, 3, 6):
+                self._world_rect(x, y - 4, x + 1, y - 1, color)
+            elif kind in (2, 4):
+                self._world_rect(x - 3, y, x + 3, y, color)
+                self._world_rect(x, y - 3, x, y + 3, color)
+            else:
+                self._world_rect(x, y - 1, x, y, (15, 30, 25))
+            self._world_rect(x - 2, y + 3, x - 3 + level, y + 3, (240, 240, 240))
 
     def _draw_enemies(self):
-        for e in self.enemies:
-            x = int(e[0])
-            y = int(e[1])
-            if e[7] == 2:
-                col = (255, 55, 220)
-                size = 2
-            elif e[7] == 1:
-                col = (255, 120, 20)
-                size = 1
-            else:
-                col = (255, 35, 35)
-                size = 1
-            if e[6] > 0:
-                col = (80, 190, 255)
-            draw_rectangle(
-                x - size, y - size, x + size, y + size, col[0], col[1], col[2]
-            )
-            hp_w = max(1, int((e[3] * 5) / max(1, e[4])))
-            draw_rectangle(x - 2, y - size - 3, x - 3 + hp_w, y - size - 3, 0, 255, 80)
-
-    def _draw_shots(self):
-        for x1, y1, x2, y2, ttl, col in self.shots:
-            draw_line(x1, y1, x2, y2, col[0], col[1], col[2])
+        for enemy in self.enemies:
+            x, y = int(enemy[0]), int(enemy[1])
+            kind = enemy[7]
+            color = (80, 190, 255) if enemy[6] else self.ENEMY_TYPES[kind][4]
+            radius = 2 if kind in (self.BOSS, self.TANK, self.SPLITTER) else 1
+            self._world_rect(x - radius, y - radius, x + radius, y + radius, color)
+            if kind == self.FLYER:
+                self._world_rect(x - 3, y, x + 3, y, color)
+            if kind == self.HEALER:
+                self._world_rect(x, y - 2, x, y + 2, (255, 80, 80))
+            if enemy[12] > 0:
+                self._world_rect(x - 2, y - 2, x + 2, y - 2, (90, 255, 255))
+            if enemy[10]:
+                self._world_rect(x, y + 2, x, y + 2, (130, 255, 30))
+            health = max(1, int(enemy[3] * 5 / enemy[4]))
+            self._world_rect(x - 2, y - 4, x - 3 + health, y - 4, (80, 235, 100))
 
     def _draw_cursor(self):
-        cx = self.cursor_x * self.CELL
-        cy = self.cursor_y * self.CELL
-        blocked = not self._can_build(self.cursor_x, self.cursor_y)
         tower = self._tower_at(self.cursor_x, self.cursor_y)
-        if tower:
-            col = (255, 255, 255)
-        elif blocked or ticks_diff(ticks_ms(), self.flash_until) < 0:
-            col = (255, 50, 40)
-        else:
-            col = (255, 240, 60)
-        draw_rect_outline(
-            cx, cy, cx + self.CELL - 1, cy + self.CELL - 1, col[0], col[1], col[2]
-        )
-        if tower:
-            tx, ty = self._cell_center(self.cursor_x, self.cursor_y)
-            rng = self.TOWER_RANGE[tower[2]]
-            draw_rect_outline(
-                max(0, tx - rng),
-                max(0, ty - rng),
-                min(WIDTH - 1, tx + rng),
-                min(PLAY_HEIGHT - 1, ty + rng),
-                35,
-                70,
-                95,
-            )
+        x, y = self._cell_center(self.cursor_x, self.cursor_y)
+        color = (255, 255, 255) if tower else self.TOWER_TYPES[self.selected_tower][7]
+        cell = (self.cursor_x, self.cursor_y)
+        if (not tower and (cell in self.path_cells or cell in self.blocked_cells or
+                           cell in (self.start_cell, self.base_cell))) or ticks_diff(ticks_ms(), self.flash_until) < 0:
+            color = (255, 40, 40)
+        for x1, y1, x2, y2 in ((x - 4, y - 4, x + 3, y - 4), (x - 4, y + 3, x + 3, y + 3),
+                                (x - 4, y - 4, x - 4, y + 3), (x + 3, y - 4, x + 3, y + 3)):
+            self._world_rect(x1, y1, x2, y2, color)
+        rng = self._tower_range(tower) if tower else self.TOWER_TYPES[self.selected_tower][2]
+        for dx, dy in ((-rng, 0), (rng, 0), (0, -rng), (0, rng)):
+            self._world_rect(x + dx, y + dy, x + dx, y + dy, (90, 120, 120))
 
     def _draw_hud(self):
-        draw_rectangle(0, PLAY_HEIGHT, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
-        draw_text_small(1, PLAY_HEIGHT, "W" + str(self.wave), 180, 180, 180)
-        draw_text_small(19, PLAY_HEIGHT, "$" + str(min(99, self.money)), 255, 220, 40)
-        draw_text_small(43, PLAY_HEIGHT, "B" + str(max(0, self.lives)), 80, 190, 255)
-        if self.open_level:
-            draw_rectangle(
-                WIDTH - 2, PLAY_HEIGHT + 1, WIDTH - 1, PLAY_HEIGHT + 2, 80, 255, 140
-            )
+        draw_rectangle(0, 0, WIDTH - 1, self.VIEW_TOP - 1, 0, 0, 0)
+        draw_text_small(0, 0, "L" + str(self.level), 140, 220, 190)
+        draw_text_small(20, 0, "W" + str((self.wave - 1) % 3 + 1 if self.wave_active else self.wave % 3 + 1), 220, 220, 220)
+        draw_text_small(34, 0, "B" + str(self.lives), 80, 190, 255)
+        draw_text_small(58, 0, "X", 200, 170, 100)
+        if not self.wave_active and self.frame % 140 < 70:
+            draw_rectangle(0, 0, 63, 5, 0, 0, 0)
+            draw_text_small(1, 0, "X>GO WAVE", 230, 220, 140)
+        draw_rectangle(0, 55, WIDTH - 1, HEIGHT - 1, 0, 0, 0)
+        # Scrollbars show the viewport's position in the larger world.
+        draw_rectangle(self.camera_x * WIDTH // self.GRID_W, 55,
+                       min(63, (self.camera_x + self.VIEW_W) * WIDTH // self.GRID_W - 1), 55, 55, 110, 110)
+        draw_rectangle(63, self.VIEW_TOP + self.camera_y * 48 // self.GRID_H, 63,
+                       min(54, self.VIEW_TOP + (self.camera_y + self.VIEW_H) * 48 // self.GRID_H - 1), 55, 110, 110)
+        tower = self._tower_at(self.cursor_x, self.cursor_y)
+        kind = tower[4] if tower else self.selected_tower
+        label = self.TOWER_TYPES[kind][0]
+        cost = self._upgrade_cost(tower) if tower else self.TOWER_TYPES[kind][1]
+        if self.frame % 100 >= 50:
+            label = "MAX" if tower and tower[2] == 4 else ("UP" if tower else "$") + str(cost)
+        funds = "$" + str(self.money) if self.money < 1000 else str(min(9999, self.money))
+        draw_text_small(0, 58, funds, 255, 215, 60)
+        draw_text_small(28, 58, label, *self.TOWER_TYPES[kind][7])
+
+    def _draw_shop(self):
+        display.clear()
+        draw_text_small(0, 0, "SHOP $" + str(min(9999, self.money)), 255, 220, 70)
+        labels = [t[0] + " " + str(t[1]) for t in self.TOWER_TYPES]
+        labels.extend(("RUNNING" if self.wave_active else "GO WAVE", "MAP", "SELL", "EXIT"))
+        first = clamp(self.shop_index - 2, 0, len(labels) - 5)
+        for row in range(5):
+            index = first + row
+            y = 9 + row * 8
+            if index == self.shop_index:
+                draw_rectangle(0, y - 1, 63, y + 6, 30, 55, 65)
+            color = self.TOWER_TYPES[index][7] if index < len(self.TOWER_TYPES) else (220, 225, 235)
+            draw_text_small(1, y, (">" if index == self.shop_index else " ") + labels[index], *color)
+        if self.shop_index < len(self.TOWER_TYPES):
+            hint = self.TOWER_HELP[self.shop_index]
+        elif self.shop_index == len(self.TOWER_TYPES) + 2:
+            tower = self._tower_at(self.cursor_x, self.cursor_y)
+            hint = "$" + str(tower[5] * 3 // 4) if tower else "NO TOWER"
+        elif self.shop_index == len(self.TOWER_TYPES):
+            pattern = self.WAVE_PATTERNS[min(len(self.WAVE_PATTERNS) - 1, self.wave)]
+            hint = self.ENEMY_NAMES[pattern[(self.frame // 35) % len(pattern)]]
+            if (self.wave + 1) % 3 == 0 and self.frame % 70 < 35:
+                hint = "BOSS!"
+        elif self.shop_index == len(self.TOWER_TYPES) + 1:
+            hint = str(self.GRID_W) + "X" + str(self.GRID_H)
+        else:
+            hint = "MAIN MENU"
+        draw_text_small(1, 50, hint, 140, 210, 200)
+        draw_text_small(1, 58, "Z:OK X:ESC", 170, 180, 185)
+
+    def _draw_overview(self):
+        display.clear()
+        draw_text_small(1, 0, self.LEVEL_NAMES[self.layout_id], 150, 220, 210)
+        scale = min(3, 60 // self.GRID_W, 42 // self.GRID_H)
+        left = (WIDTH - self.GRID_W * scale) // 2
+        top = 8
+        road = set(self.open_route) if self.open_level else self.path_cells
+        towers = self._tower_cells()
+        for y in range(self.GRID_H):
+            for x in range(self.GRID_W):
+                cell = (x, y)
+                color = (70, 90, 95) if cell in self.blocked_cells else (105, 80, 45) if cell in road else (13, 40, 29)
+                if cell in towers:
+                    color = (130, 240, 120)
+                if cell == self.start_cell:
+                    color = (255, 130, 20)
+                if cell == self.base_cell:
+                    color = (50, 160, 255)
+                draw_rectangle(left + x * scale, top + y * scale,
+                               left + (x + 1) * scale - 1, top + (y + 1) * scale - 1, *color)
+        for enemy in self.enemies:
+            x, y = self._point_to_cell(enemy[0], enemy[1])
+            draw_rectangle(left + x * scale, top + y * scale,
+                           left + (x + 1) * scale - 1, top + (y + 1) * scale - 1, 255, 70, 65)
+        draw_rect_outline(left + self.camera_x * scale, top + self.camera_y * scale,
+                          left + (self.camera_x + self.VIEW_W) * scale - 1,
+                          top + (self.camera_y + self.VIEW_H) * scale - 1, 120, 170, 180)
+        draw_rectangle(left + self.cursor_x * scale, top + self.cursor_y * scale,
+                       left + self.cursor_x * scale, top + self.cursor_y * scale, 255, 255, 255)
+        draw_text_small(1, 51, "MOVE: PAN", 180, 190, 190)
+        draw_text_small(1, 58, "Z:GO X:ESC", 200, 210, 200)
 
     def _draw(self):
+        if self.overview:
+            self._draw_overview()
+            return
+        if self.shop_open:
+            self._draw_shop()
+            return
         display.clear()
-        draw_rectangle(0, 0, WIDTH - 1, PLAY_HEIGHT - 1, 8, 24, 20)
         self._draw_path()
         self._draw_towers()
         self._draw_enemies()
-        self._draw_shots()
+        for x1, y1, x2, y2, ttl, color in self.shots:
+            sx, sy = self._screen_point(x1, y1)
+            ex, ey = self._screen_point(x2, y2)
+            draw_line(sx, sy, ex, ey, *color)
         self._draw_cursor()
         self._draw_hud()
 
@@ -2010,28 +2228,57 @@ class TowerDefenseGame(FrameLoopGame):
 
         def step():
             c_button, z_button = joystick.read_buttons()
-            if c_button:
+            if c_button and getattr(joystick, "is_demo", False):
                 return False
             self.frame += 1
             self._move_cursor(joystick)
-            if z_button and not self.last_z:
-                self._try_build_or_upgrade()
-            self.last_z = z_button
-            self._advance_waves()
-            self._advance_enemies()
-            self._fire_towers()
-            self._collect_dead()
-            self._advance_shots()
-            if self.lives <= 0:
-                set_game_over_score(self.score)
+            if c_button and not self.last_c:
+                if self.overview:
+                    self.overview = False
+                else:
+                    self.shop_open = not self.shop_open
+                    if self.shop_open:
+                        self.shop_index = self.selected_tower
+            exit_game = False
+            if z_button and not self.last_z and not c_button:
+                if self.overview:
+                    self.overview = False
+                    self.shop_open = False
+                elif self.shop_open:
+                    if self.shop_index < len(self.TOWER_TYPES):
+                        self.selected_tower = self.shop_index
+                        self.shop_open = False
+                    elif self.shop_index == len(self.TOWER_TYPES):
+                        self._start_wave()
+                        self.shop_open = False
+                    elif self.shop_index == len(self.TOWER_TYPES) + 1:
+                        self.overview = True
+                    elif self.shop_index == len(self.TOWER_TYPES) + 2:
+                        self._sell_tower()
+                        self.shop_open = False
+                    else:
+                        exit_game = True
+                else:
+                    self._try_build_or_upgrade()
+            self.last_z, self.last_c = z_button, c_button
+            if exit_game:
+                return False
+            if not self.shop_open:
+                self._advance_waves()
+                if self.wave_active:
+                    self._advance_enemies()
+                    self._fire_towers()
+                    self._collect_dead()
+                self._advance_shots()
+            if self.lives <= 0 or self.campaign_complete:
+                set_game_over_score(self.score, won=self.campaign_complete)
                 return False
             self._draw()
-            if (self.frame % 90) == 0:
+            if self.frame % 90 == 0:
                 gc.collect()
             return True
 
         return step
-
 
 class DigDugGame(FrameLoopGame):
     """
@@ -2039,7 +2286,7 @@ class DigDugGame(FrameLoopGame):
     Controls:
       - Directions: dig/move
       - Z: pump the enemy in the facing direction
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Dig tunnels, collect gems, and clear burrowing enemies.
     """
 
@@ -2256,7 +2503,7 @@ class JoustGame(FrameLoopGame):
     Controls:
       - Left / Right: fly
       - Z: flap
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Defeat riders by colliding from above.
     """
 
@@ -2427,7 +2674,7 @@ class BurgerTimeGame(FrameLoopGame):
     Controls:
       - Directions: run platforms and ladders
       - Z: pepper nearby enemies
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Walk over burger layers to drop every ingredient.
     """
 
@@ -2675,7 +2922,7 @@ class StickArcherGame(FrameLoopGame):
       - Up / Down: aim bow
       - Left / Right: sidestep
       - Hold Z: draw bow, release Z: fire
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Stickman archery duel with simple arrow physics and ragdoll knockouts.
     """
 
@@ -2984,7 +3231,7 @@ class OrbitGame(FrameLoopGame):
     Controls:
       - Directions: aim thrust
       - Z: eject mass and accelerate
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Absorb smaller blobs, avoid larger ones, and use gravity wells carefully.
     """
 
@@ -3203,7 +3450,7 @@ class GalaxyGame(FrameLoopGame):
     Controls:
       - Directions: move cursor
       - Z: select own planet / send fleet
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Capture planets by sending fleets across the star map.
     """
 
@@ -3491,7 +3738,7 @@ class OrbitalGame(FrameLoopGame):
     Controls:
       - Left / Right: aim launcher
       - Z: fire; MULTI option allows several active shots
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Bounce shots through numbered circles. Every circle starts at 3, counts down
     on each touch, and bursts at 0.
     """
@@ -3853,14 +4100,14 @@ class OrbitalGame(FrameLoopGame):
         return step
 
 
-class ColumnsGame:
+class ColumnsGame(FrameLoopGame):
     """
     COLMNS
     Controls:
       - Left / Right: move the falling column
       - Up: cycle the three colors
       - Down: soft drop; Z: hard drop
-      - C: return to menu
+      - C: pause menu (C+Z always opens it)
     Sega-style Columns: a vertical triple of colored gems falls into a well.
     Line up three or more of one color in any direction (including diagonals)
     to clear them; cleared gems feed chains for bonus points. The run ends when
@@ -4088,15 +4335,7 @@ class ColumnsGame:
 
         return step
 
-    def main_loop(self, joystick):
-        begin_game(0)
-        _run_game_loop_sync(self.FRAME_MS, self._build_step(joystick))
 
-    async def main_loop_async(self, joystick):
-        if asyncio is None:
-            return self.main_loop(joystick)
-        begin_game(0)
-        await _run_game_loop_async(self.FRAME_MS, self._build_step(joystick))
 
 
 class LightsOutGame(GridCursorGame):
