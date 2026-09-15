@@ -126,10 +126,12 @@ class MapTests(unittest.TestCase):
                 self.assertTrue(game._trace()[1])
 
     def test_new_tower_routes_are_in_bounds_and_axis_aligned(self):
-        for mode, route in app.TowerDefenseGame.LEVELS[-2:]:
+        for (mode, route), (width, height) in zip(
+                app.TowerDefenseGame.LEVELS[-3:-1],
+                app.TowerDefenseGame.MAP_SIZES[-3:-1]):
             self.assertEqual(mode, 'PATH')
             for x, y in route:
-                self.assertTrue(0 <= x < 8 and 0 <= y < 7)
+                self.assertTrue(0 <= x < width and 0 <= y < height)
             for a, b in zip(route, route[1:]):
                 self.assertTrue((a[0] == b[0]) != (a[1] == b[1]))
 

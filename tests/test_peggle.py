@@ -91,14 +91,17 @@ class PeggleTests(unittest.TestCase):
         game = app.PeggleGame()
         with patch.object(app, 'begin_game'), patch.object(app, 'set_game_over_score') as finish, patch.object(game, '_draw'):
             step = game._build_step(Joystick())
+            game.level = len(game.CAMPAIGNS[game.map_index]) - 1
+            game._new_level()
             game.pegs = []
+            game.score = 100
             game.shots = 0
             game.ball = [32, 20, 0, 1]
             self.assertTrue(step())
             finish.assert_not_called()
             game.ball = [32, 53.8, 0, 2]
             self.assertFalse(step())
-            finish.assert_called_once_with(150, won=True)
+            finish.assert_called_once_with(250, won=True)
 
     def test_empty_ammo_with_orange_remaining_loses(self):
         game = app.PeggleGame()
